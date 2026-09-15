@@ -21,9 +21,9 @@ DC_KEY_SECRET := "dc-api-key"
 STUDIO_TOKEN_SECRET := ENV + "-studio-api-token"
 
 # The dcp stack's pinned upstream module version (infra/stacks/dcp/main.tf's
-# source ref). init-db and load both invoke datacommons-cli, and an unpinned
-# uvx call floats to whatever's latest on PyPI regardless of the module ref
-# this repo is actually running.
+# source ref). Every recipe that invokes datacommons-cli does so through this
+# pin, and an unpinned uvx call floats to whatever's latest on PyPI regardless
+# of the module ref this repo is actually running.
 DCP_CLI_VERSION := "1.1.6"
 
 # datacommons-cli finds its project, Spanner instance and database,
@@ -287,14 +287,6 @@ init-db: _check-gcloud
 [doc("Migrate the dcp database schema forward")]
 migrate-db: _check-gcloud
     cd {{TF_DIR}} && uvx --from "datacommons-cli=={{DCP_CLI_VERSION}}" --with "datacommons-admin=={{DCP_CLI_VERSION}}" datacommons admin migrate-db
-
-# Stage a dataset into the ingestion bucket + trigger ingestion: just load data/oecd-wage
-load dataset: _check-gcloud
-    DCP_CLI_VERSION={{DCP_CLI_VERSION}} scripts/load.sh {{dataset}} {{ENV}}
-
-# List available datasets
-datasets:
-    @ls -d data/*/ | sed 's|/$||'
 
 # ── Dev ───────────────────────────────────────
 
