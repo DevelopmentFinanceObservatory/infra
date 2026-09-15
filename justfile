@@ -21,9 +21,9 @@ DC_KEY_SECRET := "dc-api-key"
 STUDIO_TOKEN_SECRET := ENV + "-studio-api-token"
 
 # The dcp stack's pinned upstream module version (infra/stacks/dcp/main.tf's
-# source ref). init-db and load both invoke datacommons-cli, and an unpinned
-# uvx call floats to whatever's latest on PyPI regardless of the module ref
-# this repo is actually running.
+# source ref). Every recipe that invokes datacommons-cli does so through this
+# pin, and an unpinned uvx call floats to whatever's latest on PyPI regardless
+# of the module ref this repo is actually running.
 DCP_CLI_VERSION := "1.1.5"
 
 # datacommons-cli finds its project, Spanner instance and database,
@@ -294,25 +294,16 @@ init-db: _check-gcloud
 migrate-db: _check-gcloud
     cd {{TF_DIR}} && uvx --from "datacommons-cli=={{DCP_CLI_VERSION}}" --with "datacommons-admin=={{DCP_CLI_VERSION}}" datacommons admin migrate-db
 
-# Re-run the platform's base geographic and schema seeds. 'just load'
-# stages and ingests a custom dataset. This only refreshes Base DC's own
-# seed data. It goes through the ingestion-helper service, not Spanner
-# directly. It needs roles/iam.serviceAccountTokenCreator on the ingestion
-# workflow service account, and no Spanner role at all. Unguarded and
-# unprompted, an unconditional reseed call with no already-seeded check
-# and no confirmation. Typing the command is the only thing standing
-# between you and it running.
+# Re-run the platform's base geographic and schema seeds. This refreshes
+# Base DC's own seed data. It goes through the ingestion-helper service,
+# not Spanner directly. It needs roles/iam.serviceAccountTokenCreator on
+# the ingestion workflow service account, and no Spanner role at all.
+# Unguarded and unprompted, an unconditional reseed call with no
+# already-seeded check and no confirmation. Typing the command is the
+# only thing standing between you and it running.
 [doc("Re-run Base DC's geographic and schema seeds")]
 seed-db: _check-gcloud
     cd {{TF_DIR}} && uvx --from "datacommons-cli=={{DCP_CLI_VERSION}}" --with "datacommons-admin=={{DCP_CLI_VERSION}}" datacommons admin seed-db
-
-# Stage a dataset into the ingestion bucket + trigger ingestion: just load data/oecd-wage
-load dataset: _check-gcloud
-    DCP_CLI_VERSION={{DCP_CLI_VERSION}} scripts/load.sh {{dataset}} {{ENV}}
-
-# List available datasets
-datasets:
-    @ls -d data/*/ | sed 's|/$||'
 
 # ── Dev ───────────────────────────────────────
 
