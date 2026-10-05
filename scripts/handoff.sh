@@ -106,11 +106,14 @@ command -v gh >/dev/null || { echo "gh CLI not found. Install: https://cli.githu
 gh auth status >/dev/null 2>&1 || { echo "Not logged in to GitHub. Run 'gh auth login'." >&2; exit 1; }
 
 # Read one infra-derived value from a stack's Terraform state, failing loudly
-# if the stack hasn't been applied (or init'd) yet.
+# if the stack hasn't been applied (or init'd) yet. `output -json NAME` exits 1
+# with nothing on stdout for a state with no outputs, where `output -raw` exits
+# 0 and prints a "No outputs found" warning to stdout.
 read_output() {
     local dir="$1" name="$2" val
     # stdin is closed so terraform cannot consume the table the caller's loop reads.
-    val="$(cd "$dir" && terraform output -raw "$name" 2>/dev/null </dev/null)" || true
+    val="$(cd "$dir" && terraform output -json "$name" 2>/dev/null </dev/null |
+        jq -r 'select(. != null) | tostring')" || true
     if [ -z "$val" ]; then
         echo "Could not read output '$name' from $dir." >&2
         echo "Has the stack been applied? Try: (cd $dir && terraform init && terraform output $name)" >&2
