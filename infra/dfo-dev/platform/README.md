@@ -15,7 +15,7 @@ Each tenant's database and per-database users live in that tenant's own stack, n
 
 ## Shape
 
-- **PostgreSQL 18**, Enterprise edition, `db-custom-1-3840`. One dedicated vCPU and 3.75 GB, carrying Google's standard SLA. Production is the same shape stepped up, with regional availability and a larger tier, neither of which this stack sets.
+- **PostgreSQL 18**, Enterprise edition, `db-custom-1-3840`. One dedicated vCPU and 3.75 GB, carrying Google's standard SLA. Prod runs `db-custom-2-7680`, two vCPUs and 7.5 GB, from its own `env.auto.tfvars`. Both are zonal, with no standby in a second zone.
 - **No public IP, no VPC.** The instance publishes a Private Service Connect service attachment (`psc_service_attachment_uri` output) and authorises consumer projects (`allowed_consumer_projects`). Each consumer creates its own endpoint against that attachment in its own stack. Both ends have to agree, the authorisation here and the endpoint there, before a consumer can reach the instance.
 - **IAM database authentication on.** Each service connects as itself, with no password to store or rotate. Built-in users stay enabled for migrations.
 - **Daily automated backups and point-in-time recovery.**
