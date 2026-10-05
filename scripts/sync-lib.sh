@@ -28,14 +28,15 @@ SYNC_PIN_KEY="datacommons_services_image"
 SYNC_PIN_VALUE_RE='^[a-z0-9-]+-docker\.pkg\.dev/[a-z0-9-]+/[a-z0-9_-]+/dfo-services-image@sha256:[0-9a-f]{64}$'
 
 # One row per target repo: target name, source repo, source branch, and the
-# paths kept from the target's own main ("-" for none). Prod's dcp build
-# writes infra's excluded path in the new org, so a sync never overwrites it.
+# paths kept from the target's own main ("-" for none). Prod releases only
+# from each source repo's main. Prod's dcp build writes infra's excluded path
+# in the new org, so a sync never overwrites it.
 SYNC_TABLE='infra     dfo-infra     main     infra/dfo-prod/dcp/image.auto.tfvars
-dcp       dfo-dcp       dev      -
-apis      dfo-apis      dev      -
-ai        dfo-ai        dev      -
-website   dfo-website   staging  -
-pipelines dfo-pipelines develop  -
+dcp       dfo-dcp       main     -
+apis      dfo-apis      main     -
+ai        dfo-ai        main     -
+website   dfo-website   main     -
+pipelines dfo-pipelines main     -
 docs      dfo-docs      main     -
 ontology  dfo-ontology  main     -
 spec-kit  dfo-spec-kit  main     -
