@@ -96,7 +96,7 @@ variable "applier_impersonators" {
 }
 
 variable "ingestion_operators" {
-  description = "Principals that run Dagster ingestion into this environment's Data Commons, as full IAM member strings. Each gets token creator on the ingestion workflow's service account, object read and write on the artifacts bucket, workflows.invoker on the project, and spanner.databaseReader on the Data Commons database. The four resources belong to the dcp stack, so this list stays empty until dcp has applied and the ingestion_* names below are set."
+  description = "Principals that run Dagster ingestion into this environment's Data Commons, as full IAM member strings. Each gets token creator on the ingestion workflow's service account, object read and write on the artifacts bucket, workflows.invoker on the project, spanner.databaseReader on the Data Commons database, and workflows.viewer, storage.bucketViewer, logging.viewer, run.viewer, spanner.viewer, dataflow.viewer, monitoring.viewer, and serviceusage.serviceUsageConsumer on the project. The four resources belong to the dcp stack, so this list stays empty until dcp has applied and the ingestion_* names below are set."
   type        = list(string)
 }
 
