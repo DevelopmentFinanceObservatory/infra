@@ -88,3 +88,9 @@ variable "stateless_deletion_protection" {
   description = "Deletion protection for this stack's Cloud Run services and Jobs, the same flag the dcp stack passes to its Cloud Run resources. They hold no data of their own, so this guards against an accidental destroy or replace rather than data loss. Off in dfo-dev, so `terraform destroy` and replaces stay unblocked; on in dfo-prod."
   type        = bool
 }
+
+variable "min_instances" {
+  description = "Instances Cloud Run keeps warm for the website service. 0 lets it scale to zero, and the first request after an idle spell waits for a Next.js cold start. With cpu_idle, a warm instance bills at the idle rate between requests."
+  type        = number
+  default     = 0
+}

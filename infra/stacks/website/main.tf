@@ -143,7 +143,7 @@ module "website_service" {
 
   deployer_members = ["serviceAccount:${data.google_service_account.website_deployer.email}"]
 
-  min_instances = 0
+  min_instances = var.min_instances
   max_instances = 2
   cpu           = "1"
   memory        = "512Mi"

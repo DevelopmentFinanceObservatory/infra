@@ -3,10 +3,11 @@
 # sync run, for the scheduled run of .github/workflows/sync.yml.
 #
 # A repo needs one when the head of its ONEcampaign source branch is not the
-# commit named by the newest Synced-from trailer on its main, and no open
-# sync PR for that head sits on the current main. An open PR whose commit's
-# parent is an older main cannot merge under the strict ruleset, and a sync
-# run rebuilds it on the current main. A head whose tree main already holds
+# commit named by the newest Synced-from trailer on its main, and its sync
+# PR, from release/<repo>, is not already that head on the current main. The
+# sync run then updates that PR in place, or opens it. An open PR whose
+# commit's parent is an older main cannot merge under the strict ruleset,
+# so it counts as out of date too. A head whose tree main already holds
 # stays listed, and its sync run stops with nothing to release.
 #
 # Any failed read stops the script, so a run never reports a repo as
@@ -22,6 +23,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/sync-lib.sh
 . "$SCRIPT_DIR/sync-lib.sh"
 
+# synced($slug) yields the source commit each Synced-from trailer in a
+# commit's message names for $slug.
+# shellcheck disable=SC2016 # jq expands $slug, not the shell
+synced_jq='def synced($slug): .commit.message | capture("Synced-from: (?<slug>[^@\\s]+)@(?<sha>[0-9a-f]{40})"; "g") | select(.slug == $slug) | .sha;'
+
 checked=0 pending=0
 while IFS= read -r row; do
     _sync_set_row "$row"
@@ -31,22 +37,22 @@ while IFS= read -r row; do
     head="$(GH_TOKEN="$SYNC_SOURCE_TOKEN" gh api "repos/$source_slug/commits/$SYNC_BRANCH" </dev/null | jq -er .sha)"
     commits="$(GH_TOKEN="$SYNC_TARGET_TOKEN" gh api "repos/$target_slug/commits?sha=main&per_page=50" </dev/null)"
     main="$(jq -er '.[0].sha' <<<"$commits")"
-    released="$(jq -r --arg slug "$source_slug" \
-        '[.[].commit.message | capture("Synced-from: (?<slug>[^@\\s]+)@(?<sha>[0-9a-f]{40})") | select(.slug == $slug) | .sha][0] // ""' \
-        <<<"$commits")"
+    released="$(jq -r --arg slug "$source_slug" "$synced_jq"' [.[] | synced($slug)][0] // ""' <<<"$commits")"
     checked=$((checked + 1))
 
     if [ "$released" = "$head" ]; then
         echo "$target_slug main holds $source_slug@$head." >&2
         continue
     fi
-    pr_commit="$(GH_TOKEN="$SYNC_TARGET_TOKEN" gh pr list --repo "$target_slug" --head "sync/$SYNC_TARGET/$head" \
+    pr_commit="$(GH_TOKEN="$SYNC_TARGET_TOKEN" gh pr list --repo "$target_slug" --head "release/$SYNC_TARGET" \
         --state open --json headRefOid </dev/null | jq -r '.[0].headRefOid // ""')"
-    pr_parent=""
+    pr_state=""
     if [ -n "$pr_commit" ]; then
-        pr_parent="$(GH_TOKEN="$SYNC_TARGET_TOKEN" gh api "repos/$target_slug/commits/$pr_commit" </dev/null | jq -er '.parents[0].sha')"
+        # The PR commit's first parent and the source commit its trailer names.
+        pr_state="$(GH_TOKEN="$SYNC_TARGET_TOKEN" gh api "repos/$target_slug/commits/$pr_commit" </dev/null |
+            jq -er --arg slug "$source_slug" "$synced_jq"' [.parents[0].sha, ([synced($slug)][0] // "")] | join(" ")')"
     fi
-    if [ "$pr_parent" = "$main" ]; then
+    if [ "$pr_state" = "$main $head" ]; then
         echo "$target_slug has an open sync PR for $source_slug@$head on the current main." >&2
         continue
     fi
