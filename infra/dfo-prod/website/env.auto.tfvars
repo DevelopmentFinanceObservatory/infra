@@ -23,3 +23,7 @@ website_url = "https://dfo-prod-website-533754688761.europe-west1.run.app" # thi
 
 # Terraform refuses to destroy or replace this stack's Cloud Run services and Jobs.
 stateless_deletion_protection = true
+
+# One warm instance, so no visitor waits for a cold start. cpu_idle bills it
+# at the idle rate between requests.
+min_instances = 1

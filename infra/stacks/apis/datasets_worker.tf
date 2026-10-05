@@ -226,7 +226,7 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
     service_account = google_service_account.datasets_worker.email
 
     scaling {
-      min_instance_count = 0
+      min_instance_count = var.datasets_worker_min_instances
       # Matches the Cloud Tasks queue's max_concurrent_dispatches below: one
       # operation per instance (concurrency 1), so four concurrent
       # dispatches need four instances to avoid queueing behind Cloud Run

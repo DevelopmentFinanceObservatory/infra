@@ -5,8 +5,9 @@
 # DDL scoped to the website's own database alone.
 #
 # It runs as the migrator service account, not the runtime identity.
-# Next.js has no run-once startup hook, min_instances is 0, and the service
-# is public, so a self-migrating runtime would run DDL on every cold start
+# Next.js has no run-once startup hook, the service scales out and, in dev,
+# to zero, and it is public, so a self-migrating runtime would run DDL on
+# every cold start
 # and a failed migration would crash-loop a live service. With a separate
 # Job, a failed migration fails the deploy and the service stays on its old
 # image. The runtime identity holds DML only, so a compromised public
