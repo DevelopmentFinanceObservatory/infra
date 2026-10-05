@@ -3,16 +3,25 @@
 # it onto the target's main with a Synced-from trailer, and opens the sync
 # PR from sync/<repo>/<sha>. Merging that PR is the release. sync-guard
 # checks the PR, and a release team approval merges it.
+#
+# Every 4 hours, and on a dispatch with repo "all", the pending job runs
+# scripts/sync-pending.sh and syncs each repo whose source head is
+# unreleased and has no open sync PR on the current main. A dispatch naming
+# one repo syncs that repo, at sha when given.
 name: Sync from ONEcampaign
 
 on:
+  schedule:
+    - cron: "17 */4 * * *"
   workflow_dispatch:
     inputs:
       repo:
-        description: Repo to release, by its name in this org.
+        description: Repo to release, by its name in this org, or all to sync every repo whose source head is unreleased.
         required: true
         type: choice
+        default: all
         options:
+          - all
           - infra
           - dcp
           - apis
@@ -24,7 +33,7 @@ on:
           - spec-kit
           - skills
       sha:
-        description: ONEcampaign commit to release. Empty means the head of the repo's source branch.
+        description: ONEcampaign commit to release. Empty means the head of the repo's source branch. Ignored with all.
         required: false
         type: string
         default: ""
@@ -32,18 +41,82 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: sync-${{ inputs.repo }}
-  cancel-in-progress: false
-
 jobs:
-  sync:
-    name: Sync ${{ inputs.repo }}
+  pending:
+    name: Find repos to sync
     # Prod-only, and only from main's reviewed copy of the scripts. The
     # sync environment holds the release App's secrets and admits only main.
     if: github.repository_owner == 'DevelopmentFinanceObservatory' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: sync
+    outputs:
+      repos: ${{ steps.pending.outputs.repos }}
+    env:
+      # Empty on a scheduled run, which checks every repo.
+      TARGET: ${{ inputs.repo || 'all' }}
+    steps:
+      - name: Checkout
+        if: env.TARGET == 'all'
+        uses: actions/checkout@v4
+
+      - name: Mint a read token for the source repos
+        id: source-token
+        if: env.TARGET == 'all'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.READER_APP_PRIVATE_KEY }}
+          owner: ONEcampaign
+          permission-contents: read
+
+      # dfo-release is installed only on the ten prod repos, so the token
+      # reads those and nothing else.
+      - name: Mint a read token for the target repos
+        id: target-token
+        if: env.TARGET == 'all'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: List the repos to sync
+        id: pending
+        env:
+          SYNC_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
+          SYNC_TARGET_TOKEN: ${{ steps.target-token.outputs.token }}
+        run: |
+          # On its own line, since a run step's bash has no pipefail and a
+          # failed check must fail the step.
+          if [ "$TARGET" = all ]; then
+            list="$(scripts/sync-pending.sh)"
+            repos="$(jq -Rcs 'split("\n") | map(select(. != ""))' <<<"$list")"
+          else
+            repos="$(jq -cn --arg repo "$TARGET" '[$repo]')"
+          fi
+          echo "repos=$repos" >>"$GITHUB_OUTPUT"
+          echo "Repos to sync: $repos" >>"$GITHUB_STEP_SUMMARY"
+
+  sync:
+    name: Sync ${{ matrix.repo }}
+    needs: pending
+    if: >-
+      github.repository_owner == 'DevelopmentFinanceObservatory' && github.ref == 'refs/heads/main'
+      && needs.pending.outputs.repos != '[]'
+    runs-on: ubuntu-latest
+    environment: sync
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: ${{ fromJSON(needs.pending.outputs.repos) }}
+    # One group per repo. queue: max keeps every waiting job, so a scheduled
+    # run cannot cancel a waiting dispatch for one commit.
+    concurrency:
+      group: sync-${{ matrix.repo }}
+      cancel-in-progress: false
+      queue: max
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,7 +124,7 @@ jobs:
       - name: Look up the source repo
         id: source
         env:
-          TARGET: ${{ inputs.repo }}
+          TARGET: ${{ matrix.repo }}
         run: |
           . scripts/sync-lib.sh
           sync_lookup_target "$TARGET"
@@ -75,7 +148,7 @@ jobs:
           client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ inputs.repo }}
+          repositories: ${{ matrix.repo }}
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
@@ -100,6 +173,7 @@ jobs:
         env:
           SYNC_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
           SYNC_TARGET_TOKEN: ${{ steps.target-token.outputs.token }}
-          TARGET: ${{ inputs.repo }}
-          SHA: ${{ inputs.sha }}
+          TARGET: ${{ matrix.repo }}
+          # A commit applies only to the one repo a dispatch names.
+          SHA: ${{ inputs.repo == matrix.repo && inputs.sha || '' }}
         run: scripts/sync-release.sh "$TARGET" ${SHA:+"$SHA"}
