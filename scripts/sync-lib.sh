@@ -15,8 +15,11 @@ SYNC_SOURCE_OWNER="ONEcampaign"
 SYNC_TARGET_OWNER="DevelopmentFinanceObservatory"
 SYNC_GITHUB_URL="${SYNC_GITHUB_URL:-https://github.com}"
 
-# The only author and committer whose image-pin PRs sync-guard.sh admits.
+# The only author whose image-pin PRs sync-guard.sh admits, and the
+# committer GitHub records when it signs a commit that author makes through
+# the API.
 SYNC_PIN_AUTHOR="dfo-release[bot]"
+SYNC_PIN_COMMITTER="web-flow"
 
 # The one line an image-pin PR may change in an excluded path, as dfo-dcp's
 # build-and-pin.yml writes it: the key, then an Artifact Registry digest in
