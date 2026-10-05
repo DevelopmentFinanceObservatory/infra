@@ -14,7 +14,7 @@ variable "namespace" {
 }
 
 variable "tier" {
-  description = "Cloud SQL machine type. db-custom-1-3840 is one dedicated vCPU and 3.75 GB, a dedicated-core tier carrying Google's standard SLA. Production is the same shape stepped up, with availability_type = REGIONAL and a larger tier, neither of which this stack sets."
+  description = "Cloud SQL machine type. The default, db-custom-1-3840, is one dedicated vCPU and 3.75 GB, a dedicated-core tier carrying Google's standard SLA, and is what dev runs. Prod sets db-custom-2-7680 in its env.auto.tfvars. Both instances are zonal."
   type        = string
   default     = "db-custom-1-3840"
 }
