@@ -45,15 +45,18 @@ if [ "$1" = api ]; then
     esac
 fi
 STUB
-# terraform: `output -raw NAME` prints `value-of-<env>/<stack>/NAME`, naming
-# the Terraform root it ran in, so an assertion on a written value also pins
-# which environment and stack it was read from. NAME equal to
-# $STUB_MISSING_OUTPUT prints nothing, as an unapplied stack would.
+# terraform: `output -json NAME` prints `"value-of-<env>/<stack>/NAME"`,
+# naming the Terraform root it ran in, so an assertion on a written value also
+# pins which environment and stack it was read from. NAME equal to
+# $STUB_MISSING_OUTPUT exits 1 with nothing on stdout, as Terraform does on an
+# unapplied stack. Any other form exits 2, since `output -raw` on an unapplied
+# stack exits 0 with a warning on stdout.
 cat >"$WORK/bin/terraform" <<'STUB'
 #!/usr/bin/env bash
 echo "terraform $PWD $*" >>"$STUB_LOG"
+[ "$2" = -json ] || { echo "stub: unexpected terraform $*" >&2; exit 2; }
 [ "$3" = "${STUB_MISSING_OUTPUT:-}" ] && exit 1
-printf 'value-of-%s/%s' "${PWD#*/infra/}" "$3"
+printf '"value-of-%s/%s"\n' "${PWD#*/infra/}" "$3"
 STUB
 chmod +x "$WORK/bin/gh" "$WORK/bin/terraform"
 export PATH="$WORK/bin:$PATH"

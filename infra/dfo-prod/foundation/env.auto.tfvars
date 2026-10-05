@@ -30,11 +30,11 @@ applier_wif_environment = "production"
 # "user:<email>". Empty grants no one.
 applier_impersonators = []
 
-# Placeholder: the operators who run Dagster ingestion into prod, as
-# "user:<email>". Leave empty until dcp has applied and the four names below
-# are set.
-ingestion_operators = []
-# ingestion_workflow_service_account_email = "" # from dcp output ingestion_workflow_service_account_email after apply
-# ingestion_artifacts_bucket_name          = "" # from dcp output storage_artifacts_bucket_name after apply
-# ingestion_spanner_instance_id            = "" # from dcp output spanner_instance_id after apply
-# ingestion_spanner_database_id            = "" # from dcp output spanner_database_id after apply
+# The Google group whose members run Dagster ingestion into prod. Membership
+# lives in ONE's Workspace. The four names below are dcp's outputs of the same
+# names.
+ingestion_operators                      = ["group:dfo-prod-ingestion@one.org"]
+ingestion_workflow_service_account_email = "dfo-prod-dc-ing-wf-sa@prod-fin-observatory.iam.gserviceaccount.com"
+ingestion_artifacts_bucket_name          = "dfo-prod-dc-artifacts-prod-fin-observatory"
+ingestion_spanner_instance_id            = "dfo-prod-dc-instance"
+ingestion_spanner_database_id            = "dfo-prod-dc-db"
