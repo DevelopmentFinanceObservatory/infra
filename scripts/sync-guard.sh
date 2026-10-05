@@ -17,7 +17,8 @@
 #     path in sync-lib.sh, or a descendant of it, so a sync cannot put back
 #     an older guard.
 #   - An image-pin PR. It is opened by dfo-release[bot], its commit is
-#     authored and committed by dfo-release[bot] with a verified signature,
+#     authored by dfo-release[bot] and committed by GitHub (web-flow) with a
+#     verified signature,
 #     and it changes only the pin line in this repo's excluded paths, each
 #     still a regular file. The line keeps base's registry path and changes
 #     only the digest, except on the first pin, when base holds null.
@@ -176,8 +177,9 @@ done <<<"$changed"
 # cannot change the list. Fields are documented under "Compare two commits"
 # in GitHub's REST commits API: each commit's author and committer logins,
 # and commit.verification.verified. GitHub signs a commit a GitHub App
-# makes through the API with no custom author or committer, so a commit
-# pushed with the App's token from a local git does not verify.
+# makes through the API with no custom author or committer, and records
+# web-flow as its committer. A commit pushed with the App's token from a
+# local git keeps the App as committer and does not verify.
 commits="$(GH_TOKEN="${SYNC_TARGET_TOKEN:-}" gh api "repos/$SYNC_TARGET_OWNER/$SYNC_TARGET/compare/$base...$head" \
     --jq '.commits[] | [.sha, (.author.login // "none"), (.committer.login // "none"), (.commit.verification.verified | tostring)] | @tsv')" ||
     fail "the commits between $base and $head could not be listed."
@@ -185,8 +187,8 @@ if [ -z "$commits" ]; then
     fail "the API lists no commits between $base and $head."
 fi
 while IFS=$'\t' read -r sha commit_author committer verified; do
-    if [ "$commit_author" != "$SYNC_PIN_AUTHOR" ] || [ "$committer" != "$SYNC_PIN_AUTHOR" ] || [ "$verified" != "true" ]; then
-        fail "commit $sha has author $commit_author, committer $committer and verified $verified. Every commit in an image-pin PR must be authored and committed by $SYNC_PIN_AUTHOR with a verified signature."
+    if [ "$commit_author" != "$SYNC_PIN_AUTHOR" ] || [ "$committer" != "$SYNC_PIN_COMMITTER" ] || [ "$verified" != "true" ]; then
+        fail "commit $sha has author $commit_author, committer $committer and verified $verified. Every commit in an image-pin PR must be authored by $SYNC_PIN_AUTHOR and committed by $SYNC_PIN_COMMITTER with a verified signature."
     fi
 done <<<"$commits"
 pass "an image-pin PR from $SYNC_PIN_AUTHOR that changes only the pin line in $SYNC_EXCLUDES."

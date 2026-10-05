@@ -209,7 +209,7 @@ case "$1 $2 $*" in
 api\ repos/DevelopmentFinanceObservatory/*/compare/*)
     [ -z "${STUB_COMPARE_FAIL:-}" ] || exit 1
     printf '%s\t%s\t%s\t%s\n' "${2##*...}" "${STUB_PIN_AUTHOR:-dfo-release[bot]}" \
-        "${STUB_PIN_COMMITTER:-dfo-release[bot]}" "${STUB_PIN_VERIFIED:-true}"
+        "${STUB_PIN_COMMITTER:-web-flow}" "${STUB_PIN_VERIFIED:-true}"
     ;;
 api\ repos/*/compare/*) echo "${STUB_BEHIND_BY:-0}" ;;
 api\ repos/*/commits/*) echo "$STUB_SHA" ;;
@@ -292,8 +292,8 @@ check "an image-pin PR of two commits fails" \
     fails pin_guard "$(PIN_PARENT="$first_pin" pin_head "100644|$PIN|$PIN_HEADER\n${pin_line/sha256:a/sha256:b}")"
 check "an image-pin PR authored by anyone else fails" \
     fails pin_guard_with STUB_PIN_AUTHOR=someone "$(pin_head)"
-check "an image-pin PR committed by anyone else fails" \
-    fails pin_guard_with STUB_PIN_COMMITTER=web-flow "$(pin_head)"
+check "an image-pin PR committed by the App itself fails" \
+    fails pin_guard_with "STUB_PIN_COMMITTER=dfo-release[bot]" "$(pin_head)"
 check "an image-pin PR with an unverified commit fails" \
     fails pin_guard_with STUB_PIN_VERIFIED=false "$(pin_head)"
 check "an image-pin PR whose commits cannot be listed fails" \
