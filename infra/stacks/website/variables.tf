@@ -1,0 +1,90 @@
+variable "project_id" {
+  description = "GCP project this environment deploys into."
+  type        = string
+}
+
+variable "region" {
+  description = "Default GCP region for regional resources."
+  type        = string
+}
+
+variable "namespace" {
+  description = "Prefix for this environment's resource names, such as dfo-dev."
+  type        = string
+}
+
+variable "tier" {
+  description = "Deployment tier this environment's website serves: staging in dfo-dev, production in dfo-prod. Staging resource names end in -staging; production names carry no tier."
+  type        = string
+
+  validation {
+    condition     = contains(["staging", "production"], var.tier)
+    error_message = "tier must be staging or production."
+  }
+}
+
+variable "deployer_service_account" {
+  description = "Email of dfo-website's CI image-deployer service account, which the foundation stack creates. Copied from that stack's output as a plain value; the data lookup in main.tf still fails the plan if the account does not exist."
+  type        = string
+}
+
+variable "cloudsql_login_role_id" {
+  description = "Id of this stack's project-scoped custom role for Cloud SQL IAM login without the Data API, such as dfoDevWebsiteCloudsqlLoginOnly. See database.tf."
+  type        = string
+}
+
+variable "platform_psc_service_attachment_uri" {
+  description = "Target URI of the shared Cloud SQL instance's PSC service attachment, copied from the platform stack's psc_service_attachment_uri output rather than read through remote state, so this stack's plan never depends on that stack having applied."
+  type        = string
+}
+
+variable "platform_dns_name" {
+  description = "The shared Cloud SQL instance's PSC DNS name, copied from the platform stack's dns_name output rather than read through remote state, so this stack's plan never depends on that stack having applied."
+  type        = string
+}
+
+variable "platform_postgres_instance_name" {
+  description = "Name of the shared Cloud SQL instance from the platform stack, copied from that stack's instance_name output rather than read through remote state, so this stack's plan never depends on that stack having applied."
+  type        = string
+}
+
+variable "platform_postgres_connection_name" {
+  description = "Cloud SQL connection name (project:region:instance) of the shared instance from the platform stack, the value the Cloud SQL connector resolves an instance from, copied from that stack's connection_name output rather than read through remote state, so this stack's plan never depends on that stack having applied."
+  type        = string
+}
+
+variable "studio_api_base" {
+  description = "Base URL of the ai stack's Cloud Run service, which the website's /api/studio/* proxy forwards requests to. Copied from the `ai` stack's `service_url` output rather than read through remote state, so this stack's plan never depends on that stack having applied."
+  type        = string
+}
+
+variable "search_api_base" {
+  description = "Base URL of the apis stack's Cloud Run service, which the website's search, datasets and graph proxies forward to. A bare host with no path suffix. Copied from the `apis` stack's `service_url` output rather than read through remote state, so this stack's plan never depends on that stack having applied. The service refuses to start without it."
+  type        = string
+}
+
+variable "website_url" {
+  description = "The website service's own public URL. A module self-reference to module.website_service.service_url would cycle, since the module can't consume its own not-yet-created service's URL as one of its inputs, so this value is copied in as a literal instead."
+  type        = string
+}
+
+variable "datasets_pin_principal_secret_id" {
+  description = "Secret Manager id of the datasets pin principal secret. Copied from the `apis` stack's `google_secret_manager_secret.datasets_pin_principal.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not. See README."
+  type        = string
+}
+
+variable "posthog_key" {
+  description = "PostHog project API key (public write-only token, see README \"PostHog telemetry\") for the DFO project on PostHog Cloud EU, org-managed in the PostHog UI rather than by Terraform."
+  type        = string
+}
+
+variable "posthog_host" {
+  description = "PostHog ingestion endpoint. The project lives on PostHog Cloud EU, so this is the EU ingest host."
+  type        = string
+  default     = "https://eu.i.posthog.com"
+}
+
+variable "stateless_deletion_protection" {
+  description = "Deletion protection for this stack's Cloud Run services and Jobs, the same flag the dcp stack passes to its Cloud Run resources. They hold no data of their own, so this guards against an accidental destroy or replace rather than data loss. Off in dfo-dev, so `terraform destroy` and replaces stay unblocked; on in dfo-prod."
+  type        = bool
+}

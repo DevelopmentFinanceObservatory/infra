@@ -1,0 +1,86 @@
+# The sync-guard check for every DevelopmentFinanceObservatory repo. Each
+# repo's caller, the identical .github/workflows/sync-guard.yml, runs it on
+# pull_request_target and references it at infra's main, so the guard is
+# always infra's reviewed copy and never the PR's. scripts/sync-guard.sh
+# holds the rules, and scripts/sync-guard-check.sh posts its verdict as the
+# sync-guard check run on the PR's head commit.
+#
+# A composite action, where a reusable workflow would be the usual shape,
+# because the identical caller also sits in the ONEcampaign repos. GitHub
+# resolves a job's reusable workflow when it creates the run, before any
+# job-level if:, so a caller of a private workflow in another org fails at
+# startup there. An action resolves only when its job starts on a runner,
+# and the caller's prod-only if: skips that job in ONEcampaign.
+name: sync-guard
+description: Pass a PR only when it is an exact sync of its ONEcampaign source or a release App image pin.
+
+inputs:
+  reader-client-id:
+    description: The reader App's client ID.
+    required: true
+  reader-private-key:
+    description: The reader App's private key.
+    required: true
+  release-client-id:
+    description: The release App's client ID, from the caller's sync-guard environment.
+    required: true
+  release-private-key:
+    description: The release App's private key, from the caller's sync-guard environment.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Refuse anything but pull_request_target
+      if: github.event_name != 'pull_request_target'
+      shell: bash
+      run: |
+        echo "::error::sync-guard runs only on pull_request_target, so it reads base main's caller. This run came from ${{ github.event_name }}."
+        exit 1
+
+    - name: Look up the source repo
+      id: source
+      shell: bash
+      env:
+        TARGET: ${{ github.event.repository.name }}
+      run: |
+        . "$GITHUB_ACTION_PATH/../../../scripts/sync-lib.sh"
+        sync_lookup_target "$TARGET"
+        echo "repo=$SYNC_SOURCE" >>"$GITHUB_OUTPUT"
+
+    - name: Mint a read token for the source repo
+      id: source-token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.reader-client-id }}
+        private-key: ${{ inputs.reader-private-key }}
+        owner: ONEcampaign
+        repositories: ${{ steps.source.outputs.repo }}
+        permission-contents: read
+
+    # The ruleset requires the sync-guard check from the release App, so
+    # the check run is posted with its token.
+    - name: Mint a checks token for this repo
+      id: checks-token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.release-client-id }}
+        private-key: ${{ inputs.release-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        permission-checks: write
+
+    # Every value comes from the event that triggered this run, so a
+    # force-push while it runs cannot change which head commit it judges.
+    - name: Check the PR
+      shell: bash
+      env:
+        SYNC_TARGET_TOKEN: ${{ github.token }}
+        SYNC_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
+        SYNC_CHECKS_TOKEN: ${{ steps.checks-token.outputs.token }}
+        TARGET: ${{ github.event.repository.name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        AUTHOR: ${{ github.event.pull_request.user.login }}
+      run: |
+        "$GITHUB_ACTION_PATH/../../../scripts/sync-guard-check.sh" "$TARGET" "$BASE_SHA" "$HEAD_SHA" "$AUTHOR"

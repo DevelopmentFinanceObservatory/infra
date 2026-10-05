@@ -1,0 +1,626 @@
+terraform {
+  required_version = ">= 1.5"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.11.0"
+    }
+  }
+}
+
+# user_project_override and billing_project send every call with
+# project_id as the quota project. google_billing_budget requires it: the
+# Cloud Billing Budget API rejects a call with no quota project.
+provider "google" {
+  project               = var.project_id
+  region                = var.region
+  user_project_override = true
+  billing_project       = var.project_id
+}
+
+data "google_project" "this" {}
+
+resource "google_project_service" "apis" {
+  for_each = toset([
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "sts.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "drive.googleapis.com",
+    "docs.googleapis.com",
+    "sheets.googleapis.com",
+  ])
+  service            = each.key
+  disable_on_destroy = false
+}
+
+# Shared Artifact Registry repo. The dfo-dcp, dfo-ai, and dfo-apis service
+# images all push here, so it belongs to no single stack. Writers push
+# git-SHA tags, but review requirements differ between them. dfo-website
+# pushes to its own repo below rather than here. A consumer that needs the
+# guarantee pins its image to a digest rather than a tag, which keeps it
+# resolving to the exact image it pinned even after a same-tag rebuild.
+# Enforcing immutable tags at the repository would cost more than it buys.
+# Immutable tags also block deletion, so a rebuild that produces a
+# different digest for a SHA already pushed has no way back except a new
+# commit.
+resource "google_artifact_registry_repository" "datacommons" {
+  location      = var.region
+  repository_id = "datacommons"
+  format        = "DOCKER"
+  description   = "DFO Data Commons service images"
+
+  # A keep rule always wins over a delete rule that matches the same
+  # version, regardless of the order the rules appear below. keep_count
+  # shields the most recent versions from every delete rule. An older
+  # version still survives if no delete rule matches it. keep_count is
+  # what a Cloud Run rollback depends on. A rollback to a revision whose
+  # image this policy has already deleted fails.
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "keep-recent"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 10
+    }
+  }
+
+  cleanup_policies {
+    id     = "delete-stale"
+    action = "DELETE"
+    condition {
+      older_than = "2592000s"
+      tag_state  = "TAGGED"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+# dcp's own build-cache repo, separate from `datacommons` so its writer grant
+# below can be scoped to dfo-dcp-deployer alone. AR IAM has no granularity
+# below the repository, and the buildcache tag moves on every push, so
+# sharing it with ai/apis would let either overwrite dcp's cache manifests.
+resource "google_artifact_registry_repository" "dcp_build_cache" {
+  location      = var.region
+  repository_id = "dfo-dcp-build-cache"
+  format        = "DOCKER"
+  description   = "BuildKit cache manifests for dcp, writable by dfo-dcp-deployer only"
+
+  cleanup_policy_dry_run = false
+
+  # The buildcache tag moves to the newest manifest on every push, so the
+  # manifests this cache can reclaim sit untagged. The condition matches
+  # tag_state ANY to reach them. TAGGED would miss them.
+  cleanup_policies {
+    id     = "delete-stale"
+    action = "DELETE"
+    condition {
+      older_than = "1209600s"
+      tag_state  = "ANY"
+    }
+  }
+
+  cleanup_policies {
+    id     = "keep-recent"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 2
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+# dfo-website's own repo, separate from `datacommons` so its writer grant
+# below can be scoped to the website deployer alone. AR IAM has no
+# granularity below the repository, and dev's staging branch deploys on
+# every push with no review gate, so sharing it with dcp/ai/apis would let
+# that push reach their images too.
+resource "google_artifact_registry_repository" "website" {
+  location      = var.region
+  repository_id = var.website_artifact_repository_id
+  format        = "DOCKER"
+  description   = "dfo-website ${var.github_repositories["website"].deploy_environment} service images, writable by ${var.website_deployer_account_id} only"
+
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "keep-recent"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 10
+    }
+  }
+
+  cleanup_policies {
+    id     = "delete-stale"
+    action = "DELETE"
+    condition {
+      older_than = "2592000s"
+      tag_state  = "TAGGED"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+# Single pool for GitHub Actions across every DFO repo. Providers are scoped
+# per repo below via each deployer SA's WIF binding, not per pool.
+resource "google_iam_workload_identity_pool" "github" {
+  workload_identity_pool_id = var.pool_id
+  display_name              = "GitHub Actions"
+  description               = "WIF pool for GitHub Actions across DFO repos"
+  disabled                  = false
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_iam_workload_identity_pool_provider" "github" {
+  workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  workload_identity_pool_provider_id = var.provider_id
+  display_name                       = "GitHub OIDC"
+
+  # repo_environment, repo_ref and repo_env_ref exist so a deployer binding
+  # can name one GitHub Environment, one git ref, or both together, without
+  # matching the raw `sub` claim.
+  # GitHub does not emit one subject shape: dfo-infra still gets the legacy
+  # `repo:<owner>/<repo>` prefix while dfo-ai and dfo-apis already get the
+  # immutable `repo:<owner>@<owner_id>/<repo>@<repo_id>` form, with all three
+  # reporting `use_default: true` — the shape is GitHub's to change, per
+  # repository, without notice. A `principal://.../subject/...` binding
+  # therefore encodes a value this project neither controls nor can observe
+  # drifting, and the failure is a hard 403 at the deploy's auth step.
+  #
+  # repo_env_ref pins both at once, which is what an image deployer needs.
+  # A GitHub Environment's deployment branch policy is the only thing
+  # deciding which refs may deploy under it, that policy lives in the service
+  # repository rather than here, and widening it fails open: more branches
+  # mint the identity, Terraform plans clean, CI stays green. Requiring the
+  # ref to match as well moves the boundary into GCP IAM, where this repo
+  # owns it, and turns policy drift into a denied exchange on the offending
+  # run rather than a silent widening.
+  #
+  # All three compose from `repository_id` rather than `repository` for the same
+  # reason the attribute condition below gates on ids. A repository rename or
+  # transfer changes the name and preserves the id, so a name-composed
+  # binding would keep exchanging tokens and stop matching anything, with
+  # Terraform planning clean throughout because nothing in this repo changed
+  # — the identical silent failure these attributes exist to end. Names stay
+  # mapped above for legibility; they do not decide authorization.
+  #
+  # All three guard on the claims being present rather than referencing them
+  # bare.
+  # This mapping is evaluated for every token the pool exchanges, including
+  # dev's planner and applier jobs, which declare no `environment:` and so
+  # carry no `environment` claim; an unguarded concatenation would fail those
+  # exchanges and take dfo-infra's own CI down with them. The guard uses `in`
+  # and a ternary — both documented for the restricted CEL subset attribute
+  # mappings accept, unlike the `has()` macro. repo_env_ref nests two of
+  # those guards rather than joining them with `&&`, which is documented for
+  # attribute conditions but not for mappings, and every construct here has
+  # already been exercised by a live exchange on this pool.
+  #
+  # The absent-claim fallback is the bare repository id, not an empty string
+  # or a sentinel: an id is digits only, and every binding composed from
+  # these is `<repository_id>:<value>`, so the fallback cannot collide with a
+  # real binding even if an environment were named to imitate one.
+  attribute_mapping = {
+    "google.subject"                = "assertion.sub"
+    "attribute.repository"          = "assertion.repository"
+    "attribute.repository_owner"    = "assertion.repository_owner"
+    "attribute.repository_id"       = "assertion.repository_id"
+    "attribute.repository_owner_id" = "assertion.repository_owner_id"
+    "attribute.repo_environment"    = "'environment' in assertion ? assertion.repository_id + ':' + assertion.environment : assertion.repository_id"
+    "attribute.repo_ref"            = "'ref' in assertion ? assertion.repository_id + ':' + assertion.ref : assertion.repository_id"
+    "attribute.repo_env_ref"        = "'environment' in assertion ? ('ref' in assertion ? assertion.repository_id + ':' + assertion.environment + ':' + assertion.ref : assertion.repository_id) : assertion.repository_id"
+  }
+  # Required: the GitHub OIDC issuer rejects a provider with no attribute
+  # condition. Gated on the immutable org id and repository ids, not their
+  # names — GitHub org and repository names can be released and
+  # re-registered, so a name-based condition trusts whoever holds the name
+  # when a token is minted, not the account that held it when this
+  # condition was written.
+  # `attribute.repository` stays mapped above because each deployer SA's
+  # own WIF binding (infra/modules/github-deployer) keys its per-repo scoping
+  # off it; `attribute.repository_owner` stays mapped for visibility only,
+  # now that org-level scoping runs on `repository_owner_id` instead. The
+  # repository id is gated here directly, rather than left for per-repo
+  # bindings to enforce on their own, so token exchange itself — not just
+  # impersonation afterward — is limited to the repositories that use this
+  # pool. A `for` over a map visits its keys in sorted order, so the
+  # generated list, and therefore this condition string, is stable across
+  # plans regardless of edits elsewhere in the map.
+  #
+  # This is pool-level config shared by all seven deployer identities below
+  # (planner, applier, ai_deployer, apis_deployer, dcp_deployer,
+  # website_deployer, docs_sync). Get it wrong and every
+  # GitHub Actions run loses GCP access, including the applier that would
+  # normally fix it forward — recovery then means a human running Terraform
+  # locally with owner credentials.
+  attribute_condition = "assertion.repository_owner_id == '${var.github_owner_id}' && assertion.repository_id in ${jsonencode([for role, repo in var.github_repositories : repo.id])}"
+
+  oidc {
+    issuer_uri = "https://token.actions.githubusercontent.com"
+  }
+}
+
+# Each deployer's `repository` argument below is derived from the same
+# var.github_repositories map that gates the provider's attribute
+# condition above, so the two can't drift: a role missing from the map
+# fails this lookup at plan time — a hard error — rather than deploying a
+# binding whose token the provider condition then rejects at CI time.
+# Adding another deployer means adding its entry to var.github_repositories
+# and referencing it here by role; nothing else needs to change.
+locals {
+  deployer_repository = { for role, repo in var.github_repositories : role => "${var.github_owner}/${repo.name}" }
+}
+
+# Project-level roles for the applier SA, one entry per resource type the
+# dcp stack (and this stack) declare, plus the reads its `data` sources need.
+# Keep this list in sync with what `../dcp` actually provisions — see
+# infra/modules/README.md for the module inventory.
+#
+# The applier deliberately has no `roles/viewer`, so unlike the planner it does
+# not get resource reads for free: every `data` source the stacks resolve at
+# apply time needs its permission listed here explicitly.
+locals {
+  applier_project_roles = [
+    "roles/run.admin",                            # Cloud Run services + ingestion jobs (dcp, ai, website)
+    "roles/iam.serviceAccountAdmin",              # create/manage service accounts (all stacks)
+    "roles/iam.serviceAccountUser",               # actAs runtime SAs when deploying Run/Workflows
+    "roles/resourcemanager.projectIamAdmin",      # project-level IAM bindings (foundation, dcp)
+    "roles/iam.roleAdmin",                        # custom project roles — projectIamAdmin binds them but cannot create or read them (apis)
+    "roles/iam.workloadIdentityPoolAdmin",        # WIF pool/provider (foundation)
+    "roles/artifactregistry.admin",               # Artifact Registry repo (foundation, dcp)
+    "roles/secretmanager.admin",                  # secrets + versions + IAM (dcp, ai, website)
+    "roles/storage.admin",                        # GCS buckets + terraform state (dcp bucket, state)
+    "roles/spanner.admin",                        # Spanner instance + database (dcp)
+    "roles/cloudsql.admin",                       # Cloud SQL instance + databases + users (website datasets instance, dcp datasets db)
+    "roles/workflows.admin",                      # ingestion Cloud Workflow (dcp)
+    "roles/redis.admin",                          # Memorystore Redis — only when enable_redis=true (dcp)
+    "roles/vpcaccess.admin",                      # VPC Access Connector — only when enable_redis=true (dcp)
+    "roles/serviceusage.serviceUsageAdmin",       # enable project APIs (all stacks)
+    "roles/serviceusage.apiKeysAdmin",            # google_apikeys_key: Maps API key (dcp auth module)
+    "roles/bigquery.connectionAdmin",             # google_bigquery_connection (dcp spanner federation)
+    "roles/bigquery.resourceAdmin",               # google_bigquery_reservation + assignment (dcp)
+    "roles/bigquery.jobUser",                     # data.google_bigquery_default_service_account (dcp spanner federation)
+    "roles/bigquery.dataOwner",                   # google_bigquery_dataset (pipelines)
+    "roles/compute.networkViewer",                # data.google_compute_network.default (dcp)
+    "roles/compute.networkAdmin",                 # consumer PSC network VPC + subnetwork + address + forwarding rule (website, dcp)
+    "roles/dns.admin",                            # consumer PSC DNS zone + record set (apis, website)
+    "roles/cloudtasks.queueAdmin",                # google_cloud_tasks_queue (apis datasets worker dispatch)
+    "roles/cloudscheduler.admin",                 # google_cloud_scheduler_job (apis coverage tick)
+    "roles/logging.configWriter",                 # google_logging_metric (apis coverage staleness alert)
+    "roles/monitoring.alertPolicyEditor",         # google_monitoring_alert_policy (apis coverage staleness alert)
+    "roles/monitoring.notificationChannelEditor", # google_monitoring_notification_channel (foundation Gemini budget)
+  ]
+}
+
+# Stacks this repository owns state for, i.e. the state prefixes the planner
+# is allowed to read the contents of. This is the same stack list
+# .github/workflows/plan.yml's paths-filter matrices over — kept in sync by
+# hand, since one is CEL and the other is YAML and neither can generate the
+# other.
+locals {
+  state_bucket_stacks = ["foundation", "ai", "apis", "website", "dcp", "platform", "pipelines"]
+}
+
+# Read-only plan on pull requests: can see everything but change nothing.
+# var.planner_wif_ref and var.planner_wif_environment set its WIF binding per
+# environment. In prod a planner job runs PR code on the main ref, so the
+# binding also names the `plan` environment, which the applier's never does.
+module "planner" {
+  source = "../../modules/github-deployer"
+
+  project_id     = var.project_id
+  project_number = data.google_project.this.number
+  pool_id        = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  repository     = local.deployer_repository["infra"]
+  repository_id  = var.github_repositories["infra"].id
+
+  account_id   = "dfo-infra-planner"
+  display_name = "dfo-infra Terraform planner (CI)"
+  # roles/viewer reads resource state; iam.securityReviewer adds the
+  # *.getIamPolicy reads a plan needs to refresh IAM bindings (notably
+  # storage.buckets.getIamPolicy for the state-bucket member below, which
+  # roles/viewer does not grant). serviceUsageConsumer grants
+  # serviceusage.services.use, which the dcp stack's storage-bucket read
+  # needs under user-project-override (viewer omits it). All read-only.
+  project_roles     = ["roles/viewer", "roles/iam.securityReviewer", "roles/serviceusage.serviceUsageConsumer"]
+  state_bucket      = var.state_bucket
+  state_bucket_role = "roles/storage.objectViewer"
+  # Restricted to this repo's own state prefixes rather than the whole
+  # bucket — see the module variable for why the object-scoped condition
+  # this builds is unioned with an unconditioned allow on the Bucket
+  # resource itself.
+  state_bucket_object_prefixes = [for stack in local.state_bucket_stacks : "terraform/state/${var.namespace}/${stack}/"]
+  wif_environment              = var.planner_wif_environment
+  wif_ref                      = var.planner_wif_ref
+
+  # The SA itself needs iam.googleapis.com; on a fresh project nothing else
+  # orders it after API enablement (the pool_id input only chains the WIF
+  # binding, not the account).
+  depends_on = [google_project_service.apis]
+}
+
+# The read-only planner (roles/viewer) cannot read secret *versions*, so grant
+# it resource-scoped access to just the hand-seeded Data Commons API key secret
+# that the dcp stack sources via a data source (see infra/stacks/dcp/dfo.tf).
+# The applier needs no grant — it already holds project-wide
+# roles/secretmanager.admin. This secret is created by hand (owner), not by
+# Terraform, so we reference it by its fully-qualified name.
+resource "google_secret_manager_secret_iam_member" "dc_key_planner" {
+  secret_id = "projects/${var.project_id}/secrets/dc-api-key"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = module.planner.member
+}
+
+# Applies this repo's stacks on merge to main. No separate state_bucket grant:
+# roles/storage.admin above already covers the state bucket. The binding is
+# pinned to main, and in prod also to the `production` environment through
+# var.applier_wif_environment.
+module "applier" {
+  source = "../../modules/github-deployer"
+
+  project_id     = var.project_id
+  project_number = data.google_project.this.number
+  pool_id        = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  repository     = local.deployer_repository["infra"]
+  repository_id  = var.github_repositories["infra"].id
+
+  account_id      = "dfo-infra-applier"
+  display_name    = "dfo-infra Terraform applier (CI)"
+  project_roles   = local.applier_project_roles
+  wif_environment = var.applier_wif_environment
+  wif_ref         = "refs/heads/main"
+
+  depends_on = [google_project_service.apis]
+}
+
+# The applier holds the only Postgres login on the shared Cloud SQL instance,
+# and that instance is PSC-only with no route from a laptop, so reading
+# database state (a pg_database ACL, a role's grants, what a provision script
+# actually did) means calling the Cloud SQL Data API as this account. Minting
+# an access token for it is what makes those reads possible.
+#
+# roles/owner does not carry iam.serviceAccounts.getAccessToken, so a project
+# owner still needs this binding to impersonate. It grants reach over
+# everything in applier_project_roles above, which is close to the whole
+# project, so it belongs only to people who can already grant themselves
+# those roles directly.
+#
+# Calls made with a minted token log under the applier's own principalEmail,
+# the same identity every CI apply writes, so a human read-back blends into
+# automation at a glance. The original caller survives in
+# authenticationInfo.serviceAccountDelegationInfo. Anyone auditing this
+# account's activity has to read that field to tell a person from a pipeline.
+resource "google_service_account_iam_member" "applier_impersonators" {
+  for_each = toset(var.applier_impersonators)
+
+  service_account_id = module.applier.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = each.value
+}
+
+# The foundation creates dfo-ai's deployer identity and grants its Artifact
+# Registry access. The ai stack grants Cloud Run access on the service itself.
+module "ai_deployer" {
+  source = "../../modules/github-deployer"
+
+  project_id     = var.project_id
+  project_number = data.google_project.this.number
+  pool_id        = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  repository     = local.deployer_repository["ai"]
+  repository_id  = var.github_repositories["ai"].id
+
+  account_id      = "dfo-ai-deployer"
+  display_name    = "dfo-ai image deployer (CI)"
+  project_roles   = []
+  wif_environment = var.github_repositories["ai"].deploy_environment
+  wif_ref         = "refs/heads/${var.github_repositories["ai"].deploy_branch}"
+  artifact_registry_repositories = [{
+    repository_id = google_artifact_registry_repository.datacommons.repository_id
+    location      = google_artifact_registry_repository.datacommons.location
+    role          = "roles/artifactregistry.writer"
+  }]
+
+  depends_on = [google_project_service.apis]
+}
+
+# Image-only Cloud Run updates from the dfo-dcp repo. The ai and apis stacks
+# grant their deployers Cloud Run access on the exact resources they update.
+# dcp's Cloud Run service is created inside the pinned upstream module
+# (git::https://github.com/datacommonsorg/datacommons.git//infra/dcp/modules/stack),
+# which leaves nothing here to attach `lifecycle.ignore_changes` to, so only
+# a real `terraform apply` can change dcp's image. dfo-dcp's CI only pushes
+# to Artifact Registry and opens a pin PR; dfo-infra's applier runs the
+# apply. This SA needs nothing beyond the AR pushes (image, buildcache): no
+# run.developer, no actAs.
+module "dcp_deployer" {
+  source = "../../modules/github-deployer"
+
+  project_id     = var.project_id
+  project_number = data.google_project.this.number
+  pool_id        = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  repository     = local.deployer_repository["dcp"]
+  repository_id  = var.github_repositories["dcp"].id
+
+  account_id      = "dfo-dcp-deployer"
+  display_name    = "dfo-dcp image builder (CI)"
+  project_roles   = []
+  wif_environment = var.github_repositories["dcp"].deploy_environment
+  wif_ref         = "refs/heads/${var.github_repositories["dcp"].deploy_branch}"
+  artifact_registry_repositories = [
+    {
+      repository_id = google_artifact_registry_repository.datacommons.repository_id
+      location      = google_artifact_registry_repository.datacommons.location
+      role          = "roles/artifactregistry.writer"
+    },
+    {
+      repository_id = google_artifact_registry_repository.dcp_build_cache.repository_id
+      location      = google_artifact_registry_repository.dcp_build_cache.location
+      role          = "roles/artifactregistry.writer"
+    },
+  ]
+
+  depends_on = [google_project_service.apis]
+}
+
+# The foundation creates dfo-apis's deployer identity and grants its Artifact
+# Registry access. The apis stack grants Cloud Run access on its service and
+# migration Jobs, plus actAs on their runtime service accounts.
+module "apis_deployer" {
+  source = "../../modules/github-deployer"
+
+  project_id     = var.project_id
+  project_number = data.google_project.this.number
+  pool_id        = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  repository     = local.deployer_repository["apis"]
+  repository_id  = var.github_repositories["apis"].id
+
+  account_id      = "dfo-apis-deployer"
+  display_name    = "dfo-apis image deployer (CI)"
+  project_roles   = []
+  wif_environment = var.github_repositories["apis"].deploy_environment
+  wif_ref         = "refs/heads/${var.github_repositories["apis"].deploy_branch}"
+  artifact_registry_repositories = [{
+    repository_id = google_artifact_registry_repository.datacommons.repository_id
+    location      = google_artifact_registry_repository.datacommons.location
+    role          = "roles/artifactregistry.writer"
+  }]
+
+  depends_on = [google_project_service.apis]
+}
+
+# Image-only Cloud Run updates from dfo-website. Dev's `staging`
+# environment auto-deploys on every push to its branch with no review
+# requirement. Bounded to its own Cloud Run service and migrate job (granted
+# in the website stack) and its own Artifact Registry repo, keeping that
+# push from reaching anything else.
+module "website_deployer" {
+  source = "../../modules/github-deployer"
+
+  project_id     = var.project_id
+  project_number = data.google_project.this.number
+  pool_id        = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  repository     = local.deployer_repository["website"]
+  repository_id  = var.github_repositories["website"].id
+
+  account_id      = var.website_deployer_account_id
+  display_name    = "dfo-website ${var.github_repositories["website"].deploy_environment} image deployer (CI)"
+  project_roles   = []
+  wif_environment = var.github_repositories["website"].deploy_environment
+  wif_ref         = "refs/heads/${var.github_repositories["website"].deploy_branch}"
+  artifact_registry_repositories = [{
+    repository_id = google_artifact_registry_repository.website.repository_id
+    location      = google_artifact_registry_repository.website.location
+    role          = "roles/artifactregistry.writer"
+  }]
+
+  depends_on = [google_project_service.apis]
+}
+
+moved {
+  from = google_artifact_registry_repository.website_staging
+  to   = google_artifact_registry_repository.website
+}
+
+moved {
+  from = module.website_staging_deployer
+  to   = module.website_deployer
+}
+
+# dfo-docs' Google Docs sync, which runs on main and on manual dispatch. The
+# service account holds no project role and no Terraform-managed resource
+# grant: it reaches Drive, Docs, and Sheets only as a member of the ONE Data
+# shared drive, a membership granted outside Terraform. Its WIF binding is
+# pinned to refs/heads/main, which covers push and workflow_dispatch runs
+# started from main.
+module "docs_sync" {
+  source = "../../modules/github-deployer"
+
+  project_id     = var.project_id
+  project_number = data.google_project.this.number
+  pool_id        = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  repository     = local.deployer_repository["docs"]
+  repository_id  = var.github_repositories["docs"].id
+
+  account_id    = "dfo-docs-sync"
+  display_name  = "dfo-docs Google Docs sync (CI)"
+  description   = "Reads and writes the ONE Data shared drive for dfo-docs' Google Docs sync; holds no project roles"
+  project_roles = []
+  wif_ref       = "refs/heads/main"
+
+  depends_on = [google_project_service.apis]
+}
+
+# Grants for the people who run Dagster ingestion into this environment's
+# Data Commons. Dagster starts the dcp ingestion workflow as the workflow's
+# own service account, stages import bundles in the artifacts bucket, and
+# reads the Spanner database to check what landed. All four resources
+# belong to the dcp stack, which applies after this one, so their names
+# arrive as variables and the list stays empty until dcp exists.
+locals {
+  ingestion_operators = toset(var.ingestion_operators)
+}
+
+resource "google_service_account_iam_member" "ingestion_operator_workflow_token_creator" {
+  for_each = local.ingestion_operators
+
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${var.ingestion_workflow_service_account_email}"
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = each.value
+
+  lifecycle {
+    precondition {
+      condition     = var.ingestion_workflow_service_account_email != null
+      error_message = "ingestion_operators is set, so ingestion_workflow_service_account_email must be too."
+    }
+  }
+}
+
+resource "google_storage_bucket_iam_member" "ingestion_operator_artifacts_writer" {
+  for_each = local.ingestion_operators
+
+  bucket = var.ingestion_artifacts_bucket_name
+  role   = "roles/storage.objectUser"
+  member = each.value
+
+  lifecycle {
+    precondition {
+      condition     = var.ingestion_artifacts_bucket_name != null
+      error_message = "ingestion_operators is set, so ingestion_artifacts_bucket_name must be too."
+    }
+  }
+}
+
+# Cloud Workflows has no per-workflow IAM resource in the provider, so the
+# invoker grant is project-wide. The ingestion workflow is the only workflow
+# in the project.
+resource "google_project_iam_member" "ingestion_operator_workflow_invoker" {
+  for_each = local.ingestion_operators
+
+  project = var.project_id
+  role    = "roles/workflows.invoker"
+  member  = each.value
+}
+
+resource "google_spanner_database_iam_member" "ingestion_operator_database_reader" {
+  for_each = local.ingestion_operators
+
+  instance = var.ingestion_spanner_instance_id
+  database = var.ingestion_spanner_database_id
+  role     = "roles/spanner.databaseReader"
+  member   = each.value
+
+  lifecycle {
+    precondition {
+      condition     = var.ingestion_spanner_instance_id != null && var.ingestion_spanner_database_id != null
+      error_message = "ingestion_operators is set, so ingestion_spanner_instance_id and ingestion_spanner_database_id must be too."
+    }
+  }
+}

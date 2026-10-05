@@ -1,0 +1,1 @@
+../../stacks/foundation/outputs.tf

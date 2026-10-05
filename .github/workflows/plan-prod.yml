@@ -1,0 +1,272 @@
+# Terraform plan on pull requests in the DevelopmentFinanceObservatory org.
+#
+# plan.yml plans dev in ONEcampaign on `pull_request`, which runs the PR's
+# Terraform. In the new org that would hand any PR the prod planner, which
+# reads prod state, before sync-guard has ruled on it. This file plans prod
+# instead, in this order:
+#   1. `Prod PR verified` runs on `pull_request_target`, so this file and the
+#      scripts come from base main. It runs `scripts/sync-guard.sh`, the same
+#      rules as the sync-guard check, on the event's base and head commits.
+#      It reads git objects and the GitHub API and runs nothing from the PR.
+#   2. Only a PR it passes, an exact sync of a ONEcampaign commit or a
+#      release App image pin, has its head checked out. `Prod detect changed
+#      stacks` maps the PR's files to stacks under `infra/dfo-prod`.
+#   3. `Prod plan (<stack>)` plans each changed stack as the planner, with the
+#      destroy guard and the PR comment plan.yml uses.
+#   4. `Prod changed stacks planned` fails unless every step above passed.
+#
+# detect and plan check out base main to ./base and the PR head to ./head.
+# Every script they run comes from ./base. Only the Terraform under
+# head/infra comes from the PR.
+#
+# The plan job runs the PR's Terraform on pull_request_target, so its OIDC
+# token carries refs/heads/main, the applier's ref. It declares the `plan`
+# environment, and the foundation stack binds the prod planner to `plan` on
+# main and the prod applier to `production` on main, so that token matches
+# the planner only. `Prod PR verified` also declares `plan`, to read the
+# reader key held there; it authenticates to nothing in GCP. No other job may
+# declare `plan`.
+#
+# Every job is prod-only. In ONEcampaign they all skip, and plan.yml plans.
+#
+# Required checks on main in the new org: `terraform fmt check`, from
+# plan.yml, `Prod changed stacks planned`, and `sync-guard`. ONEcampaign
+# keeps `terraform fmt check`, `Detect changed stacks` and `Changed stacks
+# planned`. The two orgs' names differ because a skipped job counts as
+# passed, so a name shared across both files would pass on the skipped copy.
+#
+# A removed stack root under infra/dfo-prod fails detection unless the PR
+# carries `allow-destroy`, as in plan.yml.
+name: Terraform Plan (prod)
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Prod PR verified
+    if: github.repository_owner == 'DevelopmentFinanceObservatory'
+    runs-on: ubuntu-latest
+    # Holds the reader pair, which prod keeps only in environments that admit
+    # main. This event runs on the base ref, so it qualifies.
+    environment: plan
+    steps:
+      # Base main, the default ref for pull_request_target.
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Mint a read token for the source repo
+        id: source-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.READER_APP_PRIVATE_KEY }}
+          owner: ONEcampaign
+          repositories: dfo-infra
+          permission-contents: read
+
+      # Every value comes from the event, so a push while this runs cannot
+      # change which head it judges, and the jobs below plan that same head.
+      - name: Check the PR with sync-guard.sh
+        env:
+          SYNC_TARGET_TOKEN: ${{ github.token }}
+          SYNC_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
+          TARGET: ${{ github.event.repository.name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: scripts/sync-guard.sh "$TARGET" "$BASE_SHA" "$HEAD_SHA" "$AUTHOR"
+
+  detect:
+    name: Prod detect changed stacks
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      env: ${{ steps.env.outputs.env }}
+      stacks: ${{ steps.changed.outputs.stacks }}
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          path: base
+          persist-credentials: false
+
+      # The verified head, and its parent, which verify proved is the base.
+      - name: Checkout head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolve environment
+        id: env
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "env=$(base/scripts/terraform-stacks.sh environment "$OWNER")" >> "$GITHUB_OUTPUT"
+
+      - name: Map changed files to stacks
+        id: changed
+        env:
+          ENV_DIR: ${{ steps.env.outputs.env }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ALLOW_DESTROY: ${{ contains(github.event.pull_request.labels.*.name, 'allow-destroy') }}
+        # base's terraform-stacks.sh reads the head's tree, from its root.
+        working-directory: head
+        run: |
+          allow=""
+          [ "$ALLOW_DESTROY" = "true" ] && allow="--allow-removed"
+          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" -- infra >"$RUNNER_TEMP/files.txt"
+          echo "Changed $(wc -l <"$RUNNER_TEMP/files.txt") file(s) under infra/."
+          stacks="$(../base/scripts/terraform-stacks.sh changed "$ENV_DIR" ${allow:+"$allow"} <"$RUNNER_TEMP/files.txt")"
+          echo "Changed stacks in infra/$ENV_DIR: $stacks"
+          echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
+
+  plan:
+    # Named apart from plan.yml's plan (<stack>), which approve-image-pin.yml
+    # polls by name in ONEcampaign.
+    name: Prod plan (${{ matrix.stack }})
+    needs: detect
+    if: needs.detect.outputs.stacks != '[]' && needs.detect.outputs.stacks != ''
+    runs-on: ubuntu-latest
+    # The planner's WIF binding requires this environment, and the applier's
+    # never matches it. The environment admits only main, the ref
+    # pull_request_target runs carry.
+    environment: plan
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    # Same group as apply-stack.yml, so a plan and an apply for one stack
+    # never race on state.
+    concurrency:
+      group: terraform-${{ needs.detect.outputs.env }}-${{ matrix.stack }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    defaults:
+      run:
+        working-directory: head/infra/${{ needs.detect.outputs.env }}/${{ matrix.stack }}
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          path: base
+          persist-credentials: false
+
+      - name: Checkout head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          persist-credentials: false
+
+      - name: Authenticate to GCP (WIF)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_PLAN_SA }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.7"
+
+      - name: terraform init
+        id: init
+        run: terraform init -input=false -no-color
+
+      - name: terraform validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: terraform plan
+        id: plan
+        run: terraform plan -input=false -lock=false -no-color -out=tfplan
+
+      - name: Guard against destroying protected data
+        id: guard
+        if: steps.plan.outcome == 'success'
+        env:
+          ALLOW_DESTROY: ${{ contains(github.event.pull_request.labels.*.name, 'allow-destroy') }}
+        run: |
+          set +e
+          "$GITHUB_WORKSPACE/base/scripts/check-destroys.sh" tfplan
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            exit 0
+          elif [ "$code" -eq 3 ]; then
+            if [ "$ALLOW_DESTROY" = "true" ]; then
+              echo "::warning::Plan destroys protected resources, but the 'allow-destroy' label is set, so it is allowed."
+              exit 0
+            fi
+            echo "::error::Plan would destroy or replace protected resources and the 'allow-destroy' label is not set. Add the label to override."
+            exit 1
+          else
+            echo "::error::Destroy check failed to run (exit $code)."
+            exit "$code"
+          fi
+
+      - name: Comment plan on PR
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          STACK: ${{ matrix.stack }}
+          INIT_OUTCOME: ${{ steps.init.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+          GUARD_OUTCOME: ${{ steps.guard.outcome }}
+          INIT_STDOUT: ${{ steps.init.outputs.stdout }}
+          INIT_STDERR: ${{ steps.init.outputs.stderr }}
+          VALIDATE_STDOUT: ${{ steps.validate.outputs.stdout }}
+          VALIDATE_STDERR: ${{ steps.validate.outputs.stderr }}
+          PLAN_STDOUT: ${{ steps.plan.outputs.stdout }}
+          PLAN_STDERR: ${{ steps.plan.outputs.stderr }}
+        with:
+          script: |
+            const comment = require(`${process.env.GITHUB_WORKSPACE}/base/.github/scripts/plan-comment.js`);
+            await comment({ github, context, core });
+
+  planned:
+    name: Prod changed stacks planned
+    needs: [verify, detect, plan]
+    if: always() && github.repository_owner == 'DevelopmentFinanceObservatory'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the PR was verified and every changed stack planned
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          DETECT_RESULT: ${{ needs.detect.result }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          ENV_DIR: ${{ needs.detect.outputs.env }}
+          STACKS: ${{ needs.detect.outputs.stacks }}
+        run: |
+          if [ "$VERIFY_RESULT" != "success" ]; then
+            echo "::error::Prod PR verified ended '$VERIFY_RESULT', so nothing was planned. See sync-guard's report."
+            exit 1
+          fi
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::Prod detect changed stacks ended '$DETECT_RESULT', so no stack is known to be planned."
+            exit 1
+          fi
+          if [ "$STACKS" = "[]" ]; then
+            echo "No stack in infra/$ENV_DIR changed."
+            exit 0
+          fi
+          if [ "$PLAN_RESULT" != "success" ]; then
+            echo "::error::Changed stacks in infra/$ENV_DIR: $STACKS. The plan matrix ended '$PLAN_RESULT'; every changed stack needs a successful plan."
+            exit 1
+          fi
+          echo "Planned every changed stack in infra/$ENV_DIR: $STACKS"

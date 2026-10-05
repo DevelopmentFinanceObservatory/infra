@@ -1,0 +1,155 @@
+variable "project_id" {
+  description = "GCP project this environment deploys into."
+  type        = string
+}
+
+variable "region" {
+  description = "Default GCP region for regional resources."
+  type        = string
+}
+
+variable "namespace" {
+  description = "Prefix for this environment's resource names, such as dfo-dev."
+  type        = string
+}
+
+variable "github_owner" {
+  description = "GitHub org/user that owns the repos allowed to assume WIF identities from this pool."
+  type        = string
+}
+
+variable "github_owner_id" {
+  description = "Immutable numeric id of var.github_owner, gating the WIF attribute condition instead of the org name. Org names can be released and re-registered by someone else, but the id cannot — it must be read from the GitHub API (GET /orgs/{org} -> id), not guessed or derived from the name."
+  type        = string
+}
+
+variable "github_repositories" {
+  description = "The GitHub repositories this environment trusts, keyed by role (infra, ai, apis, dcp, website, docs). Each entry carries the repository's name under var.github_owner and its immutable numeric id, read from the GitHub API (GET /repos/{owner}/{repo} -> id) and never guessed: a name can be released and re-registered by someone else, an id cannot. The ids gate the WIF attribute condition alongside github_owner_id, and each binding's repository comes from the same entry. The four image deployers (ai, apis, dcp, website) also carry deploy_environment and deploy_branch, the GitHub Environment and git branch their WIF binding is pinned to, so only a run on that branch under that Environment can mint the identity. Those two are kept in step with scripts/deploy-targets.sh, which writes and audits the matching deployment branch policy; the two disagreeing breaks that repository's next deploy at the auth step rather than widening anything. A repository gains an entry only when it gains a deployer."
+  type = map(object({
+    name               = string
+    id                 = string
+    deploy_environment = optional(string)
+    deploy_branch      = optional(string)
+  }))
+
+  validation {
+    condition     = alltrue([for role in ["infra", "ai", "apis", "dcp", "website", "docs"] : contains(keys(var.github_repositories), role)])
+    error_message = "github_repositories must hold the roles infra, ai, apis, dcp, website, and docs."
+  }
+
+  validation {
+    condition     = alltrue([for role in ["ai", "apis", "dcp", "website"] : try(var.github_repositories[role].deploy_environment != null && var.github_repositories[role].deploy_branch != null, false)])
+    error_message = "The ai, apis, dcp, and website entries of github_repositories must set deploy_environment and deploy_branch."
+  }
+}
+
+variable "planner_wif_ref" {
+  description = "Git ref the dfo-infra-planner WIF binding is pinned to, such as refs/heads/main, or null. With planner_wif_environment also null, the binding is repo-scoped and any workflow in the infra repository can use it. Prod sets refs/heads/main, because plan-prod.yml runs on pull_request_target, whose ref is the base branch. Dev sets null, because its plan.yml runs on pull_request and carries refs/pull/<n>/merge. Every environment sets it, so no new environment inherits the repo-scoped binding by omission."
+  type        = string
+}
+
+variable "planner_wif_environment" {
+  description = "GitHub Environment the dfo-infra-planner WIF binding also requires, or null for none. Prod sets plan, which only plan-prod.yml's plan job declares. That job runs on pull_request_target, so its token carries refs/heads/main, the applier's ref; the environment claim is what keeps it from matching the applier. Dev sets null."
+  type        = string
+}
+
+variable "applier_wif_environment" {
+  description = "GitHub Environment the dfo-infra-applier WIF binding requires on refs/heads/main, or null to bind on the ref alone. Prod sets production, which apply-stack.yml declares for dfo-prod, so a job on main in any other environment, or in none, cannot impersonate the applier. Dev sets null, because dev's apply declares no environment and no dev job that runs PR code carries the main ref."
+  type        = string
+
+  validation {
+    condition     = !(var.applier_wif_environment == var.planner_wif_environment && var.planner_wif_ref == "refs/heads/main")
+    error_message = "The planner and applier WIF bindings would be the same member. Give them different GitHub Environments or the planner a different ref."
+  }
+}
+
+variable "website_deployer_account_id" {
+  description = "Service account id of dfo-website's image deployer, at most 30 characters. The website stack looks the account up by this id."
+  type        = string
+}
+
+variable "website_artifact_repository_id" {
+  description = "Id of the Artifact Registry repository dfo-website's images push to, which only the website deployer may write."
+  type        = string
+}
+
+variable "state_bucket" {
+  description = "Terraform state GCS bucket, granted read (planner) or admin (applier) access."
+  type        = string
+}
+
+variable "pool_id" {
+  description = "Short workload_identity_pool_id for the shared GitHub Actions WIF pool."
+  type        = string
+  default     = "github-pool"
+}
+
+variable "provider_id" {
+  description = "workload_identity_pool_provider_id for the GitHub OIDC provider."
+  type        = string
+  default     = "github"
+}
+
+variable "applier_impersonators" {
+  description = "Principals that may mint access tokens for the dfo-infra-applier service account, as full IAM member strings. Impersonating the applier reaches every role in applier_project_roles, so this list stays short and holds only people who already have project owner."
+  type        = list(string)
+}
+
+variable "ingestion_operators" {
+  description = "Principals that run Dagster ingestion into this environment's Data Commons, as full IAM member strings. Each gets token creator on the ingestion workflow's service account, object read and write on the artifacts bucket, workflows.invoker on the project, and spanner.databaseReader on the Data Commons database. The four resources belong to the dcp stack, so this list stays empty until dcp has applied and the ingestion_* names below are set."
+  type        = list(string)
+}
+
+variable "ingestion_workflow_service_account_email" {
+  description = "Email of the dcp ingestion workflow's service account (dcp output ingestion_workflow_service_account_email). Required once ingestion_operators is non-empty."
+  type        = string
+  default     = null
+}
+
+variable "ingestion_artifacts_bucket_name" {
+  description = "Name of the dcp artifacts bucket (dcp output storage_artifacts_bucket_name). Required once ingestion_operators is non-empty."
+  type        = string
+  default     = null
+}
+
+variable "ingestion_spanner_instance_id" {
+  description = "Spanner instance holding the Data Commons database (dcp output spanner_instance_id). Required once ingestion_operators is non-empty."
+  type        = string
+  default     = null
+}
+
+variable "ingestion_spanner_database_id" {
+  description = "Spanner database the Data Commons services read (dcp output spanner_database_id). Required once ingestion_operators is non-empty."
+  type        = string
+  default     = null
+}
+
+# The four budget variables below have no default and are set in
+# budget.auto.tfvars. Leaving billing_account_id or gemini_key_project_number
+# empty there switches the Gemini budget off, so every other stack and CI's
+# validate and plan keep working before anyone fills them in.
+variable "billing_account_id" {
+  description = "Billing account that pays for the project holding the Gemini key, as the bare id (`XXXXXX-XXXXXX-XXXXXX`). Look it up with `gcloud billing projects describe <gemini_key_project_number>`. Empty disables the Gemini budget."
+  type        = string
+}
+
+variable "gemini_key_project_number" {
+  description = "Number of the project that owns this environment's Gemini API key: the digits after `projects/` in the key name `gcloud services api-keys lookup <key string>` prints. It can belong to another project than project_id when the key came from AI Studio. Empty disables the Gemini budget."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]*$", var.gemini_key_project_number))
+    error_message = "gemini_key_project_number must be the project's number (digits only), or empty."
+  }
+}
+
+variable "gemini_budget_usd" {
+  description = "Monthly Gemini API spend, in USD, that the budget's thresholds are percentages of."
+  type        = number
+  default     = 500
+}
+
+variable "budget_alert_emails" {
+  description = "Addresses that receive the Gemini budget alerts, each through its own Cloud Monitoring email channel. Billing account admins are notified as well, whatever this holds."
+  type        = list(string)
+}

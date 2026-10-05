@@ -1,0 +1,275 @@
+# Terraform plan on pull requests (issue #9).
+#
+# What this does
+# ---------------
+# On any PR touching `infra/**`, this workflow:
+#   1. Runs a global `terraform fmt -check -recursive` gate over the whole
+#      `infra/` tree (blocks the workflow on unformatted files).
+#   2. Detects which of this repo's environment stacks changed, and runs
+#      `terraform init/validate/plan` for each changed stack in a matrix.
+#   3. Upserts one PR comment per stack with the plan output.
+#   4. Fails `Changed stacks planned` unless every changed stack planned.
+#
+# Environment
+# -----------
+# The same file runs in two GitHub orgs, and plans only in ONEcampaign, where
+# `scripts/terraform-stacks.sh` maps the owner to `infra/dfo-dev`. In
+# DevelopmentFinanceObservatory every job but `terraform fmt check` skips,
+# and `.github/workflows/plan-prod.yml` plans `infra/dfo-prod` instead. A
+# `pull_request` run executes the PR's Terraform, so prod plans only after
+# plan-prod.yml has checked the PR is an exact sync or a release App pin.
+#
+# A stack is any directory under `infra/<env>`. It changes when a file
+# changes under `infra/stacks/<stack>/`, `infra/<env>/<stack>/`, or a module
+# under `infra/modules/` that the stack calls. pipelines exists only in
+# `infra/dfo-dev`.
+#
+# dcp
+# ---
+# dcp's non-secret config is committed in `dfo.auto.tfvars`, and its Data
+# Commons API key is sourced from Secret Manager via a data source and merged
+# into `module.stack.auth_config` by an override file — the value is
+# provider-marked `sensitive` and renders as `(sensitive value)` in plan
+# output. The read-only planner holds a resource-scoped `secretAccessor`
+# grant on just that one secret. Note dcp plans always show a diff
+# (timestamp-based triggers in the stack), so the comment never says "No
+# changes" for dcp.
+#
+# Read-only planner / -lock=false
+# --------------------------------
+# Auth uses the `dfo-infra-planner` service account (WIF), which only holds
+# `roles/viewer` + `storage.objectViewer` on the state bucket. It cannot
+# write the GCS lock object, so every plan below runs with `-lock=false`.
+#
+# Shared concurrency group
+# -------------------------
+# Each matrix job uses `concurrency: terraform-<env>-<stack>`. apply-stack.yml
+# uses the same group name, so a plan and an apply for the same stack can
+# never run concurrently and race on state.
+#
+# Destroy guard (#18)
+# -------------------
+# After planning, `scripts/check-destroys.sh` fails the job if the plan would
+# delete or replace a data-bearing resource (Spanner, GCS bucket, BigQuery
+# dataset or reservation, Secret Manager secret) or a consumer-psc-network resource (VPC
+# network, subnet, reserved address, DNS managed zone, DNS record set).
+# Ephemeral churn (e.g. dcp's per-run null_resource replace) is ignored. Add
+# the `allow-destroy` PR label to override for an intentional teardown. Mark
+# this job a required status check so a red guard blocks the merge.
+#
+# Removed stacks
+# --------------
+# A PR that deletes or renames a directory under `infra/dfo-dev` fails
+# `Detect changed stacks`, since its resources would stay in state with
+# nothing to manage them. Destroy them first, then add the `allow-destroy`
+# label, which lets detection pass with a warning.
+#
+# Required plan check (`Changed stacks planned`)
+# ----------------------------------------------
+# A plan matrix job only exists for a changed stack, so it cannot be a
+# required check. `Changed stacks planned` always runs and fails unless
+# detection succeeded and every changed stack planned and cleared the destroy
+# guard. A PR that changes no stack in this environment passes it. Make it a
+# required status check on main.
+name: Terraform Plan
+
+# `terraform fmt check`, `Detect changed stacks`, and `Changed stacks planned`
+# are required status checks on main, and a required check that never runs leaves a pull request
+# unmergeable indefinitely rather than failing it. A `paths` filter here is
+# therefore a deadlock for every pull request it excludes — docs, scripts,
+# justfile — so there is none. A pull request that changes no stack still gets
+# every required check and an empty plan matrix, for a few seconds of runner
+# time.
+#
+# `labeled` and `unlabeled` are in the trigger types because the destroy guard
+# below reads `allow-destroy` from the event payload, and the default types
+# (opened, synchronize, reopened) fire on none of them. Without these, adding
+# the label starts no run and re-running the blocked one replays the payload
+# that predates it, so the documented override is only reachable by pushing an
+# unrelated commit. `unlabeled` is here so removing the label re-blocks rather
+# than leaving the last green run standing.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  fmt:
+    name: terraform fmt check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.7"
+
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive infra
+
+  detect:
+    name: Detect changed stacks
+    # Runs the PR's Terraform with the planner, so dev-only. plan-prod.yml
+    # plans the new org.
+    if: github.repository_owner == 'ONEcampaign'
+    runs-on: ubuntu-latest
+    outputs:
+      env: ${{ steps.env.outputs.env }}
+      stacks: ${{ steps.changed.outputs.stacks }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve environment
+        id: env
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "env=$(scripts/terraform-stacks.sh environment "$OWNER")" >> "$GITHUB_OUTPUT"
+
+      - name: List changed infra files
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          list-files: json
+          filters: |
+            infra:
+              - 'infra/**'
+
+      - name: Map changed files to stacks
+        id: changed
+        env:
+          ENV_DIR: ${{ steps.env.outputs.env }}
+          FILES: ${{ steps.filter.outputs.infra_files }}
+          ALLOW_DESTROY: ${{ contains(github.event.pull_request.labels.*.name, 'allow-destroy') }}
+        run: |
+          allow=""
+          [ "$ALLOW_DESTROY" = "true" ] && allow="--allow-removed"
+          stacks="$(jq -r '.[]' <<<"${FILES:-[]}" | scripts/terraform-stacks.sh changed "$ENV_DIR" ${allow:+"$allow"})"
+          echo "Changed stacks in infra/$ENV_DIR: $stacks"
+          echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
+
+  plan:
+    name: plan (${{ matrix.stack }})
+    needs: detect
+    if: needs.detect.outputs.stacks != '[]' && needs.detect.outputs.stacks != ''
+    runs-on: ubuntu-latest
+    concurrency:
+      group: terraform-${{ needs.detect.outputs.env }}-${{ matrix.stack }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    defaults:
+      run:
+        working-directory: infra/${{ needs.detect.outputs.env }}/${{ matrix.stack }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (WIF)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_PLAN_SA }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.7"
+
+      # A stack whose state prefix does not exist yet cannot be planned here:
+      # init creates that state, creating it takes a lock, and the read-only
+      # planner has no storage.objects.create on the bucket. -lock=false does
+      # not avoid it — the write is the state creation itself, not the lock.
+      # A new stack therefore needs its state bootstrapped once by an identity
+      # that can write, after which every plan is an ordinary read. See the
+      # stack README for the bootstrap step.
+      - name: terraform init
+        id: init
+        run: terraform init -input=false -no-color
+
+      - name: terraform validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: terraform plan
+        id: plan
+        run: terraform plan -input=false -lock=false -no-color -out=tfplan
+
+      - name: Guard against destroying protected data
+        id: guard
+        if: steps.plan.outcome == 'success'
+        env:
+          ALLOW_DESTROY: ${{ contains(github.event.pull_request.labels.*.name, 'allow-destroy') }}
+        run: |
+          set +e
+          "$GITHUB_WORKSPACE/scripts/check-destroys.sh" tfplan
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            exit 0
+          elif [ "$code" -eq 3 ]; then
+            if [ "$ALLOW_DESTROY" = "true" ]; then
+              echo "::warning::Plan destroys protected resources, but the 'allow-destroy' label is set — allowing."
+              exit 0
+            fi
+            echo "::error::Plan would destroy or replace protected resources and the 'allow-destroy' label is not set. Add the label to override."
+            exit 1
+          else
+            echo "::error::Destroy check failed to run (exit $code)."
+            exit "$code"
+          fi
+
+      - name: Comment plan on PR
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          STACK: ${{ matrix.stack }}
+          INIT_OUTCOME: ${{ steps.init.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+          GUARD_OUTCOME: ${{ steps.guard.outcome }}
+          INIT_STDOUT: ${{ steps.init.outputs.stdout }}
+          INIT_STDERR: ${{ steps.init.outputs.stderr }}
+          VALIDATE_STDOUT: ${{ steps.validate.outputs.stdout }}
+          VALIDATE_STDERR: ${{ steps.validate.outputs.stderr }}
+          PLAN_STDOUT: ${{ steps.plan.outputs.stdout }}
+          PLAN_STDERR: ${{ steps.plan.outputs.stderr }}
+        with:
+          script: |
+            const comment = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/plan-comment.js`);
+            await comment({ github, context, core });
+
+  planned:
+    name: Changed stacks planned
+    needs: [detect, plan]
+    if: always() && github.repository_owner == 'ONEcampaign'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check every changed stack planned
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          ENV_DIR: ${{ needs.detect.outputs.env }}
+          STACKS: ${{ needs.detect.outputs.stacks }}
+        run: |
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::Detect changed stacks ended '$DETECT_RESULT', so no stack is known to be planned."
+            exit 1
+          fi
+          if [ "$STACKS" = "[]" ]; then
+            echo "No stack in infra/$ENV_DIR changed."
+            exit 0
+          fi
+          if [ "$PLAN_RESULT" != "success" ]; then
+            echo "::error::Changed stacks in infra/$ENV_DIR: $STACKS. The plan matrix ended '$PLAN_RESULT'; every changed stack needs a successful plan."
+            exit 1
+          fi
+          echo "Planned every changed stack in infra/$ENV_DIR: $STACKS"

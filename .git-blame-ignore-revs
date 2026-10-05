@@ -1,0 +1,14 @@
+# Commits that only reformat, never change meaning. `git blame` skips these,
+# so prose history points at whoever wrote the words rather than at the
+# reformat.
+#
+# Enable locally (once per clone):
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# GitHub reads this file automatically, no configuration needed.
+#
+# One SHA per line, full 40 characters, with a comment above each saying what
+# it did.
+
+# style: reformat markdown with mdformat --wrap no
+c5e7e1ed119b42f173beed4db6879a9476ac4301

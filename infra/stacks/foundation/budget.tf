@@ -1,0 +1,79 @@
+# Gemini spend alert. A billing budget notifies; it does not cap spend or stop
+# any request. Every resource here is created only once billing_account_id and
+# gemini_key_project_number are set (budget.auto.tfvars).
+locals {
+  gemini_budget_enabled = var.billing_account_id != "" && var.gemini_key_project_number != ""
+
+  # Billing catalog id of the "Gemini API" service, which Google's billing
+  # catalog lists for generativelanguage.googleapis.com. Found with
+  # GET https://cloudbilling.googleapis.com/v1/services.
+  gemini_billing_service = "services/AEFD-7695-64FA"
+}
+
+# A budget calls the Cloud Billing Budget API against the billing project set
+# on the provider, and its notification channels use Cloud Monitoring.
+resource "google_project_service" "budget_apis" {
+  for_each = local.gemini_budget_enabled ? toset([
+    "billingbudgets.googleapis.com",
+    "monitoring.googleapis.com",
+  ]) : toset([])
+
+  service            = each.key
+  disable_on_destroy = false
+}
+
+# An email channel carries one address, so each recipient gets a channel.
+resource "google_monitoring_notification_channel" "budget_email" {
+  for_each = local.gemini_budget_enabled ? toset(var.budget_alert_emails) : toset([])
+
+  display_name = "Gemini budget alerts: ${each.key}"
+  type         = "email"
+  labels = {
+    email_address = each.key
+  }
+
+  depends_on = [google_project_service.budget_apis]
+}
+
+resource "google_billing_budget" "gemini" {
+  count = local.gemini_budget_enabled ? 1 : 0
+
+  billing_account = var.billing_account_id
+  display_name    = "Gemini API spend (project ${var.gemini_key_project_number})"
+
+  budget_filter {
+    # The filter takes the project number, so the stack reads no other project.
+    projects = ["projects/${var.gemini_key_project_number}"]
+    services = [local.gemini_billing_service]
+  }
+
+  amount {
+    specified_amount {
+      currency_code = "USD"
+      units         = tostring(var.gemini_budget_usd)
+    }
+  }
+
+  threshold_rules {
+    threshold_percent = 0.5
+  }
+  threshold_rules {
+    threshold_percent = 0.9
+  }
+  threshold_rules {
+    threshold_percent = 1.0
+  }
+  threshold_rules {
+    threshold_percent = 1.0
+    spend_basis       = "FORECASTED_SPEND"
+  }
+
+  # Billing account admins keep their default emails; the channels add the
+  # named recipients.
+  all_updates_rule {
+    monitoring_notification_channels = [for c in google_monitoring_notification_channel.budget_email : c.id]
+    disable_default_iam_recipients   = false
+  }
+
+  depends_on = [google_project_service.budget_apis]
+}
