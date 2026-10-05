@@ -635,6 +635,37 @@ resource "google_project_iam_member" "ingestion_operator_workflow_invoker" {
   member  = each.value
 }
 
+# Read access to follow a run: the workflow and its executions, the bucket
+# list the console needs, the logs the workflow and its prep job write, the
+# prep job's executions, the Dataflow jobs the workflow launches, the
+# project's metrics, and the Spanner instance and database in the console.
+# serviceUsageConsumer lets an operator's gcloud and client libraries bill
+# their API calls to this project. The writes stay as above, on the
+# artifacts bucket's objects and on starting the workflow.
+locals {
+  ingestion_operator_viewer_roles = [
+    "roles/workflows.viewer",
+    "roles/storage.bucketViewer",
+    "roles/logging.viewer",
+    "roles/run.viewer",
+    "roles/spanner.viewer",
+    "roles/dataflow.viewer",
+    "roles/monitoring.viewer",
+    "roles/serviceusage.serviceUsageConsumer",
+  ]
+}
+
+resource "google_project_iam_member" "ingestion_operator_viewer" {
+  for_each = {
+    for pair in setproduct(local.ingestion_operators, local.ingestion_operator_viewer_roles) :
+    "${pair[0]} ${pair[1]}" => { member = pair[0], role = pair[1] }
+  }
+
+  project = var.project_id
+  role    = each.value.role
+  member  = each.value.member
+}
+
 resource "google_spanner_database_iam_member" "ingestion_operator_database_reader" {
   for_each = local.ingestion_operators
 
