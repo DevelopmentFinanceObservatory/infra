@@ -30,3 +30,7 @@ platform_dns_name                   = "b588fda303da.1b8f7kohjv63q.europe-west1.s
 
 # Terraform refuses to destroy or replace this stack's Cloud Run services and Jobs.
 stateless_deletion_protection = true
+
+# One warm datasets worker, so the first download after an idle spell starts
+# at once. cpu_idle bills it at the idle rate between operations.
+datasets_worker_min_instances = 1
