@@ -3,7 +3,9 @@
 # GitHub. The stub answers from files under $STUB: head/<source> holds a
 # source branch's head, main/<target> and released/<target> hold a target's
 # main and the commit its newest Synced-from trailer names, pr/<target>
-# holds an open sync PR's commit, and parent/<commit> that commit's parent.
+# holds the commit of the open PR from release/<target>, and parent/<commit> and
+# synced/<commit> that commit's parent and the source commit its trailer
+# names.
 # A missing head file fails the call, as an unreadable repo would. A source
 # read with anything but the source token, or a target read with anything
 # but the target token, fails too.
@@ -38,11 +40,15 @@ case "$1 $2" in
     ;;
 "api repos/DevelopmentFinanceObservatory/"*"/commits/"*)
     [ "$GH_TOKEN" = target-token ] || exit 3
+    t="${2#repos/DevelopmentFinanceObservatory/}"
+    t="${t%%/*}"
     oid="${2##*/}"
-    printf '{"parents":[{"sha":"%s"}]}\n' "$(cat "$STUB/parent/$oid")"
+    jq -n --arg parent "$(cat "$STUB/parent/$oid")" --arg synced "$(cat "$STUB/synced/$oid")" --arg src "$(cat "$STUB/source/$t")" \
+        '{parents: [{sha: $parent}], commit: {message: ("Sync ONEcampaign/" + $src + "\n\nSynced-from: ONEcampaign/" + $src + "@" + $synced)}}' 
     ;;
 "pr list")
     [ "$GH_TOKEN" = target-token ] || exit 3
+    [ "$6" = "release/${4#DevelopmentFinanceObservatory/}" ] || exit 4
     t="${4#DevelopmentFinanceObservatory/}"
     if [ -f "$STUB/pr/$t" ]; then printf '[{"headRefOid":"%s"}]\n' "$(cat "$STUB/pr/$t")"; else echo '[]'; fi
     ;;
@@ -62,7 +68,7 @@ sha() { printf "%040d" "$1"; }
 # reset makes every target current: each head is the released commit.
 reset() {
     rm -rf "$STUB"
-    mkdir -p "$STUB/head" "$STUB/main" "$STUB/released" "$STUB/source" "$STUB/pr" "$STUB/parent"
+    mkdir -p "$STUB/head" "$STUB/main" "$STUB/released" "$STUB/source" "$STUB/pr" "$STUB/parent" "$STUB/synced"
     local n=0 target src
     # shellcheck source=scripts/sync-lib.sh
     while read -r target src _; do
@@ -110,21 +116,33 @@ run
 check "new head exits 0" "$(is "$status" 0)"
 check "new head lists apis alone" "$(is "$out" apis)"
 
-# 3. An open PR for the head on the current main is left alone.
+# 3. The sync PR already holding the head on the current main is left alone.
 reset
 sha 92 >"$STUB/head/dfo-ai"
 sha 93 >"$STUB/pr/ai"
 cp "$STUB/main/ai" "$STUB/parent/$(sha 93)"
+sha 92 >"$STUB/synced/$(sha 93)"
 run
 check "current PR lists nothing" "$(is "$out" "")"
 
-# 4. An open PR on an older main is pending, so the run rebuilds it.
+# 4. A sync PR on an older main is pending, so the run rebuilds it.
 reset
 sha 94 >"$STUB/head/dfo-website"
 sha 95 >"$STUB/pr/website"
 sha 96 >"$STUB/parent/$(sha 95)"
+sha 94 >"$STUB/synced/$(sha 95)"
 run
 check "stale PR lists website" "$(is "$out" website)"
+
+# 4b. A sync PR for an older source commit is pending, so the run moves it to
+# the head.
+reset
+sha 90 >"$STUB/head/dfo-apis"
+sha 89 >"$STUB/pr/apis"
+cp "$STUB/main/apis" "$STUB/parent/$(sha 89)"
+sha 88 >"$STUB/synced/$(sha 89)"
+run
+check "older-commit PR lists apis" "$(is "$out" apis)"
 
 # 5. Several pending repos are each listed once, in table order.
 reset

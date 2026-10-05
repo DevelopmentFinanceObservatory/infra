@@ -214,6 +214,7 @@ api\ repos/DevelopmentFinanceObservatory/*/compare/*)
 api\ repos/*/compare/*) echo "${STUB_BEHIND_BY:-0}" ;;
 api\ repos/*/commits/*) echo "$STUB_SHA" ;;
 "pr create"*) echo 7 >"$state/pr"; echo "$*" >>"$state/created" ;;
+"pr edit"*) echo "$*" >>"$state/edited" ;;
 "pr list"*--head*) cat "$state/pr" 2>/dev/null || true ;;
 "pr list"*) printf '%s\n' ${STUB_OTHERS:-} ;;
 "pr close"*) echo "$3" >>"$state/closed" ;;
@@ -373,11 +374,14 @@ unset GITHUB_SERVER_URL GITHUB_RUN_ID
 echo "sync-release.sh"
 export SYNC_SOURCE_TOKEN="" SYNC_TARGET_TOKEN="" STUB_SHA="$new_sha"
 release() { "$SCRIPT_DIR/sync-release.sh" infra 2>/dev/null; }
-branch_head() { git -C "$tgt" rev-parse --verify --quiet "refs/heads/sync/infra/$new_sha" || true; }
+branch_head() { git -C "$tgt" rev-parse --verify --quiet refs/heads/release/infra || true; }
 
+# A per-commit branch from an earlier merged PR stays on the target, and the
+# repo's one sync branch must not collide with it.
+git -C "$tgt" update-ref "refs/heads/sync/infra/$new_sha" "$base"
 STUB_OTHERS="3 4" release
 first="$(branch_head)"
-check "the release pushes sync/<repo>/<sha>" test -n "$first"
+check "the release pushes release/<repo> beside a per-commit sync branch" test -n "$first"
 check "the release commit holds the tree the guard expects" \
     same "$(git -C "$tgt" rev-parse "$first^{tree}")" "$good_tree"
 check "the release commit's parent is main" \
@@ -387,14 +391,15 @@ check "the release commit carries the Synced-from trailer" \
     "ONEcampaign/dfo-infra@$new_sha"
 check "the release passes the guard" guard "$first"
 check "the release opens one PR" same "$(wc -l <"$ROOT/gh/created" | tr -d ' ')" 1
-check "the release closes the other open sync PRs" same "$(tr '\n' ' ' <"$ROOT/gh/closed")" "3 4 "
+check "the release closes the per-commit sync PRs" same "$(tr '\n' ' ' <"$ROOT/gh/closed")" "3 4 "
 
 release
 check "a re-run keeps the branch's commit" same "$(branch_head)" "$first"
-check "a re-run reuses the open PR" same "$(wc -l <"$ROOT/gh/created" | tr -d ' ')" 1
+check "a re-run opens no second PR" same "$(wc -l <"$ROOT/gh/created" | tr -d ' ')" 1
+check "a re-run retitles the open PR" grep -qF "pr edit 7 --repo DevelopmentFinanceObservatory/infra --title Sync dfo-infra@${new_sha:0:12}" "$ROOT/gh/edited"
 
 git -C "$tgt" update-ref refs/heads/main "$first"
-git -C "$tgt" update-ref -d "refs/heads/sync/infra/$new_sha"
+git -C "$tgt" update-ref -d refs/heads/release/infra
 release
 check "a commit main already holds releases nothing" same "$(branch_head)" ""
 
@@ -409,27 +414,44 @@ git -C "$tgt" update-ref refs/heads/main "$base"
 floor_sha="$(mk_commit "$src" "$(mk_tree "$src" "100644|$GUARD_YML|guard v2" "100644|README.md|readme v2" "100755|scripts/run.sh|#!/bin/sh" "160000|mixer|$GITLINK" "100644|$PIN|source pin")" "guard v2" "$new_sha")"
 git -C "$src" update-ref refs/heads/main "$floor_sha"
 release_sha() { STUB_SHA="$1" "$SCRIPT_DIR/sync-release.sh" infra; }
-sync_branch() { git -C "$tgt" rev-parse --verify --quiet "refs/heads/sync/infra/$1" || true; }
-
 release_err="$(release_sha "$new_sha" 2>&1 >/dev/null)" && release_status=0 || release_status=$?
 check "a release of a commit older than the floor is refused" test "$release_status" -ne 0
 check "the refusal names the floor commit" grep -qF "older than $floor_sha" <<<"$release_err"
-check "a refused release pushes no branch" same "$(sync_branch "$new_sha")" ""
+check "a refused release pushes no branch" same "$(branch_head)" ""
 guard_err="$("$SCRIPT_DIR/sync-guard.sh" infra "$base" "$head" someone 2>&1)" && guard_status=0 || guard_status=$?
 check "a sync PR for a commit older than the floor fails the guard" test "$guard_status" -ne 0
 check "the guard's refusal names the floor commit" grep -qF "older than $floor_sha" <<<"$guard_err"
 
 release_sha "$floor_sha" 2>/dev/null
-check "the floor commit releases" test -n "$(sync_branch "$floor_sha")"
-check "the floor commit's sync PR passes the guard" guard "$(sync_branch "$floor_sha")"
+floor_commit="$(branch_head)"
+check "the floor commit releases" test -n "$floor_commit"
+check "the floor commit's sync PR passes the guard" guard "$floor_commit"
 
 desc_sha="$(mk_commit "$src" "$(mk_tree "$src" "100644|$GUARD_YML|guard v2" "100644|README.md|readme v3" "100755|scripts/run.sh|#!/bin/sh" "160000|mixer|$GITLINK" "100644|$PIN|source pin")" "v3" "$floor_sha")"
 git -C "$src" update-ref refs/heads/main "$desc_sha"
+edits_before="$(wc -l <"$ROOT/gh/edited" | tr -d ' ')"
 release_sha "$desc_sha" 2>/dev/null
-check "a descendant of the floor releases" test -n "$(sync_branch "$desc_sha")"
-check "a descendant's sync PR passes the guard" guard "$(sync_branch "$desc_sha")"
-check "the floor commit still passes the guard once the branch has moved on" \
-    guard "$(sync_branch "$floor_sha")"
+desc_commit="$(branch_head)"
+check "a newer source commit moves release/<repo> to a new commit" test "$desc_commit" != "$floor_commit"
+check "the moved branch carries the newer trailer" \
+    same "$(git -C "$tgt" log -1 --format='%(trailers:key=Synced-from,valueonly)' "$desc_commit" | sed '/^$/d')" \
+    "ONEcampaign/dfo-infra@$desc_sha"
+check "a newer source commit updates the open PR in place" \
+    same "$(wc -l <"$ROOT/gh/created" | tr -d ' ') $(($(wc -l <"$ROOT/gh/edited" | tr -d ' ') - edits_before))" "1 1"
+check "a descendant's sync PR passes the guard" guard "$desc_commit"
+check "the floor commit still passes the guard once the branch has moved on" guard "$floor_commit"
+
+# A source commit that changes only the excluded pin builds the same tree,
+# and the branch still moves to a commit whose trailer names it.
+pin_only_sha="$(mk_commit "$src" "$(mk_tree "$src" "100644|$GUARD_YML|guard v2" "100644|README.md|readme v3" "100755|scripts/run.sh|#!/bin/sh" "160000|mixer|$GITLINK" "100644|$PIN|source pin v2")" "pin only" "$desc_sha")"
+git -C "$src" update-ref refs/heads/main "$pin_only_sha"
+release_sha "$pin_only_sha" 2>/dev/null
+pin_only_commit="$(branch_head)"
+check "a same-tree source commit keeps the tree" \
+    same "$(git -C "$tgt" rev-parse "$pin_only_commit^{tree}")" "$(git -C "$tgt" rev-parse "$desc_commit^{tree}")"
+check "a same-tree source commit gets its own trailer" \
+    same "$(git -C "$tgt" log -1 --format='%(trailers:key=Synced-from,valueonly)' "$pin_only_commit" | sed '/^$/d')" \
+    "ONEcampaign/dfo-infra@$pin_only_sha"
 
 # sync_check_floor on its own. The newest commit touches only an
 # infra-only control path, so it moves infra's floor and not docs'.

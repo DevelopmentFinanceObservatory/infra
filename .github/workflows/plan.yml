@@ -88,9 +88,15 @@ name: Terraform Plan
 # that predates it, so the documented override is only reachable by pushing an
 # unrelated commit. `unlabeled` is here so removing the label re-blocks rather
 # than leaving the last green run standing.
+#
+# No job runs while the pull request is a draft. `ready_for_review` is in the
+# types so that marking it ready starts the run: without it the skipped jobs
+# would stand as passing required checks on the commit and nothing would have
+# tested it. `draft != true` is false only for a draft pull request, so every
+# job still runs on events that carry no pull request payload.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
 
 permissions:
   contents: read
@@ -100,6 +106,7 @@ permissions:
 jobs:
   fmt:
     name: terraform fmt check
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -117,7 +124,7 @@ jobs:
     name: Detect changed stacks
     # Runs the PR's Terraform with the planner, so dev-only. plan-prod.yml
     # plans the new org.
-    if: github.repository_owner == 'ONEcampaign'
+    if: github.repository_owner == 'ONEcampaign' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     outputs:
       env: ${{ steps.env.outputs.env }}
@@ -250,7 +257,7 @@ jobs:
   planned:
     name: Changed stacks planned
     needs: [detect, plan]
-    if: always() && github.repository_owner == 'ONEcampaign'
+    if: always() && github.repository_owner == 'ONEcampaign' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - name: Check every changed stack planned

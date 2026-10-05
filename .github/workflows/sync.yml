@@ -1,13 +1,14 @@
 # Release a ONEcampaign commit into its DevelopmentFinanceObservatory repo.
 # scripts/sync-release.sh builds the tree with scripts/sync-tree.sh, commits
 # it onto the target's main with a Synced-from trailer, and opens the sync
-# PR from sync/<repo>/<sha>. Merging that PR is the release. sync-guard
-# checks the PR, and a release team approval merges it.
+# PR from release/<repo>, which a newer release updates in place. Merging that
+# PR is the release. sync-guard checks the PR, and a release team approval
+# merges it.
 #
 # Every 4 hours, and on a dispatch with repo "all", the pending job runs
 # scripts/sync-pending.sh and syncs each repo whose source head is
-# unreleased and has no open sync PR on the current main. A dispatch naming
-# one repo syncs that repo, at sha when given.
+# unreleased and not already in its sync PR on the current main. A dispatch
+# naming one repo syncs that repo, at sha when given.
 name: Sync from ONEcampaign
 
 on:

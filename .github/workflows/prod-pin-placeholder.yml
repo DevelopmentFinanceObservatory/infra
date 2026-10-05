@@ -3,12 +3,14 @@
 # build writes the pin, so an edit here never reaches prod. Adding the file
 # passes, since that seeds the placeholder the first snapshot copies.
 #
-# Runs on every PR, with no paths filter, so it can be a required check.
+# Runs on every ready PR, with no paths filter, so it can be a required check.
+# It skips while the PR is a draft and runs again on `ready_for_review`.
 name: Prod pin placeholder
 
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -18,7 +20,7 @@ jobs:
   check:
     name: Prod pin placeholder unchanged
     # ONEcampaign-only. In the new org the sync and sync-guard own the file.
-    if: github.repository_owner == 'ONEcampaign'
+    if: github.repository_owner == 'ONEcampaign' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
