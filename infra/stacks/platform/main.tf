@@ -54,10 +54,11 @@ resource "google_sql_database_instance" "platform" {
   deletion_protection = true
 
   settings {
-    # db-custom-1-3840 is one dedicated vCPU and 3.75 GB, a dedicated-core
-    # tier carrying Google's standard SLA. ENTERPRISE keeps this stack on
-    # the lighter edition. Production is the same shape stepped up, with
-    # availability_type = REGIONAL and a larger tier.
+    # A dedicated-core tier carrying Google's standard SLA: db-custom-1-3840
+    # (one vCPU, 3.75 GB) in dev and db-custom-2-7680 (two vCPUs, 7.5 GB) in
+    # prod. ENTERPRISE keeps this stack on the lighter edition. Both are
+    # zonal, the default availability_type, which has no standby in a second
+    # zone.
     tier    = var.tier
     edition = "ENTERPRISE"
 
