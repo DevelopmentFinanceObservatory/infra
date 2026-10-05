@@ -20,13 +20,13 @@ dc_spanner_database_id            = "dfo-prod-dc-db"
 datasets_migrator_db_user         = "dfo-prod-datasets-migrator"
 presentation_migrator_db_user     = "dfo-prod-presentation-migrator"
 
-# search_graph_base                   = "" # from dcp output datacommons_service_url after apply
-# datasets_graph_base_url             = "" # from dcp output datacommons_service_url after apply, plus /core/api
-# datasets_sdmx_base_url              = "" # from dcp output datacommons_service_url after apply, plus /core/api
-# graph_dcp_base_url                  = "" # from dcp output datacommons_service_url after apply, plus /core/api
-# dfo_public_site_url                 = "" # the website stack's website_url once it is set
-# platform_psc_service_attachment_uri = "" # from platform output psc_service_attachment_uri after apply
-# platform_dns_name                   = "" # from platform output dns_name after apply
+search_graph_base                   = "https://dfo-prod-dc-datacommons-service-533754688761.europe-west1.run.app"                                                     # dcp service, deterministic Cloud Run URL
+datasets_graph_base_url             = "https://dfo-prod-dc-datacommons-service-533754688761.europe-west1.run.app/core/api"                                            # dcp service plus /core/api
+datasets_sdmx_base_url              = "https://dfo-prod-dc-datacommons-service-533754688761.europe-west1.run.app/core/api"                                            # dcp service plus /core/api
+graph_dcp_base_url                  = "https://dfo-prod-dc-datacommons-service-533754688761.europe-west1.run.app/core/api"                                            # dcp service plus /core/api
+dfo_public_site_url                 = "https://dfo-prod-website-533754688761.europe-west1.run.app"                                                                    # website service, deterministic Cloud Run URL
+platform_psc_service_attachment_uri = "projects/ic74f9d0cb948e2dap-tp/regions/europe-west1/serviceAttachments/a-b588fda303da-psc-service-attachment-18d4894ca2dc23a8" # platform output psc_service_attachment_uri
+platform_dns_name                   = "b588fda303da.1b8f7kohjv63q.europe-west1.sql.goog"                                                                              # platform output dns_name
 
 # Terraform refuses to destroy or replace this stack's Cloud Run services and Jobs.
 stateless_deletion_protection = true
