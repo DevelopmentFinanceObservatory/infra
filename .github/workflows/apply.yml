@@ -1,0 +1,211 @@
+# Terraform apply on merge to main (issue #10).
+#
+# What this does
+# ---------------
+# On every push to `main` that touches `infra/**`, this workflow:
+#   1. Detects which of this repo's environment stacks changed, with the same
+#      `scripts/terraform-stacks.sh` rules plan.yml uses.
+#   2. Applies `foundation` first if it's among the changed stacks (see
+#      "Foundation-first ordering" below), then every other changed stack in
+#      a matrix — each call delegates the actual init/validate/plan/apply to
+#      apply-stack.yml, a reusable workflow, so the two call sites share one
+#      body instead of duplicating it.
+#   3. Each apply-stack.yml call upserts its own apply-result comment on the
+#      PR associated with the merged commit (if one can be found).
+#
+# Environment
+# -----------
+# The same file runs in two GitHub orgs. `scripts/terraform-stacks.sh` maps
+# the repository owner to its environment: ONEcampaign applies
+# `infra/dfo-dev`, DevelopmentFinanceObservatory applies `infra/dfo-prod`, and
+# any other owner fails `Detect changed stacks` before anything applies. In
+# the new org each apply job runs in the `production` GitHub environment.
+#
+# dcp
+# ---
+# `dcp`'s non-secret config is committed in `dfo.auto.tfvars`, and its Data
+# Commons API key is sourced from Secret Manager via a data source and merged
+# into `module.stack.auth_config` by an override file — the value is
+# provider-marked `sensitive` and renders as `(sensitive value)` in apply
+# output. The applier needs no new grant — it already holds project-wide
+# `roles/secretmanager.admin`. Note dcp applies always show a diff
+# (timestamp-based triggers in the stack), so the comment never says "No
+# changes" for dcp — that's expected, not drift.
+#
+# No standalone fmt job
+# ----------------------
+# Formatting is already enforced pre-merge: the plan workflow's `fmt` job is
+# a required status check for merging to `main`, so anything landing here is
+# already `fmt`-clean. apply.yml stays lean and skips re-checking it.
+#
+# Privileged applier / with locking
+# -----------------------------------
+# Auth uses the `dfo-infra-applier` service account (WIF), which (unlike the
+# planner) can write the GCS state lock object, so every apply below runs
+# with normal locking — no `-lock=false`.
+#
+# Merge gate
+# -----------
+# GitHub Environment required-reviewer rules aren't available on this repo's
+# plan, so the gate lives in branch protection instead: `main` requires at
+# least one PR approval and blocks direct pushes. In the new org that approval
+# comes from the `release` team. The applier SA's WIF trust
+# is scoped to the `refs/heads/main` OIDC subject (see the github-deployer
+# module's `wif_ref`), so only a workflow actually running on `main` — i.e.
+# reviewed, merged code — can impersonate it. There is no reviewer pause
+# inside this workflow; the review already happened on the PR.
+#
+# Foundation-first ordering
+# --------------------------
+# foundation.tf's applier_project_roles grants the applier SA itself whatever
+# project-level IAM other stacks' resources need. A stack applied in the same
+# run that needs a role foundation just added — e.g. apis's
+# google_cloud_tasks_queue needing roles/cloudtasks.queueAdmin — has to run
+# after foundation's apply lands the grant, not in parallel with it. `detect`
+# below splits `foundation` out of the changed-stacks list into its own
+# output; `apply-foundation` applies it alone, and `apply` (the matrix over
+# every other changed stack) `needs` that job and runs only once it has
+# either succeeded or been skipped (skipped when foundation didn't change).
+#
+# Shared concurrency group
+# -------------------------
+# Each apply-stack.yml call uses `concurrency: terraform-<env>-<stack>`, the
+# same group name plan.yml uses, so a plan and an apply for the same stack
+# can never run concurrently and race on state. `cancel-in-progress: false`
+# so a queued apply is never cancelled mid-run.
+#
+# Destroy guard + saved-plan apply (#18)
+# --------------------------------------
+# apply-stack.yml runs `plan -out=tfplan` -> `scripts/check-destroys.sh` ->
+# `apply tfplan`, so the plan that clears the destroy guard is exactly what
+# gets applied (not a fresh re-plan). The guard blocks a delete/replace of a
+# data-bearing resource (Spanner, GCS bucket, BigQuery reservation, secret)
+# unless the merged PR carries the `allow-destroy` label — a backstop to
+# plan.yml's pre-merge check, since drift can surface a destroy at merge time.
+# A dispatched run resolves that label from the PR associated with the head of
+# main, which is the same commit and the same label the push-triggered apply
+# saw, so dispatching cannot clear a destroy the merge could not.
+name: Terraform Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+  # Re-apply one stack from main without a commit that touches it. Needed
+  # when a stack has to be applied but nothing in it changed: confirming a
+  # WIF binding still authenticates, recovering from drift, or re-running an
+  # apply that failed on a transient error. Without this the only way to ask
+  # for an apply is to manufacture a commit under infra/**.
+  workflow_dispatch:
+    inputs:
+      # A free string, checked against the directories under this repo's
+      # environment in `detect`, since the two environments hold different
+      # stacks (pipelines is dev-only).
+      stack:
+        description: "Stack to apply, from the current head of main: a directory under infra/<env>"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  detect:
+    name: Detect changed stacks
+    runs-on: ubuntu-latest
+    outputs:
+      # A skipped step's outputs are empty, so exactly one of these two is
+      # ever set and the fallback picks it. A push that changed no stack
+      # yields the literal '[]', which is truthy here and correctly stops the
+      # apply jobs below rather than falling through to the dispatch branch.
+      env: ${{ steps.env.outputs.env }}
+      stacks: ${{ steps.changed.outputs.stacks || steps.dispatch.outputs.stacks }}
+      # `stacks` minus `foundation`, applied by the `apply` matrix below only
+      # after `apply-foundation` finishes — see "Foundation-first ordering".
+      dependent_stacks: ${{ steps.split.outputs.dependent_stacks }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve environment
+        id: env
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "env=$(scripts/terraform-stacks.sh environment "$OWNER")" >> "$GITHUB_OUTPUT"
+
+      - name: Select dispatched stack
+        id: dispatch
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          ENV_DIR: ${{ steps.env.outputs.env }}
+          STACK: ${{ inputs.stack }}
+        run: |
+          if ! [[ "$STACK" =~ ^[a-z][a-z0-9-]*$ ]] || [ ! -d "infra/$ENV_DIR/$STACK" ]; then
+            echo "::error::'$STACK' is not a stack in infra/$ENV_DIR."
+            exit 1
+          fi
+          echo "stacks=[\"$STACK\"]" >> "$GITHUB_OUTPUT"
+
+      - name: List changed infra files
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@v3
+        with:
+          list-files: json
+          filters: |
+            infra:
+              - 'infra/**'
+
+      - name: Map changed files to stacks
+        id: changed
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          ENV_DIR: ${{ steps.env.outputs.env }}
+          FILES: ${{ steps.filter.outputs.infra_files }}
+        # --allow-removed: the PR's plan already failed a removed stack root
+        # unless it carried allow-destroy, and a root that no longer exists
+        # has nothing to apply. The removal still shows as a warning.
+        run: |
+          stacks="$(jq -r '.[]' <<<"${FILES:-[]}" | scripts/terraform-stacks.sh changed "$ENV_DIR" --allow-removed)"
+          echo "Changed stacks in infra/$ENV_DIR: $stacks"
+          echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
+
+      - name: Split foundation from dependent stacks
+        id: split
+        env:
+          STACKS: ${{ steps.changed.outputs.stacks || steps.dispatch.outputs.stacks }}
+        run: |
+          echo "dependent_stacks=$(jq -c '[.[] | select(. != "foundation")]' <<<"$STACKS")" >> "$GITHUB_OUTPUT"
+
+  apply-foundation:
+    name: apply (foundation)
+    needs: detect
+    if: needs.detect.outputs.stacks != '[]' && needs.detect.outputs.stacks != '' && contains(fromJSON(needs.detect.outputs.stacks), 'foundation')
+    uses: ./.github/workflows/apply-stack.yml
+    with:
+      environment: ${{ needs.detect.outputs.env }}
+      stack: foundation
+
+  apply:
+    name: apply (${{ matrix.stack }})
+    needs: [detect, apply-foundation]
+    # always(): the default `needs`-implied condition is success() on every
+    # needed job, and a skipped apply-foundation (foundation didn't change)
+    # is not a success — so this has to state explicitly that "succeeded or
+    # was skipped" is the pass condition, or a run that only touches, say,
+    # `apis` would never apply it.
+    if: |
+      always() &&
+      needs.detect.outputs.dependent_stacks != '[]' && needs.detect.outputs.dependent_stacks != '' &&
+      (needs.apply-foundation.result == 'success' || needs.apply-foundation.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.dependent_stacks) }}
+    uses: ./.github/workflows/apply-stack.yml
+    with:
+      environment: ${{ needs.detect.outputs.env }}
+      stack: ${{ matrix.stack }}

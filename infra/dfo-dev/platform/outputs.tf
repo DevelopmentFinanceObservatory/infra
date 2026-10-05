@@ -1,0 +1,1 @@
+../../stacks/platform/outputs.tf

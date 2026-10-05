@@ -1,0 +1,18 @@
+# Code owners for security-sensitive paths.
+
+# Catch-all first, so the specific rules below win under last-match-wins.
+# Without it scripts/ is unowned, and scripts/check-image-pin-diff.sh is what
+# approve-image-pin.yml trusts when it decides to auto-approve.
+*           @jm-rivera @tillywoodfield
+
+# infra/ is applied to GCP by dfo-infra-applier on merge to main, and
+# .github/ defines that workflow. Listed explicitly so a later edit to the
+# catch-all can't loosen review on them by accident.
+/infra/     @jm-rivera @tillywoodfield
+/.github/   @jm-rivera @tillywoodfield
+
+# Last, so they win over /infra/. dcp's pin PRs are opened by a GitHub App
+# token, which is not a code owner, so no code-owner review can apply to them.
+# approve-image-pin.yml is the compensating review.
+/infra/dfo-dev/dcp/image.auto.tfvars
+/infra/dfo-prod/dcp/image.auto.tfvars

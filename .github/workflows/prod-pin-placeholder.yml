@@ -1,0 +1,39 @@
+# Fail any ONEcampaign PR that edits infra/dfo-prod/dcp/image.auto.tfvars.
+# The sync keeps that file from the new org's own main, where prod's dcp
+# build writes the pin, so an edit here never reaches prod. Adding the file
+# passes, since that seeds the placeholder the first snapshot copies.
+#
+# Runs on every PR, with no paths filter, so it can be a required check.
+name: Prod pin placeholder
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check:
+    name: Prod pin placeholder unchanged
+    # ONEcampaign-only. In the new org the sync and sync-guard own the file.
+    if: github.repository_owner == 'ONEcampaign'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PIN_FILE: infra/dfo-prod/dcp/image.auto.tfvars
+    steps:
+      - name: Check the PR's files
+        run: |
+          # One line per changed file: status, path, and the old path of a
+          # rename, so a rename away from the file counts too.
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[] | "\(.status) \(.filename) \(.previous_filename // "")"' >files.txt
+          echo "Checked $(wc -l <files.txt) changed file(s)."
+          if awk -v pin="$PIN_FILE" '($2 == pin && $1 != "added") || $3 == pin { found = 1 } END { exit !found }' files.txt; then
+            echo "::error file=$PIN_FILE::This PR edits $PIN_FILE. Prod's sync keeps that file from the new org's main, so ONEcampaign edits never reach prod. Revert the change."
+            exit 1
+          fi

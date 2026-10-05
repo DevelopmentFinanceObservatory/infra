@@ -1,0 +1,27 @@
+# Secrets — never commit (terraform.tfvars holds the DC API key)
+**/terraform.tfvars
+
+# Terraform working files (remote state lives in GCS)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Keep .terraform.lock.hcl committed to pin provider versions.
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Local working notes — not tracked. Remove this line to put docs/ under version control.
+docs/
+
+# OS / editor cruft
+.DS_Store
+/.idea
+/.claude
+.codegraph/

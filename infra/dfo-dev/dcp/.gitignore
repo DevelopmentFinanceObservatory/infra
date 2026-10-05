@@ -1,0 +1,10 @@
+# Contains the DC API key — never commit
+terraform.tfvars
+
+# Terraform working files (remote state lives in GCS, but these are still local)
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Keep the lockfile (.terraform.lock.hcl) committed to pin provider versions
