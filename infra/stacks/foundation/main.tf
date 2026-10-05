@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/google"
       version = ">= 5.11.0"
     }
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = ">= 5.11.0"
+    }
   }
 }
 
@@ -13,6 +17,14 @@ terraform {
 # project_id as the quota project. google_billing_budget requires it: the
 # Cloud Billing Budget API rejects a call with no quota project.
 provider "google" {
+  project               = var.project_id
+  region                = var.region
+  user_project_override = true
+  billing_project       = var.project_id
+}
+
+# Only google_project_service_identity below needs the beta provider.
+provider "google-beta" {
   project               = var.project_id
   region                = var.region
   user_project_override = true
@@ -31,9 +43,23 @@ resource "google_project_service" "apis" {
     "drive.googleapis.com",
     "docs.googleapis.com",
     "sheets.googleapis.com",
+    "workflows.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
+}
+
+# The Workflows service agent. Google creates a service's agent some time
+# after the API is first enabled, and dcp's stack module grants this agent a
+# role and creates a workflow in the same apply that enables Workflows, so on
+# a new project that apply fails with "Workflows service agent does not
+# exist". Foundation applies before dcp, so generating the agent here means it
+# exists by then. On a project that already has the agent, this returns it.
+resource "google_project_service_identity" "workflows" {
+  provider = google-beta
+  service  = "workflows.googleapis.com"
+
+  depends_on = [google_project_service.apis]
 }
 
 # Shared Artifact Registry repo. The dfo-dcp, dfo-ai, and dfo-apis service
