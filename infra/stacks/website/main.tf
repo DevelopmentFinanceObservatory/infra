@@ -111,6 +111,9 @@ module "website_service" {
     # PostHog usage telemetry (project key and EU ingest endpoint). The key is a public write-only token by design, shipped in client-side JavaScript on every PostHog site, so it mounts as a plain env var rather than a secret. See README, "PostHog telemetry".
     POSTHOG_KEY  = var.posthog_key
     POSTHOG_HOST = var.posthog_host
+
+    # Which environment this service is, for the environment property on telemetry events: one PostHog project serves every environment, so the events must say which one they came from.
+    ENVIRONMENT = var.tier
   }
   # Sign-in provider pairs (GOOGLE_*, GITHUB_*, MICROSOFT_*) come from sign_in_providers.tf.
   secret_env_vars = merge({
