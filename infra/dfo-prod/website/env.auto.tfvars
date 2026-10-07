@@ -10,6 +10,7 @@ cloudsql_login_role_id            = "dfoProdWebsiteCloudsqlLoginOnly"
 platform_postgres_instance_name   = "dfo-prod-platform-postgres"                                   # platform output instance_name
 platform_postgres_connection_name = "prod-fin-observatory:europe-west1:dfo-prod-platform-postgres" # platform output connection_name
 datasets_pin_principal_secret_id  = "dfo-prod-datasets-pin-principal"
+live_refresh_principal_secret_id  = "dfo-prod-live-refresh-principal"
 # One PostHog project serves every environment; events carry an environment property.
 posthog_key = "phc_nNtsVfPvZAKPJ5JagTFzvGsndUddT3PNXguGQsMCnSAt"
 

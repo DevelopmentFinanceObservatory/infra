@@ -22,7 +22,7 @@ This stack sets one variable, `DFO_APIS_URL`, for the data-mcp component mounted
 
 ## analysis-mcp environment
 
-The service receives `FRAME_STORE_BUCKET`, the name of the bucket for content-addressed analysis frames. The runtime service account can create and read objects. Bucket lifecycle rules delete objects after 30 days. [dfo-ai#187](https://github.com/ONEcampaign/dfo-ai/pull/187) owns the application change that writes analysis frames to the bucket.
+The service receives `FRAME_STORE_BUCKET`, the name of the bucket for content-addressed analysis frames. The runtime service account can create and read objects. The bucket has no age rule, because a derived frame's object holds the only copy of its op-spec. [dfo-ai#187](https://github.com/ONEcampaign/dfo-ai/pull/187) owns the application change that writes analysis frames to the bucket.
 
 ## Studio engine
 
@@ -69,6 +69,14 @@ Humans who call the MCP mounts directly, and whoever configures the e2e test dae
 This stack reads, rather than creates, the shared bearer value the Datasets publish door on `dfo-dev-apis` compares the `x-dfo-principal` header against: `var.datasets_first_party_principal_secret_id`, a plain value copied from the secret id `../apis/datasets_first_party_principal.tf` creates and pins its own mount to, not a `data "google_secret_manager_secret"` lookup — that would resolve against live state at plan time, and this stack's plan must not depend on the `apis` stack having applied first. See that stack's README for the interim framing and the exposure this value narrows but does not close. The pin door reads a separate value, generated in `../apis/datasets_pin_principal.tf`, that this stack does not mount or call. This stack mounts `DATASETS_FIRST_PARTY_PRINCIPAL`, which the harness's `PlatformAssembler` sends on the one outbound call that needs it, publishing an analysis frame to the Datasets API. Unset, that call refuses locally with `publish_not_configured` before it reaches the network.
 
 The mount here reads `latest` rather than a pinned version, since this stack does not own the version resource. Rotating the secret in `apis` deletes the old version once the new one exists, but that apply rolls only the `apis` service; a running `ai` instance keeps whatever value it read at startup regardless of what Secret Manager now holds, and the next publish call through `PlatformAssembler` would then carry a value the door no longer accepts. Rolling this service — an image-only deploy, or a `terraform apply` here that changes the service — is what picks up the new version; a `terraform apply` with no other change is a no-op and creates no new revision.
+
+## Live-refresh principal
+
+`LIVE_REFRESH_PRINCIPAL` is the bearer value `POST /api/studio/refresh` compares the `Authorization: Bearer` header against. That endpoint redraws a derived card for a live Studio share without a conversation or a model, and the website calls it. It is separate from `STUDIO_API_TOKEN`. Unset or empty, the endpoint refuses every caller.
+
+The secret is created and rotated in the `apis` stack, as `dfo-dev-live-refresh-principal`. This stack reads it through `var.live_refresh_principal_secret_id`, a plain value copied from that stack's secret id, because a `data "google_secret_manager_secret"` lookup would fail this stack's plan whenever the `apis` stack had not yet created the secret. When both stacks change in one merge, `apply.yml` applies `apis` first, since it lists `apis` as a producer stack.
+
+The mount reads `latest`, so a rotation in `apis` reaches a running instance only on a new revision, which an image-only deploy or a `terraform apply` here that changes the service creates.
 
 ## Langfuse tracing
 

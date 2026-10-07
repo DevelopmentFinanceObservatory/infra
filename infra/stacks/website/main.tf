@@ -142,6 +142,11 @@ module "website_service" {
     # mount reads latest, since this stack holds no version resource of
     # its own to pin against. See README.
     DFO_PRINCIPAL = { secret_id = var.datasets_pin_principal_secret_id }
+    # Bearer value the app sends server-side on the frame refresh and render
+    # calls a live Studio share makes to dfo-apis and dfo-ai. Unset, the
+    # website offers no Live Data option. The apis stack owns and pins the secret.
+    # This mount reads latest, as for DFO_PRINCIPAL above. See README.
+    LIVE_REFRESH_PRINCIPAL = { secret_id = var.live_refresh_principal_secret_id }
   }, local.sign_in_secret_env_vars)
 
   deployer_members = ["serviceAccount:${data.google_service_account.website_deployer.email}"]

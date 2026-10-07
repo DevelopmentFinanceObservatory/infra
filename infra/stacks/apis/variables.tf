@@ -162,6 +162,12 @@ variable "datasets_pin_principal_readers" {
   default     = []
 }
 
+variable "live_refresh_principal_readers" {
+  description = "IAM members granted secretAccessor on the live-refresh principal secret alone, for humans who need to read the value directly. Empty by default, because the `apis` service mounts it directly and the `ai` and `website` stacks' services carry it through their own secret_env_vars grants, so no human needs read access until one does."
+  type        = list(string)
+  default     = []
+}
+
 # The UN System Data Commons is a stock Custom Data Commons federated with
 # base Data Commons. The job reads its provenances and agency root groups
 # over the public internet. It serves GET and POST to /v2/node anonymously.

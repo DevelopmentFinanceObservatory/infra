@@ -1,6 +1,6 @@
 terraform {
-  # 1.11 for the write-only arguments in datasets_first_party_principal.tf
-  # and datasets_pin_principal.tf.
+  # 1.11 for the write-only arguments in datasets_first_party_principal.tf,
+  # datasets_pin_principal.tf, and live_refresh_principal.tf.
   required_version = ">= 1.11"
 
   required_providers {
@@ -12,7 +12,8 @@ terraform {
     }
     random = {
       # 3.7.0 for the ephemeral random_password in
-      # datasets_first_party_principal.tf and datasets_pin_principal.tf.
+      # datasets_first_party_principal.tf, datasets_pin_principal.tf, and
+      # live_refresh_principal.tf.
       source  = "hashicorp/random"
       version = ">= 3.7.0"
     }
@@ -79,6 +80,17 @@ module "apis_service" {
       # disagree during a rotation; the pin moves with the version resource,
       # rolling the service in the same apply.
       version = google_secret_manager_secret_version.datasets_pin_principal.version
+    }
+
+    # Authenticates the frame refresh and Presentation render routes a live
+    # Studio share calls, a separate value from both datasets principals
+    # above. See live_refresh_principal.tf.
+    LIVE_REFRESH_PRINCIPAL = {
+      secret_id = google_secret_manager_secret.live_refresh_principal.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.live_refresh_principal.version
     }
   }
 
