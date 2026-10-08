@@ -34,6 +34,11 @@ variable "datasets_first_party_principal_secret_id" {
   type        = string
 }
 
+variable "live_refresh_principal_secret_id" {
+  description = "Secret Manager id of the live-refresh principal secret. Copied from the `apis` stack's `google_secret_manager_secret.live_refresh_principal.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not."
+  type        = string
+}
+
 variable "presentation_public_url" {
   description = "Public URL prefix under which presentation-mcp is reachable from a browser. It is the website's /mcp/presentation route, which forwards to this service's per-server mount. The app views resolve their theme stylesheet against it. Copied from the `website` stack's `website_url` value plus the path, a plain value so this plan never depends on that stack having applied. The service fails to start without it."
   type        = string

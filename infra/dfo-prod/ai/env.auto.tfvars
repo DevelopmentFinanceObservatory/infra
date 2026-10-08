@@ -6,6 +6,7 @@ region                                   = "europe-west1"
 namespace                                = "dfo-prod"
 cloudsql_login_role_id                   = "dfoProdAiCloudsqlLoginOnly"
 datasets_first_party_principal_secret_id = "dfo-prod-datasets-first-party-principal"
+live_refresh_principal_secret_id         = "dfo-prod-live-refresh-principal"
 platform_postgres_instance_name          = "dfo-prod-platform-postgres"                                   # platform output instance_name
 platform_postgres_connection_name        = "prod-fin-observatory:europe-west1:dfo-prod-platform-postgres" # platform output connection_name
 

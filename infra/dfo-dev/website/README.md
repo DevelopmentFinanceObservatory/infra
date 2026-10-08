@@ -73,6 +73,14 @@ The mount reads `latest` rather than a pinned version: this stack holds no versi
 
 Any visitor can reach this call: `allow_unauthenticated = true` above means nobody has to sign in to create a search share, and a snapshot share's capture step mints and pins on that visitor's behalf. The value is a shared bearer, the same interim exposure the `apis` stack's README records for the publish door — anyone who learns it can pin the same as this service can, and pinning has no reverse route. That value's retirement into service-to-service ID tokens is tracked in [ONEcampaign/dfo-ai#41](https://github.com/ONEcampaign/dfo-ai/issues/41).
 
+## Live-refresh principal
+
+`LIVE_REFRESH_PRINCIPAL` is the bearer value the app sends server-side when a live Studio share opens. It goes in the `x-dfo-principal` header on the `dfo-apis` frame refresh and Presentation render calls, and in `Authorization: Bearer` on the `dfo-ai` `POST /api/studio/refresh` call. It never reaches the browser. Unset or empty, the app offers no Live Data option when a visitor shares a canvas or card.
+
+The secret is created and rotated in the `apis` stack, as `dfo-dev-live-refresh-principal`. This stack reads it through `var.live_refresh_principal_secret_id`, a plain value copied from that stack's secret id, the same cross-stack pattern as `var.datasets_pin_principal_secret_id` above. When both stacks change in one merge, `apply.yml` applies `apis` first, since it lists `apis` as a producer stack.
+
+The mount reads `latest`, so the value reaches a running instance only on a new revision after a rotation in `apis`. A `dfo-website` deploy of the `staging` branch creates one, and `gcloud run services update dfo-dev-website-staging --region northamerica-northeast1 --update-labels=live-refresh-principal-rotated=<n>` forces one without a new image.
+
 ## Feedback Slack webhook
 
 `FEEDBACK_SLACK_WEBHOOK_URL` is the Slack incoming webhook the app's `/api/feedback` endpoint posts each submission to. Slack issues the URL, so unlike `BETTER_AUTH_SECRET` it can't be generated here: `feedback_webhook.tf` owns the secret container (`dfo-dev-website-staging-feedback-slack-webhook`) and the mount, and the URL itself is added out-of-band as a version. The mount tracks `latest` (a pinned version would point at whatever Terraform knew about, which is never the real URL), and a placeholder first version with the literal `disabled` guarantees the mount always resolves, since Cloud Run refuses to start a revision whose secret env var can't be read. The app treats any value that isn't a Slack webhook URL as "notifications off", so the placeholder is inert.

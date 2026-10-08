@@ -1,4 +1,6 @@
-# Analysis frames are temporary objects the AI runtime creates and reads.
+# Analysis frames the AI runtime creates and reads. A derived frame's object
+# holds the only copy of its op-spec, which recomputing the frame on newer
+# data replays, so the bucket has no age rule.
 resource "google_storage_bucket" "materialisation_store" {
   name     = "${var.project_id}-ai-materialisation-store"
   location = var.region
@@ -9,15 +11,6 @@ resource "google_storage_bucket" "materialisation_store" {
     enabled = false
   }
   force_destroy = false
-
-  lifecycle_rule {
-    condition {
-      age = 30
-    }
-    action {
-      type = "Delete"
-    }
-  }
 
   soft_delete_policy {
     retention_duration_seconds = 0
