@@ -5,11 +5,11 @@
 # On every push to `main` that touches `infra/**`, this workflow:
 #   1. Detects which of this repo's environment stacks changed, with the same
 #      `scripts/terraform-stacks.sh` rules plan.yml uses.
-#   2. Applies `foundation` first if it's among the changed stacks (see
-#      "Foundation-first ordering" below), then every other changed stack in
-#      a matrix — each call delegates the actual init/validate/plan/apply to
-#      apply-stack.yml, a reusable workflow, so the two call sites share one
-#      body instead of duplicating it.
+#   2. Applies the changed stacks in three tiers (see "Tiered ordering"
+#      below): `foundation`, then the changed producer stacks, then every
+#      other changed stack. Each call delegates the actual
+#      init/validate/plan/apply to apply-stack.yml, a reusable workflow, so
+#      the three call sites share one body instead of duplicating it.
 #   3. Each apply-stack.yml call upserts its own apply-result comment on the
 #      PR associated with the merged commit (if one can be found).
 #
@@ -55,17 +55,28 @@
 # reviewed, merged code — can impersonate it. There is no reviewer pause
 # inside this workflow; the review already happened on the PR.
 #
-# Foundation-first ordering
-# --------------------------
-# foundation.tf's applier_project_roles grants the applier SA itself whatever
-# project-level IAM other stacks' resources need. A stack applied in the same
-# run that needs a role foundation just added — e.g. apis's
-# google_cloud_tasks_queue needing roles/cloudtasks.queueAdmin — has to run
-# after foundation's apply lands the grant, not in parallel with it. `detect`
-# below splits `foundation` out of the changed-stacks list into its own
-# output; `apply-foundation` applies it alone, and `apply` (the matrix over
-# every other changed stack) `needs` that job and runs only once it has
-# either succeeded or been skipped (skipped when foundation didn't change).
+# Tiered ordering
+# ---------------
+# Changed stacks apply in three tiers, each starting once the tiers before it
+# have succeeded or been skipped:
+#   1. `foundation`. foundation.tf's applier_project_roles grants the applier
+#      SA itself whatever project-level IAM other stacks' resources need, so a
+#      stack that needs a role foundation just added (e.g. apis's
+#      google_cloud_tasks_queue needing roles/cloudtasks.queueAdmin) has to
+#      run after foundation's apply lands the grant.
+#   2. Producers: stacks that create resources other stacks read. `apis`
+#      creates the datasets pin principal the website mounts and the
+#      live-refresh principal the ai and website services mount, and a Cloud
+#      Run revision that mounts a secret that does not exist yet fails to
+#      start. The list is `PRODUCER_STACKS` in `detect`'s split step, the one
+#      place to add a stack to this tier.
+#   3. Consumers: every other changed stack.
+# `detect` splits the changed stacks into one output per tier.
+# `apply-foundation` applies foundation alone; `apply-producers` and `apply`
+# are matrices over the producer and consumer outputs. A tier is skipped when
+# none of its stacks changed. A failure in any tier skips every later tier,
+# and within a matrix `fail-fast: false` lets the other stacks of the same
+# tier finish.
 #
 # Shared concurrency group
 # -------------------------
@@ -123,9 +134,10 @@ jobs:
       # apply jobs below rather than falling through to the dispatch branch.
       env: ${{ steps.env.outputs.env }}
       stacks: ${{ steps.changed.outputs.stacks || steps.dispatch.outputs.stacks }}
-      # `stacks` minus `foundation`, applied by the `apply` matrix below only
-      # after `apply-foundation` finishes — see "Foundation-first ordering".
-      dependent_stacks: ${{ steps.split.outputs.dependent_stacks }}
+      # `stacks` split into the second and third tiers, applied by the
+      # `apply-producers` and `apply` matrices below; see "Tiered ordering".
+      producer_stacks: ${{ steps.split.outputs.producer_stacks }}
+      consumer_stacks: ${{ steps.split.outputs.consumer_stacks }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -173,12 +185,16 @@ jobs:
           echo "Changed stacks in infra/$ENV_DIR: $stacks"
           echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
 
-      - name: Split foundation from dependent stacks
+      - name: Split stacks into tiers
         id: split
         env:
           STACKS: ${{ steps.changed.outputs.stacks || steps.dispatch.outputs.stacks }}
+          # Stacks that create resources other stacks read; see "Tiered
+          # ordering".
+          PRODUCER_STACKS: '["apis"]'
         run: |
-          echo "dependent_stacks=$(jq -c '[.[] | select(. != "foundation")]' <<<"$STACKS")" >> "$GITHUB_OUTPUT"
+          echo "producer_stacks=$(jq -c --argjson p "$PRODUCER_STACKS" '[.[] | select(IN($p[]))]' <<<"$STACKS")" >> "$GITHUB_OUTPUT"
+          echo "consumer_stacks=$(jq -c --argjson p "$PRODUCER_STACKS" '[.[] | select(. != "foundation" and (IN($p[]) | not))]' <<<"$STACKS")" >> "$GITHUB_OUTPUT"
 
   apply-foundation:
     name: apply (foundation)
@@ -189,7 +205,7 @@ jobs:
       environment: ${{ needs.detect.outputs.env }}
       stack: foundation
 
-  apply:
+  apply-producers:
     name: apply (${{ matrix.stack }})
     needs: [detect, apply-foundation]
     # always(): the default `needs`-implied condition is success() on every
@@ -199,12 +215,31 @@ jobs:
     # `apis` would never apply it.
     if: |
       always() &&
-      needs.detect.outputs.dependent_stacks != '[]' && needs.detect.outputs.dependent_stacks != '' &&
+      needs.detect.outputs.producer_stacks != '[]' && needs.detect.outputs.producer_stacks != '' &&
       (needs.apply-foundation.result == 'success' || needs.apply-foundation.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
-        stack: ${{ fromJSON(needs.detect.outputs.dependent_stacks) }}
+        stack: ${{ fromJSON(needs.detect.outputs.producer_stacks) }}
+    uses: ./.github/workflows/apply-stack.yml
+    with:
+      environment: ${{ needs.detect.outputs.env }}
+      stack: ${{ matrix.stack }}
+
+  apply:
+    name: apply (${{ matrix.stack }})
+    needs: [detect, apply-foundation, apply-producers]
+    # Both earlier tiers are checked: a failed foundation skips
+    # apply-producers, and that skip alone would read as a pass.
+    if: |
+      always() &&
+      needs.detect.outputs.consumer_stacks != '[]' && needs.detect.outputs.consumer_stacks != '' &&
+      (needs.apply-foundation.result == 'success' || needs.apply-foundation.result == 'skipped') &&
+      (needs.apply-producers.result == 'success' || needs.apply-producers.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.consumer_stacks) }}
     uses: ./.github/workflows/apply-stack.yml
     with:
       environment: ${{ needs.detect.outputs.env }}
