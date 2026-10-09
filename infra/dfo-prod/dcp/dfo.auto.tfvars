@@ -38,9 +38,9 @@ spanner_processing_units = 1000
 # =============================================================================
 datacommons_services_allow_unauthenticated_access = true
 datacommons_services_min_instances                = 1
-datacommons_services_max_instances                = 1
-datacommons_services_cpu                          = "2"
-datacommons_services_memory                       = "8G"
+datacommons_services_max_instances                = 2
+datacommons_services_cpu                          = "4"
+datacommons_services_memory                       = "16G"
 
 # =============================================================================
 # Ingestion

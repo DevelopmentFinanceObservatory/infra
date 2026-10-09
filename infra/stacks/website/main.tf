@@ -152,9 +152,14 @@ module "website_service" {
   deployer_members = ["serviceAccount:${data.google_service_account.website_deployer.email}"]
 
   min_instances = var.min_instances
-  max_instances = 2
-  cpu           = "1"
-  memory        = "512Mi"
+  max_instances = 5
+  # Combined cap across old and new revisions during a rollout, so the
+  # platform stack's max_connections budget holds at the cap.
+  service_max_instances = 5
+  cpu                   = "1"
+  # Next.js holds about 380 MiB at steady state, so a burst of large docs
+  # pages pushed a 512Mi instance past its limit.
+  memory = "2Gi"
   # The /api/studio/* proxy streams ai agent runs, which that service allows 900s.
   # Matches the ai service so the proxy is never the hop that cuts a long run off.
   timeout_seconds   = 900
