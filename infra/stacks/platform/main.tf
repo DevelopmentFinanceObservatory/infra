@@ -96,16 +96,16 @@ resource "google_sql_database_instance" "platform" {
     }
 
     database_flags {
-      # 100 is Cloud SQL's own default at 3.75 GB. Cloud SQL derives this
-      # value from instance memory when the flag is unset, so pinning it
-      # explicitly keeps the connection budget fixed through a future tier
-      # change. The budget breaks down as about ten connections for
-      # migrations and the built-in users, twenty each for datasets,
-      # presentation, apis, and website, and ten for ai, which runs at most
-      # two instances each holding a small pool (#155). That sums to one
-      # hundred. The website tenant's twenty go to its one service.
+      # Cloud SQL derives this value from instance memory when the flag is
+      # unset, so pinning it keeps the connection budget fixed through a future
+      # tier change. The worst case is each pool size times its service's
+      # instance cap: about ten for migrations and the built-in users, twelve
+      # per apis instance (datasets 10, presentation 2) at up to five, ten per
+      # datasets worker at up to four, five per website instance at up to five,
+      # and ten for ai at up to two instances (#155). That sums to about 145.
+      # Changing the value restarts the instance.
       name  = "max_connections"
-      value = "100"
+      value = tostring(var.max_connections)
     }
 
     # Query Insights aggregates statistics, text, and plans for every
