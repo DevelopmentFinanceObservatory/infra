@@ -112,6 +112,11 @@ module "apis_service" {
 
     GRAPH_DCP_BASE_URL = var.graph_dcp_base_url
 
+    # Concurrent DCP reads the Graph surface runs on each instance. The
+    # dfo-apis default of 4 is filled by a burst of the website's source
+    # documentation reads.
+    GRAPH_NODE_POOL_SIZE = "16"
+
     # dfo-apis mounts the Graph surface only when this reads "1" or "true".
     # Every other value, including unset, leaves it unmounted. Its lifespan
     # requires GRAPH_DCP_BASE_URL above to already be set, or the service
@@ -201,8 +206,11 @@ module "apis_service" {
   deployer_members = ["serviceAccount:${data.google_service_account.apis_deployer.email}"]
 
   min_instances = 1
-  max_instances = 2
-  cpu           = "1"
+  max_instances = 5
+  # Combined cap across old and new revisions during a rollout, so the
+  # platform stack's max_connections budget holds at the cap.
+  service_max_instances = 5
+  cpu                   = "1"
 
   # The coverage-backed Search/Datasets surfaces keep an Arrow index in
   # memory and can temporarily hold both the old and new index during a

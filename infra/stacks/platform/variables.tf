@@ -13,6 +13,12 @@ variable "namespace" {
   type        = string
 }
 
+variable "max_connections" {
+  description = "Postgres max_connections, pinned so a tier change never moves it. The default, 200, covers the stack's worst-case budget of about 145 (see main.tf) and is what dev runs. Prod sets 300 in its env.auto.tfvars, below Cloud SQL's own default of 400 at 7.5 GB. Changing it restarts the instance."
+  type        = number
+  default     = 200
+}
+
 variable "tier" {
   description = "Cloud SQL machine type. The default, db-custom-1-3840, is one dedicated vCPU and 3.75 GB, a dedicated-core tier carrying Google's standard SLA, and is what dev runs. Prod sets db-custom-2-7680 in its env.auto.tfvars. Both instances are zonal."
   type        = string

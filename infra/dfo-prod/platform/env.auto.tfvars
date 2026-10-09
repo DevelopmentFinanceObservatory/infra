@@ -9,3 +9,7 @@ allowed_consumer_projects = ["prod-fin-observatory"]
 # in 99% of minutes over 74 days of internal use, so the second vCPU is
 # headroom for public traffic.
 tier = "db-custom-2-7680"
+
+# Room above the worst-case budget of about 145 for raising service instance
+# caps without another restart. Cloud SQL's own default at 7.5 GB is 400.
+max_connections = 300
