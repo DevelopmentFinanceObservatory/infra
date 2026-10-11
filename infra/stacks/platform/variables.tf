@@ -14,7 +14,7 @@ variable "namespace" {
 }
 
 variable "max_connections" {
-  description = "Postgres max_connections, pinned so a tier change never moves it. The default, 200, covers the stack's worst-case budget of about 145 (see main.tf) and is what dev runs. Prod sets 300 in its env.auto.tfvars, below Cloud SQL's own default of 400 at 7.5 GB. Changing it restarts the instance."
+  description = "Postgres max_connections, pinned so a tier change never moves it. The default, 200, covers the stack's worst-case budget of 165 (see main.tf) and is what dev runs. Prod sets 300 in its env.auto.tfvars, below Cloud SQL's own default of 400 at 7.5 GB. Changing it restarts the instance."
   type        = number
   default     = 200
 }
