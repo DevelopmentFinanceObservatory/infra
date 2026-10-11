@@ -40,12 +40,52 @@ locals {
   datasets_worker_service_name = "${var.namespace}-datasets-worker"
   datasets_worker_url          = "https://${local.datasets_worker_service_name}-${data.google_project.current.number}.${var.region}.run.app"
 
-  # The Cloud Tasks queue's own rate_limits.max_concurrent_dispatches below
-  # reads this same local, and so does DATASETS_OPERATION_DISPATCH_CONCURRENCY
-  # on the apis service (main.tf) — the only workload that reads that env
-  # var — so the queue and dfo-apis's own staleness math can never disagree
-  # about how many dispatches are ever in flight at once.
+  # Read by the Cloud Tasks queue's rate_limits.max_concurrent_dispatches
+  # below.
   datasets_worker_dispatch_concurrency = 4
+
+  # dfo-apis gives each claimed operation a static lease of
+  # run_deadline_seconds from claimed_at: a 1,500 s work deadline plus 120 s
+  # of grace for the tail of the run. A delivery inside the lease answers 409;
+  # only a delivery after claimed_at + this many seconds can re-claim. The
+  # retry_config below derives its bounds from this value.
+  datasets_operation_run_deadline_seconds = 1620
+
+  # The dispatch_deadline dfo-apis sets on every task, Cloud Tasks' ceiling
+  # for an HTTP target.
+  datasets_dispatch_deadline_seconds = 1800
+
+  # Slack added to the lease in min_backoff, so clock skew between Cloud
+  # Tasks and Postgres cannot put the first retry inside the lease.
+  datasets_retry_margin_seconds = 60
+
+  datasets_retry_max_attempts = 3
+
+  # Gap between attempts: the lease plus the margin, constant (max_backoff
+  # equals min_backoff, max_doublings is 0).
+  datasets_retry_backoff_seconds = local.datasets_operation_run_deadline_seconds + local.datasets_retry_margin_seconds
+
+  # The most operations dfo-apis admits as queued or running at once. It
+  # refuses a mint over this backlog.
+  datasets_operation_backlog_max = 20
+
+  # Wait of one delivery for a dispatch slot behind a full backlog, which
+  # drains max_concurrent_dispatches at a time, each batch taking up to a
+  # dispatch deadline. Retries of other tasks compete for the same slots, so
+  # every delivery of a task can meet this wait, not only the first.
+  datasets_queue_wait_seconds = ceil(local.datasets_operation_backlog_max / local.datasets_worker_dispatch_concurrency) * local.datasets_dispatch_deadline_seconds
+
+  # dfo-apis's own deadline for one submission of an operation, read as
+  # DATASETS_OPERATION_DEADLINE_SECONDS and counted from the dispatch. An
+  # operation still unfinished after it fails retryable at the next poll, a
+  # delivery that arrives later answers the failed row without running, and
+  # the backlog stops counting the row. It is an application deadline and says
+  # nothing about what the queue still holds. The value lets every delivery
+  # wait behind a full backlog and then run to its dispatch deadline, with the
+  # backoff between deliveries and a margin:
+  # 3 * (9,000 + 1,800) + 2 * 1,680 + 240 = 36,000 s.
+  datasets_operation_deadline_seconds = (local.datasets_retry_max_attempts * (local.datasets_queue_wait_seconds + local.datasets_dispatch_deadline_seconds)
+  + (local.datasets_retry_max_attempts - 1) * local.datasets_retry_backoff_seconds + 240)
 }
 
 # A dedicated runtime identity for the worker, distinct from the apis runtime
@@ -214,6 +254,13 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
 
   deletion_protection = var.stateless_deletion_protection
 
+  # Combined cap across old and new revisions during a rollout, so the
+  # platform stack's max_connections budget holds at the cap. The template's
+  # max_instance_count below bounds each revision on its own.
+  scaling {
+    max_instance_count = 4
+  }
+
   # Ingress restricted to internal traffic: Cloud Tasks dispatching from the
   # same project counts as internal, and there is no allUsers invoker below
   # — see google_cloud_run_v2_service_iam_member.datasets_worker_invoker.
@@ -270,6 +317,24 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
       env {
         name  = "DFO_WORKER_SURFACE"
         value = "1"
+      }
+
+      # The project Cloud Logging's trace field names, as on the apis service
+      # (main.tf). Cloud Run does not set it; without it the worker's log
+      # lines carry no trace field.
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.project_id
+      }
+
+      # Full Cloud Run resource name of the DC service, whose serving
+      # revision the worker's graph-derived caches key on, as on the apis
+      # service (main.tf). The worker's runtime account reads it under the
+      # grant in graph_generation_access.tf; without the variable every cache
+      # runs under the unknown generation.
+      env {
+        name  = "DFO_GRAPH_GENERATION_SERVICE"
+        value = "projects/${var.project_id}/locations/${var.region}/services/${var.datacommons_service_name}"
       }
 
       # The same datasets env the service reads (main.tf), so a mint that
@@ -357,6 +422,25 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
         name  = "DFO_WORKER_INVOKER_SERVICE_ACCOUNT"
         value = google_service_account.datasets_worker_invoker.email
       }
+
+      # dfo-apis's deadline for one submission of an operation, the same value
+      # the apis service reads.
+      env {
+        name  = "DATASETS_OPERATION_DEADLINE_SECONDS"
+        value = tostring(local.datasets_operation_deadline_seconds)
+      }
+
+      # The queue's max_attempts, so the worker's attempt ceiling and the
+      # queue's cannot drift.
+      env {
+        name  = "DATASETS_OPERATION_MAX_ATTEMPTS"
+        value = tostring(local.datasets_retry_max_attempts)
+      }
+
+      env {
+        name  = "DATASETS_OPERATION_BACKLOG_MAX"
+        value = tostring(local.datasets_operation_backlog_max)
+      }
     }
 
     # Same PSC subnet and egress the apis service uses (network.tf) — the
@@ -396,6 +480,7 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
     google_project_iam_member.datasets_worker_cloudsql_instance_user,
     google_sql_user.datasets_worker_runtime,
     google_service_account_iam_member.datasets_worker_token_creator,
+    google_cloud_run_v2_service_iam_member.graph_generation_dc_viewer_worker,
   ]
 }
 
@@ -480,29 +565,35 @@ resource "google_cloud_tasks_queue" "datasets_worker" {
 
   retry_config {
     # The worker's lease/state-machine handling (claim by conditional
-    # UPDATE, non-2xx on a live lease, take over an expired one) makes a
-    # retry safe; these bounds keep a permanently-failing operation from
-    # retrying forever rather than surfacing as a failed operation.
+    # UPDATE, 409 on a live lease, re-claim after claimed_at +
+    # run_deadline_seconds) makes a retry safe; these bounds keep a
+    # permanently-failing operation from retrying forever rather than
+    # surfacing as a failed operation.
     #
-    # Invariant with the worker's own lease: min_backoff must be at least
-    # dfo-apis's DATASETS_OPERATION_LEASE_SECONDS (60s, operation_store.py),
-    # so the first retry after any dispatch — including one whose worker
-    # died the instant it claimed the lease — never lands before that lease
-    # could possibly have expired. A shorter min_backoff meets a still-live
-    # lease instead: at 10s, retries at +10s and +30s cumulative land while
-    # a lease claimed at dispatch time is still valid for up to 60s, so
-    # both get a 409 from the live-lease branch and burn two of the five
-    # attempts on takeovers that were never going to succeed, before a
-    # later retry finally lands past expiry. At 60s, the first retry is the
-    # earliest moment a worst-case lease can no longer be valid, and every
-    # later retry (backoff only grows from there) meets an already-expired
-    # one too — no attempt is wasted racing a lease that might still be
-    # live.
-    max_attempts       = 5
-    max_retry_duration = "3600s"
-    min_backoff        = "60s"
-    max_backoff        = "300s"
-    max_doublings      = 4
+    # Invariant with the worker's lease: min_backoff exceeds dfo-apis's
+    # run_deadline_seconds (1,620 s, local.datasets_operation_run_deadline_seconds).
+    # A worker that dies the instant it claims fails the delivery at or after
+    # claimed_at, and the retry lands min_backoff later, so the first retry
+    # always arrives after claimed_at + 1,620 s and re-claims. A shorter
+    # min_backoff meets the live lease, gets a 409 and burns an attempt.
+    # min_backoff is 1,680 s: the lease plus 60 s of slack for clock skew.
+    # max_backoff equals min_backoff, which caps every doubling, so every
+    # retry is spaced the same and meets an expired lease. max_doublings is
+    # Cloud Tasks' default of 16: the provider sends no zero, so a 0 here
+    # leaves the queue at 16 and shows as a change in every plan.
+    #
+    # Cloud Tasks stops only once max_attempts is reached and
+    # max_retry_duration has passed, so a duration longer than the fastest
+    # run of attempts adds attempts beyond max_attempts. max_retry_duration
+    # is the fastest start of the last attempt, (max_attempts - 1) *
+    # min_backoff = 3,360 s, which makes max_attempts the exact bound. The
+    # slowest run, where every attempt lasts the 1,800 s dispatch_deadline,
+    # takes 3 * 1,800 + 2 * 1,680 = 8,760 s.
+    max_attempts       = local.datasets_retry_max_attempts
+    max_retry_duration = "${(local.datasets_retry_max_attempts - 1) * local.datasets_retry_backoff_seconds}s"
+    min_backoff        = "${local.datasets_retry_backoff_seconds}s"
+    max_backoff        = "${local.datasets_retry_backoff_seconds}s"
+    max_doublings      = 16
   }
 
   depends_on = [google_project_service.cloudtasks]
