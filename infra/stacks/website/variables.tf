@@ -68,6 +68,23 @@ variable "website_url" {
   type        = string
 }
 
+variable "ingress" {
+  description = "Which sources may reach the website's Cloud Run URL, passed to the cloud-run-service module's `ingress`. INGRESS_TRAFFIC_ALL accepts the internet. INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER accepts only the global external Application Load Balancer in front of the site, so requests to the run.app URL are refused."
+  type        = string
+  default     = "INGRESS_TRAFFIC_ALL"
+}
+
+variable "trusted_proxy_hops" {
+  description = "How many proxies the website trusts to append to X-Forwarded-For, counted from the right, so the entry at that depth is the client address. Null omits the TRUSTED_PROXY_HOPS env var and the app uses its default of 0, the rightmost entry, which is what Google's front end appends on a bare run.app URL. Behind Cloudflare and the Google load balancer the header reads \"client, cloudflare-edge, lb\", so the client sits 2 hops from the right."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.trusted_proxy_hops == null ? true : (var.trusted_proxy_hops >= 0 && floor(var.trusted_proxy_hops) == var.trusted_proxy_hops)
+    error_message = "trusted_proxy_hops must be null or a whole number of at least 0."
+  }
+}
+
 variable "datasets_pin_principal_secret_id" {
   description = "Secret Manager id of the datasets pin principal secret. Copied from the `apis` stack's `google_secret_manager_secret.datasets_pin_principal.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not. See README."
   type        = string

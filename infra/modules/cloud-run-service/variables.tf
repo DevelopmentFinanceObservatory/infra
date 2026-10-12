@@ -122,6 +122,17 @@ variable "allow_unauthenticated" {
   default     = true
 }
 
+variable "ingress" {
+  description = "Which sources may reach the service's URL. INGRESS_TRAFFIC_ALL (the default) accepts the internet. INGRESS_TRAFFIC_INTERNAL_ONLY accepts only VPC and internal Google Cloud traffic. INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER accepts internal traffic plus a Cloud Load Balancing external Application Load Balancer, and refuses direct requests to the run.app URL. https://cloud.google.com/run/docs/securing/ingress"
+  type        = string
+  default     = "INGRESS_TRAFFIC_ALL"
+
+  validation {
+    condition     = contains(["INGRESS_TRAFFIC_ALL", "INGRESS_TRAFFIC_INTERNAL_ONLY", "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"], var.ingress)
+    error_message = "ingress must be INGRESS_TRAFFIC_ALL, INGRESS_TRAFFIC_INTERNAL_ONLY, or INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER."
+  }
+}
+
 variable "vpc_access" {
   description = "Direct VPC egress onto a consumer's own subnet — network and subnetwork self links, typically a consumer-psc-network module's network_id and subnetwork_id outputs. Null (the default) leaves the service with no VPC configuration at all, which is what ai wants. Egress is always PRIVATE_RANGES_ONLY, not caller-configurable — see README.md for why."
   type = object({

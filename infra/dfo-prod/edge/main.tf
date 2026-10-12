@@ -1,0 +1,1 @@
+../../stacks/edge/main.tf

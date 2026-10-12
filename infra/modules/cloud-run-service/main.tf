@@ -44,6 +44,8 @@ resource "google_cloud_run_v2_service" "this" {
 
   deletion_protection = var.deletion_protection
 
+  ingress = var.ingress
+
   # Combined instance cap across every revision receiving traffic, distinct
   # from the per-revision template.scaling below. See the README's
   # "Service-level instance cap" section.
