@@ -64,8 +64,14 @@ jobs:
         id: validate
         run: terraform validate -no-color
 
+      # The Cloudflare provider reads CLOUDFLARE_API_TOKEN itself. Only the
+      # edge stack uses it. Every other stack gets an empty value, so the
+      # token (an environment secret that `secrets: inherit` exposes to this
+      # whole job) does not reach their Terraform. Actions masks it in logs.
       - name: terraform plan
         id: plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ inputs.stack == 'edge' && secrets.CLOUDFLARE_API_TOKEN || '' }}
         run: terraform plan -input=false -lock-timeout=300s -no-color -out=tfplan
 
       - name: Resolve allow-destroy label
@@ -110,6 +116,8 @@ jobs:
       # ran through the destroy check is what gets applied.
       - name: terraform apply
         id: apply
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ inputs.stack == 'edge' && secrets.CLOUDFLARE_API_TOKEN || '' }}
         run: terraform apply -input=false -lock-timeout=300s -no-color tfplan
 
       - name: Comment apply result on PR
