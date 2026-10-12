@@ -98,11 +98,22 @@ resource "google_sql_database_instance" "platform" {
     database_flags {
       # Cloud SQL derives this value from instance memory when the flag is
       # unset, so pinning it keeps the connection budget fixed through a future
-      # tier change. The worst case is each pool size times its service's
-      # instance cap: about ten for migrations and the built-in users, twelve
-      # per apis instance (datasets 10, presentation 2) at up to five, ten per
-      # datasets worker at up to four, five per website instance at up to five,
-      # and ten for ai at up to two instances (#155). That sums to about 145.
+      # tier change. The budget is sum(pool size * max instances) + reserve
+      # <= max_connections, with each term below:
+      # Every service term uses a service-level instance cap, which holds
+      # across old and new revisions during a rollout.
+      #   apis      12 * 5 = 60  (datasets pool 10 + presentation pool 2,
+      #                          service_max_instances in the apis stack)
+      #   worker    10 * 4 = 40  (datasets worker pool, the service-level
+      #                          scaling block in the apis stack)
+      #   website    5 * 5 = 25  (pool per instance, service_max_instances
+      #                          in the website stack)
+      #   ai        10 * 2 = 20  (pool per instance, service_max_instances
+      #                          in the ai stack, #155)
+      #   maintenance 10 * 1 = 10 (datasets-maintenance Job pool; its
+      #                          tasks run one at a time in the apis stack)
+      #   reserve        10      (migrations and the built-in users)
+      # That sums to 165, against 200 in dev and 300 in prod.
       # Changing the value restarts the instance.
       name  = "max_connections"
       value = tostring(var.max_connections)

@@ -30,7 +30,7 @@ Five inputs size each instance: `cpu` (default `"1"`), `memory` (default `"512Mi
 
 ## Service-level instance cap
 
-`max_instances` bounds each revision independently. During a rollout, the old and new revisions each scale up to that count on their own, so the combined instance total can reach twice `max_instances`. `var.service_max_instances` (default `null`) sets the top-level `scaling.max_instance_count` instead, a combined ceiling Cloud Run distributes across whatever revisions are receiving traffic in proportion to their traffic split, so old and new share one instance budget during a rollout. Null, the default, omits the top-level block and leaves every consumer's revision-level-only behavior unchanged. `apis` and `website` do not set it. `ai` sets it to `2`, the same total the stack sizes its downstream connection budget against (`../../dfo-dev/ai/README.md`).
+`max_instances` bounds each revision independently. During a rollout, the old and new revisions each scale up to that count on their own, so the combined instance total can reach twice `max_instances`. `var.service_max_instances` (default `null`) sets the top-level `scaling.max_instance_count` instead, a combined ceiling Cloud Run distributes across whatever revisions are receiving traffic in proportion to their traffic split, so old and new share one instance budget during a rollout. Null, the default, omits the top-level block and leaves every consumer's revision-level-only behavior unchanged. `apis` and `website` set it to `5` and `ai` to `2`, the totals the platform stack's `max_connections` budget counts (`../../stacks/platform/main.tf`).
 
 ## Ordering a revision on out-of-module resources
 

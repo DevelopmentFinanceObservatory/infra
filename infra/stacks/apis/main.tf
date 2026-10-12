@@ -95,6 +95,11 @@ module "apis_service" {
   }
 
   env_vars = {
+    # The project Cloud Logging's trace field names. dfo-apis writes JSON log
+    # lines carrying logging.googleapis.com/trace, which needs it, and Cloud
+    # Run does not set it.
+    GOOGLE_CLOUD_PROJECT = var.project_id
+
     SEARCH_GRAPH_BASE   = var.search_graph_base
     SEARCH_ENGINE_MODEL = var.search_engine_model
     DFO_CORS_ORIGINS    = var.dfo_cors_origins
@@ -196,11 +201,18 @@ module "apis_service" {
     DFO_WORKER_INVOKER_SERVICE_ACCOUNT = google_service_account.datasets_worker_invoker.email
     DFO_TASKS_QUEUE                    = google_cloud_tasks_queue.datasets_worker.id
 
-    # Reads local.datasets_worker_dispatch_concurrency (datasets_worker.tf),
-    # the same local the Cloud Tasks queue's max_concurrent_dispatches reads,
-    # so the mint door's never-claimed staleness math and the queue's actual
-    # dispatch behavior can never drift apart.
-    DATASETS_OPERATION_DISPATCH_CONCURRENCY = tostring(local.datasets_worker_dispatch_concurrency)
+    # dfo-apis's deadline for one submission of an operation
+    # (datasets_worker.tf), built from the locals the queue's retry_config
+    # reads, so it moves with the queue's attempts, backoff and concurrency.
+    DATASETS_OPERATION_DEADLINE_SECONDS = tostring(local.datasets_operation_deadline_seconds)
+
+    # The queue's max_attempts (datasets_worker.tf), from the local its
+    # retry_config reads.
+    DATASETS_OPERATION_MAX_ATTEMPTS = tostring(local.datasets_retry_max_attempts)
+
+    # The backlog dfo-apis admits, which sets the queue wait inside the
+    # operation deadline above.
+    DATASETS_OPERATION_BACKLOG_MAX = tostring(local.datasets_operation_backlog_max)
   }
 
   deployer_members = ["serviceAccount:${data.google_service_account.apis_deployer.email}"]
