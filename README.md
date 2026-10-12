@@ -22,14 +22,16 @@ Local plan/apply of the `dcp` stack reads the Data Commons API key from the `dc-
 dfo-infra/
 ├── infra/
 │   ├── modules/        # DFO-owned reusable modules (empty until first consumer)
-│   └── dfo-dev/        # one directory per environment...
-│       ├── dcp/        # ...one Terraform root (own state) per stack
-│       ├── foundation/
-│       ├── ai/
-│       ├── apis/
-│       ├── pipelines/
-│       ├── platform/
-│       └── website/
+│   ├── dfo-dev/        # one directory per environment...
+│   │   ├── dcp/        # ...one Terraform root (own state) per stack
+│   │   ├── foundation/
+│   │   ├── ai/
+│   │   ├── apis/
+│   │   ├── pipelines/
+│   │   ├── platform/
+│   │   └── website/
+│   └── dfo-prod/       # the same stacks for prod, plus...
+│       └── edge/       # ...the prod-only public edge
 ├── data/               # Datasets in Data Commons custom format (config.json + CSVs + variables.mcf)
 └── scripts/
     └── load.sh         # Helper: stage a dataset into GCS and trigger ingestion
@@ -42,6 +44,7 @@ Each stack is an independent Terraform root: separate state, separate plan, sepa
 | Stack                                  | Status | Owns                                                                                                                                                                                              |
 | -------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [dcp](infra/dfo-dev/dcp)               | live   | The Data Commons Platform: upstream stack module (services, Spanner, Redis, ingestion) plus DFO additions in `dfo.tf`. The `dfo-dcp` repo's CI builds images and an auto-merged PR pins them here |
+| [edge](infra/dfo-prod/edge)            |        | Prod only. developmentfinance.org's load balancer, its certificate, the Cloud Armor policy that admits only Cloudflare, and the Cloudflare zone's DNS and rules                                   |
 | [foundation](infra/dfo-dev/foundation) | live   | Shared plumbing: Artifact Registry, Workload Identity Federation, deployer service accounts                                                                                                       |
 | [ai](infra/dfo-dev/ai)                 | live   | The AI service (agent harness + MCP servers). The `ai` repo's CI deploys images onto it                                                                                                           |
 | [apis](infra/dfo-dev/apis)             | live   | The Search and Datasets APIs, on one Cloud Run service, with the storage, database and private-network access the Datasets API needs. The `apis` repo's CI deploys images onto it                 |
