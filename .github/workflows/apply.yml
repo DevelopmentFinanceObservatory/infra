@@ -244,3 +244,10 @@ jobs:
     with:
       environment: ${{ needs.detect.outputs.env }}
       stack: ${{ matrix.stack }}
+    # The edge stack, a consumer, needs the `production` environment's
+    # CLOUDFLARE_API_TOKEN. This job declares no environment, so this caller
+    # cannot name that secret, so `inherit` lets apply-stack.yml's own
+    # `environment: production` job read it. apply-stack.yml hands it to
+    # terraform for the edge stack only. The foundation and producer calls
+    # above run without it.
+    secrets: inherit

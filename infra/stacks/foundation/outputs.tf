@@ -48,6 +48,11 @@ output "dcp_deployer_service_account" {
   value       = module.dcp_deployer.email
 }
 
+output "site_qa_deployer_service_account" {
+  description = "Email of the dfo-site-qa Firebase deployer service account, or null in an environment that does not list site_qa. dfo-site-qa's deploy workflow names it."
+  value       = one(module.site_qa_deployer[*].email)
+}
+
 output "docs_sync_service_account" {
   description = "Email of the dfo-docs Google Docs sync service account. This is dfo-docs' WIF_SA value; it holds no project roles, and Drive access comes from its membership of the ONE Data shared drive."
   value       = module.docs_sync.email
