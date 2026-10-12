@@ -191,8 +191,14 @@ jobs:
         id: validate
         run: terraform validate -no-color
 
+      # The edge stack's Cloudflare provider reads CLOUDFLARE_API_TOKEN itself.
+      # Here it is the `plan` environment's read-only token. Other stacks get
+      # an empty value, so the token never reaches their Terraform. Init and
+      # validate make no Cloudflare calls and need none. Actions masks it.
       - name: terraform plan
         id: plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ matrix.stack == 'edge' && secrets.CLOUDFLARE_API_TOKEN || '' }}
         run: terraform plan -input=false -lock=false -no-color -out=tfplan
 
       - name: Guard against destroying protected data

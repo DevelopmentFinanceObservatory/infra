@@ -261,9 +261,10 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # generated list, and therefore this condition string, is stable across
   # plans regardless of edits elsewhere in the map.
   #
-  # This is pool-level config shared by all seven deployer identities below
+  # This is pool-level config shared by every deployer identity below
   # (planner, applier, ai_deployer, apis_deployer, dcp_deployer,
-  # website_deployer, docs_sync). Get it wrong and every
+  # website_deployer, docs_sync, and site_qa_deployer where the environment
+  # lists dfo-site-qa). Get it wrong and every
   # GitHub Actions run loses GCP access, including the applier that would
   # normally fix it forward — recovery then means a human running Terraform
   # locally with owner credentials.
@@ -317,6 +318,9 @@ locals {
     "roles/bigquery.dataOwner",                   # google_bigquery_dataset (pipelines)
     "roles/compute.networkViewer",                # data.google_compute_network.default (dcp)
     "roles/compute.networkAdmin",                 # consumer PSC network VPC + subnetwork + address + forwarding rule (website, dcp)
+    "roles/compute.loadBalancerAdmin",            # serverless NEG create/delete, which networkAdmin only reads (edge)
+    "roles/compute.securityAdmin",                # Cloud Armor security policy create/update/delete (edge)
+    "roles/certificatemanager.editor",            # DNS authorization, managed certificate, certificate map + entries (edge)
     "roles/dns.admin",                            # consumer PSC DNS zone + record set (apis, website)
     "roles/cloudtasks.queueAdmin",                # google_cloud_tasks_queue (apis datasets worker dispatch)
     "roles/cloudscheduler.admin",                 # google_cloud_scheduler_job (apis coverage tick)
@@ -327,12 +331,12 @@ locals {
 }
 
 # Stacks this repository owns state for, i.e. the state prefixes the planner
-# is allowed to read the contents of. This is the same stack list
-# .github/workflows/plan.yml's paths-filter matrices over — kept in sync by
-# hand, since one is CEL and the other is YAML and neither can generate the
-# other.
+# is allowed to read the contents of. It lists the stacks of every
+# environment, so it is a superset of what either one plans. plan.yml and
+# plan-prod.yml derive their matrices from scripts/terraform-stacks.sh;
+# this list is kept in sync with the stack directories by hand.
 locals {
-  state_bucket_stacks = ["foundation", "ai", "apis", "website", "dcp", "platform", "pipelines"]
+  state_bucket_stacks = ["foundation", "ai", "apis", "website", "dcp", "platform", "pipelines", "edge"]
 }
 
 # Read-only plan on pull requests: can see everything but change nothing.
@@ -580,6 +584,34 @@ module "docs_sync" {
   description   = "Reads and writes the ONE Data shared drive for dfo-docs' Google Docs sync; holds no project roles"
   project_roles = []
   wif_ref       = "refs/heads/main"
+
+  depends_on = [google_project_service.apis]
+}
+
+# dfo-site-qa's Firebase deploy: the dfo-site-qa Hosting site and the rules
+# and indexes of the site-qa Firestore database, on every push to main. The
+# tracker exists only in dev, so the account exists only in an environment
+# whose github_repositories lists site_qa. Its WIF binding is pinned to
+# refs/heads/main, like docs_sync's.
+module "site_qa_deployer" {
+  count  = contains(keys(var.github_repositories), "site_qa") ? 1 : 0
+  source = "../../modules/github-deployer"
+
+  project_id     = var.project_id
+  project_number = data.google_project.this.number
+  pool_id        = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  repository     = local.deployer_repository["site_qa"]
+  repository_id  = var.github_repositories["site_qa"].id
+
+  account_id   = "dfo-site-qa-deployer"
+  display_name = "dfo-site-qa Firebase deployer (CI)"
+  project_roles = [
+    "roles/firebasehosting.admin",             # upload and release Hosting versions
+    "roles/firebaserules.admin",               # release firestore.rules
+    "roles/datastore.indexAdmin",              # deploy firestore.indexes.json
+    "roles/serviceusage.serviceUsageConsumer", # firebase-tools checks the Firestore API is enabled
+  ]
+  wif_ref = "refs/heads/main"
 
   depends_on = [google_project_service.apis]
 }
