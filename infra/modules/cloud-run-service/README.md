@@ -28,6 +28,10 @@ Five inputs size each instance: `cpu` (default `"1"`), `memory` (default `"512Mi
 
 `session_affinity` (default `false`) routes a client's repeat requests to the same instance for a consumer that keeps per-client state in memory. Cloud Run treats it as best-effort, so the consumer must still tolerate a request landing on another instance.
 
+## Ingress
+
+`ingress` (default `INGRESS_TRAFFIC_ALL`) sets which sources can reach the service. `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` admits internal traffic and a global external Application Load Balancer, and refuses requests to the `run.app` URL from anywhere else. The default makes a service reachable from the internet. A service behind a load balancer's serverless NEG still needs `allow_unauthenticated`, because the NEG calls Cloud Run without an identity token.
+
 ## Service-level instance cap
 
 `max_instances` bounds each revision independently. During a rollout, the old and new revisions each scale up to that count on their own, so the combined instance total can reach twice `max_instances`. `var.service_max_instances` (default `null`) sets the top-level `scaling.max_instance_count` instead, a combined ceiling Cloud Run distributes across whatever revisions are receiving traffic in proportion to their traffic split, so old and new share one instance budget during a rollout. Null, the default, omits the top-level block and leaves every consumer's revision-level-only behavior unchanged. `apis` and `website` set it to `5` and `ai` to `2`, the totals the platform stack's `max_connections` budget counts (`../../stacks/platform/main.tf`).

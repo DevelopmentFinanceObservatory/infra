@@ -93,7 +93,9 @@ module "website_service" {
   bootstrap_image     = "gcr.io/cloudrun/hello"
   container_port      = 8080
 
-  env_vars = {
+  ingress = var.ingress
+
+  env_vars = merge({
     WEBSITE_DB_HOST                     = var.platform_dns_name
     WEBSITE_DB_NAME                     = google_sql_database.website.name
     WEBSITE_DB_USER                     = google_sql_user.website_runtime.name
@@ -112,9 +114,12 @@ module "website_service" {
     POSTHOG_KEY  = var.posthog_key
     POSTHOG_HOST = var.posthog_host
 
-    # Which environment this service is, for the environment property on telemetry events: one PostHog project serves every environment, so the events must say which one they came from.
+    # Which environment this service is, for the environment property on telemetry events. One PostHog project serves every environment, so the events must say which one they came from.
     ENVIRONMENT = var.tier
-  }
+    },
+    # Set only behind a proxy chain. Omitted when null, so the app keeps its default of 0. See var.trusted_proxy_hops.
+    var.trusted_proxy_hops == null ? {} : { TRUSTED_PROXY_HOPS = tostring(var.trusted_proxy_hops) },
+  )
   # Sign-in provider pairs (GOOGLE_*, GITHUB_*, MICROSOFT_*) come from sign_in_providers.tf.
   secret_env_vars = merge({
     BETTER_AUTH_SECRET = {
