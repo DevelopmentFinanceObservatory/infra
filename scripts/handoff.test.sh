@@ -125,6 +125,7 @@ secret WIF_SA foundation $1_deployer_service_account"
         "var SERVICE_APIS apis service_name" \
         "var SERVICE_WORKER apis datasets_worker_service_name" \
         "var JOB_DATASETS_MIGRATE apis datasets_migrate_job_name" \
+        "var JOB_DATASETS_MAINTENANCE apis datasets_maintenance_job_name" \
         "var JOB_PRESENTATION_MIGRATE apis presentation_migrate_job_name" \
         "var JOB_COVERAGE apis coverage_job_name" \
         "var JOB_ORIGIN_CATALOGUE apis origin_catalogue_job_name" \
