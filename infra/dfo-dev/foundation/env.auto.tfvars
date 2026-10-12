@@ -13,6 +13,7 @@ github_repositories = {
   # dfo-website deploys one environment, staging, from its own staging branch.
   website = { name = "dfo-website", id = "1302999580", deploy_environment = "staging", deploy_branch = "staging" }
   docs    = { name = "dfo-docs", id = "1371825207" }
+  site_qa = { name = "dfo-site-qa", id = "1406139622" }
 }
 website_deployer_account_id    = "dfo-website-staging-deployer"
 website_artifact_repository_id = "dfo-website-staging"
