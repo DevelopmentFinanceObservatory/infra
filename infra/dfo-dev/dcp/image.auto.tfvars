@@ -5,4 +5,4 @@
 # review. Do not add a second variable here: anything else placed in this
 # file inherits that unowned status and merges without review. Other
 # committed, non-secret dcp config belongs in dfo.auto.tfvars.
-datacommons_services_image = "northamerica-northeast1-docker.pkg.dev/dev-fin-observatory/datacommons/dfo-services-image@sha256:f53732d02a3112cbbbbfa2d5414796a15105dae0fc0cceadf6e4624e652503a9"
+datacommons_services_image = "northamerica-northeast1-docker.pkg.dev/dev-fin-observatory/datacommons/dfo-services-image@sha256:fc2bc7a8511c6188a256db4ecc83ad20180e8f958e04c59de3cbafa6ceaea7f7"
