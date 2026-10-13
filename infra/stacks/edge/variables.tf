@@ -61,13 +61,23 @@ variable "serve_from_lb" {
   default     = false
 }
 
-variable "edge_rate_limit_requests_per_10s" {
-  description = "Requests one IP may send to the API routes in 10 s before Cloudflare blocks it for 10 s."
+variable "edge_api_requests_per_minute" {
+  description = "Requests one IP may send to the data API routes in 60 s before Cloudflare blocks it for 10 minutes."
   type        = number
 
   validation {
-    condition     = var.edge_rate_limit_requests_per_10s >= 1 && floor(var.edge_rate_limit_requests_per_10s) == var.edge_rate_limit_requests_per_10s
-    error_message = "edge_rate_limit_requests_per_10s must be a whole number of at least 1."
+    condition     = var.edge_api_requests_per_minute >= 1 && floor(var.edge_api_requests_per_minute) == var.edge_api_requests_per_minute
+    error_message = "edge_api_requests_per_minute must be a whole number of at least 1."
+  }
+}
+
+variable "edge_studio_requests_per_minute" {
+  description = "Requests one IP may send to the Studio routes in 60 s before Cloudflare blocks it for 10 minutes."
+  type        = number
+
+  validation {
+    condition     = var.edge_studio_requests_per_minute >= 1 && floor(var.edge_studio_requests_per_minute) == var.edge_studio_requests_per_minute
+    error_message = "edge_studio_requests_per_minute must be a whole number of at least 1."
   }
 }
 
