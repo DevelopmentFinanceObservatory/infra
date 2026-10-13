@@ -10,18 +10,41 @@ locals {
   # and the exposure is accepted.
   origin_hosts = [var.domain, local.preview_host]
 
-  # The website's API routes, which it proxies to the search and studio
-  # backends. The legacy /api/<name> prefixes rewrite onto the same handlers.
-  # /mcp is left out: MCP connectors such as Claude.ai and ChatGPT call it
-  # from a few shared provider egress addresses, so a per-IP limit would
-  # block every user of a connector at once.
-  rate_limited_path_prefixes = [
+  # The website's data API routes, which it proxies to the search, datasets
+  # and graph backends. The legacy /api/<name> prefixes rewrite onto the same
+  # handlers. /mcp has no edge limit: MCP connectors such as Claude.ai and
+  # ChatGPT call it from a few shared provider egress addresses, so a per-IP
+  # limit would block every user of a connector at once.
+  api_path_prefixes = [
     "/api/v1/",
     "/api/search",
     "/api/datasets",
     "/api/graph",
+  ]
+
+  # Studio's routes. Each turn runs the model harness, so they have a lower
+  # limit of their own.
+  studio_path_prefixes = [
+    "/api/v1/studio",
     "/api/studio",
   ]
+
+  # The path is lowercased before the prefix match because Next.js routes
+  # case-insensitively, so /API/SEARCH/resolve reaches the API handler too.
+  api_path_match    = join(" or ", [for prefix in local.api_path_prefixes : "starts_with(lower(http.request.uri.path), \"${prefix}\")"])
+  studio_path_match = join(" or ", [for prefix in local.studio_path_prefixes : "starts_with(lower(http.request.uri.path), \"${prefix}\")"])
+
+  # The longest counting period the Pro plan allows, and a block well inside
+  # its one-hour ceiling.
+  rate_limit_period_seconds = 60
+  rate_limit_block_seconds  = 600
+
+  # Cloudflare's managed rulesets, which have the same ids in every zone.
+  cloudflare_managed_ruleset_id = "efb7b8c949ac4650a09736fc376e9aee"
+  owasp_core_ruleset_id         = "4814384a9e5d4991b9815dcfc25d2f1f"
+  # 949110, the OWASP rule that acts once a request's score passes the
+  # threshold. The other rules in that ruleset only add to the score.
+  owasp_anomaly_rule_id = "6179ae15870a4bb7b2d480d4843b323c"
 }
 
 # Adds the origin secret from origin_secret.tf to every request bound for the
@@ -86,29 +109,86 @@ resource "cloudflare_ruleset" "redirects" {
   ]
 }
 
-# The Free plan allows one rate-limit rule, matching on the path only,
-# counting per IP and colo, with a 10 s period and a 10 s block. Splitting
-# the limit by endpoint needs Pro (ONEcampaign/dfo-infra#253). The path is
-# lowercased before the prefix match because Next.js routes case-insensitively,
-# so /API/SEARCH/resolve reaches the API handler too.
+# The Pro plan allows two rate-limit rules, each counting per IP and colo.
+# The two expressions are disjoint, so a request counts against one rule.
 resource "cloudflare_ruleset" "rate_limit" {
   zone_id     = var.cloudflare_zone_id
   name        = "Rate limit"
-  description = "Per-IP rate limit on the website's API routes."
+  description = "Per-IP rate limits on the website's data API and Studio routes."
   kind        = "zone"
   phase       = "http_ratelimit"
 
   rules = [
     {
-      ref         = "api_per_ip"
-      description = "Block an IP for 10 s after ${var.edge_rate_limit_requests_per_10s} API requests in 10 s."
-      expression  = join(" or ", [for prefix in local.rate_limited_path_prefixes : "starts_with(lower(http.request.uri.path), \"${prefix}\")"])
+      ref         = "studio_per_ip"
+      description = "Block an IP for ${local.rate_limit_block_seconds} s after ${var.edge_studio_requests_per_minute} Studio requests in ${local.rate_limit_period_seconds} s."
+      expression  = local.studio_path_match
       action      = "block"
       ratelimit = {
         characteristics     = ["ip.src", "cf.colo.id"]
-        period              = 10
-        requests_per_period = var.edge_rate_limit_requests_per_10s
-        mitigation_timeout  = 10
+        period              = local.rate_limit_period_seconds
+        requests_per_period = var.edge_studio_requests_per_minute
+        mitigation_timeout  = local.rate_limit_block_seconds
+      }
+    },
+    {
+      ref         = "api_per_ip"
+      description = "Block an IP for ${local.rate_limit_block_seconds} s after ${var.edge_api_requests_per_minute} data API requests in ${local.rate_limit_period_seconds} s."
+      expression  = "(${local.api_path_match}) and not (${local.studio_path_match})"
+      action      = "block"
+      ratelimit = {
+        characteristics     = ["ip.src", "cf.colo.id"]
+        period              = local.rate_limit_period_seconds
+        requests_per_period = var.edge_api_requests_per_minute
+        mitigation_timeout  = local.rate_limit_block_seconds
+      }
+    },
+  ]
+}
+
+# The Cloudflare Managed Ruleset runs at its default actions. The OWASP Core
+# Ruleset scores each request against generic attack patterns and flags
+# query-like text, which Studio and the data API carry, so its anomaly rule
+# logs where it would block. Deployed through the API it runs every paranoia
+# level, so the overrides leave level 1 alone and turn the rest off.
+resource "cloudflare_ruleset" "managed_waf" {
+  zone_id     = var.cloudflare_zone_id
+  name        = "Managed WAF"
+  description = "Cloudflare's managed rulesets."
+  kind        = "zone"
+  phase       = "http_request_firewall_managed"
+
+  rules = [
+    {
+      ref         = "cloudflare_managed"
+      description = "Run the Cloudflare Managed Ruleset."
+      expression  = "true"
+      action      = "execute"
+      action_parameters = {
+        id = local.cloudflare_managed_ruleset_id
+      }
+    },
+    {
+      ref         = "owasp_core_log"
+      description = "Run the OWASP Core Ruleset at paranoia level 1, logging requests it would block."
+      expression  = "true"
+      action      = "execute"
+      action_parameters = {
+        id = local.owasp_core_ruleset_id
+        overrides = {
+          categories = [
+            for level in [2, 3, 4] : {
+              category = "paranoia-level-${level}"
+              enabled  = false
+            }
+          ]
+          rules = [
+            {
+              id     = local.owasp_anomaly_rule_id
+              action = "log"
+            },
+          ]
+        }
       }
     },
   ]
