@@ -66,6 +66,21 @@ gcloud billing accounts add-iam-policy-binding <billing_account_id> \
 
 The applier's project roles include `roles/monitoring.notificationChannelEditor` for the email channels, and the provider sets `user_project_override` and `billing_project` because the budget API needs a quota project.
 
+## Billing export
+
+`billing_export.tf` creates the BigQuery dataset that Cloud Billing exports to, in `EU` with no access blocks and no expiration. It is off until `billing_export_dataset_id` is set. One export covers every project on a billing account, so only prod sets it: `billing_export` in `prod-fin-observatory` receives the export for the billing account that pays for dev, prod and the Gemini key projects. `gcloud billing projects describe prod-fin-observatory` prints its id.
+
+Google offers no API for the export setting, so after the first apply a billing account admin turns it on in the console under Billing → Billing export → BigQuery export. Edit the settings of both "Standard usage cost" and "Detailed usage cost", choose project `prod-fin-observatory` and dataset `billing_export`, and save. Saving adds `billing-export-bigquery@system.gserviceaccount.com` to the dataset as an owner. The dataset declares no access blocks, so Terraform leaves that grant alone.
+
+The first export backfills from the start of the previous month, because the dataset is multi-region. The tables are `gcp_billing_export_v1_<id>` (standard) and `gcp_billing_export_resource_v1_<id>` (detailed), where `<id>` is the billing account id with underscores for hyphens, and new rows arrive a few hours after the usage. Gemini spend by project for one day:
+
+```sql
+select project.id, sku.description, round(sum(cost), 2) as cost
+from `prod-fin-observatory.billing_export.gcp_billing_export_v1_*`
+where service.description = "Gemini API" and date(usage_start_time) = current_date()
+group by 1, 2 order by cost desc
+```
+
 ## Repository allowlist
 
 The org-id gate alone already confines token exchange to `ONEcampaign`, and a token with no matching service-account binding can do nothing there, since the only IAM grants on this pool are the eight deployer identities' bindings above. So the repository-id gate closes one specific gap left by the org-id gate alone: a repository deleted and its name re-registered by someone else inside the org, which would otherwise present a token whose `attribute.repository` still matches a deployer's binding.

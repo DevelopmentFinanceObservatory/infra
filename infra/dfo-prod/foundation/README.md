@@ -14,6 +14,10 @@ The planner binds to the infra repo's `plan` environment and the applier to its 
 - The state bucket `tf-state-dfo-prod-prod-fin-observatory`.
 - The `dc-api-key` secret, holding the Data Commons API key. The planner's access grant on it fails while the secret does not exist.
 
+## After the first apply
+
+`env.auto.tfvars` sets `billing_export_dataset_id`, so this stack creates the `billing_export` dataset. A billing account admin then turns the export on in the console, as `infra/dfo-dev/foundation/README.md` "Billing export" describes.
+
 ## Placeholders in the tfvars
 
 - `applier_impersonators` in `env.auto.tfvars` is empty. Add the project owners who may impersonate the applier.
