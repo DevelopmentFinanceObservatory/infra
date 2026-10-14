@@ -24,7 +24,7 @@ search_graph_base                   = "https://dfo-prod-dc-datacommons-service-5
 datasets_graph_base_url             = "https://dfo-prod-dc-datacommons-service-533754688761.europe-west1.run.app/core/api"                                            # dcp service plus /core/api
 datasets_sdmx_base_url              = "https://dfo-prod-dc-datacommons-service-533754688761.europe-west1.run.app/core/api"                                            # dcp service plus /core/api
 graph_dcp_base_url                  = "https://dfo-prod-dc-datacommons-service-533754688761.europe-west1.run.app/core/api"                                            # dcp service plus /core/api
-dfo_public_site_url                 = "https://dfo-prod-website-533754688761.europe-west1.run.app"                                                                    # website service, deterministic Cloud Run URL
+dfo_public_site_url                 = "https://developmentfinance.org"                                                                                                # website stack website_url
 platform_psc_service_attachment_uri = "projects/ic74f9d0cb948e2dap-tp/regions/europe-west1/serviceAttachments/a-b588fda303da-psc-service-attachment-18d4894ca2dc23a8" # platform output psc_service_attachment_uri
 platform_dns_name                   = "b588fda303da.1b8f7kohjv63q.europe-west1.sql.goog"                                                                              # platform output dns_name
 
