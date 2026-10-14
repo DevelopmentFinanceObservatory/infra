@@ -8,7 +8,7 @@ locals {
   # from the first apply, so until serve_from_lb flips it also reaches the
   # holding-page load balancer in one-data-commons. That is ONE's own origin,
   # and the exposure is accepted.
-  origin_hosts = [var.domain, local.preview_host]
+  origin_hosts = [var.domain, local.preview_host, local.mcp_host]
 
   # The website's data API routes, which it proxies to the search, datasets
   # and graph backends. The legacy /api/<name> prefixes rewrite onto the same
@@ -95,6 +95,21 @@ resource "cloudflare_ruleset" "redirects" {
       ref         = "www_to_apex"
       description = "Redirect www to the apex, keeping the path and query."
       expression  = "http.host eq \"www.${var.domain}\""
+      action      = "redirect"
+      action_parameters = {
+        from_value = {
+          status_code           = 301
+          preserve_query_string = true
+          target_url = {
+            expression = "concat(\"https://${var.domain}\", http.request.uri.path)"
+          }
+        }
+      }
+    },
+    {
+      ref         = "mcp_host_to_apex"
+      description = "Redirect every path on the MCP host except /mcp to the apex, keeping the path and query."
+      expression  = "http.host eq \"${local.mcp_host}\" and not starts_with(lower(http.request.uri.path), \"/mcp\")"
       action      = "redirect"
       action_parameters = {
         from_value = {
