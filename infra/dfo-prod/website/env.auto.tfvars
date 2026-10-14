@@ -28,6 +28,12 @@ website_url = "https://developmentfinance.org"
 # "client, cloudflare-edge, lb", so the client sits 2 entries from the right.
 trusted_proxy_hops = 2
 
+# Only the edge load balancer reaches the service, and its Cloud Armor policy
+# admits only requests carrying Cloudflare's origin secret. A request to the
+# run.app URL is refused, so no client can skip Cloudflare's rate limit and
+# WAF, or choose its own X-Forwarded-For entry at the trusted depth.
+ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+
 # Terraform refuses to destroy or replace this stack's Cloud Run services and Jobs.
 stateless_deletion_protection = true
 
