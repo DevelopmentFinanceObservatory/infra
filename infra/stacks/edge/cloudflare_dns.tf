@@ -9,6 +9,7 @@ locals {
 
   site_ipv4    = var.serve_from_lb ? google_compute_global_address.edge.address : local.holding_page_ipv4
   preview_host = "preview.${var.domain}"
+  mcp_host     = "mcp.${var.domain}"
 }
 
 # Import adopts the apex and www records in place. They point at the holding
@@ -50,6 +51,19 @@ resource "cloudflare_dns_record" "www" {
 resource "cloudflare_dns_record" "preview" {
   zone_id = var.cloudflare_zone_id
   name    = local.preview_host
+  type    = "A"
+  content = google_compute_global_address.edge.address
+  proxied = true
+  ttl     = 1
+  comment = "Managed by Terraform: infra/stacks/edge"
+}
+
+# A second address for the MCP endpoint, so https://mcp.<domain>/mcp works
+# as well as https://<domain>/mcp. The redirect in cloudflare_rules.tf sends
+# every other path on this host to the apex.
+resource "cloudflare_dns_record" "mcp" {
+  zone_id = var.cloudflare_zone_id
+  name    = local.mcp_host
   type    = "A"
   content = google_compute_global_address.edge.address
   proxied = true

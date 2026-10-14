@@ -17,6 +17,10 @@ website_deployer_account_id    = "dfo-website-deployer"
 website_artifact_repository_id = "dfo-website"
 state_bucket                   = "tf-state-dfo-prod-prod-fin-observatory"
 
+# Hosts the Cloud Billing export for the billing account that pays for dev,
+# prod and the Gemini key projects.
+billing_export_dataset_id = "billing_export"
+
 # plan-prod.yml's plan job runs PR code on pull_request_target, whose ref is
 # refs/heads/main, the applier's ref. The planner binds to the `plan`
 # environment on main and the applier to `production` on main, so that job's
