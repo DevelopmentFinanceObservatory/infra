@@ -12,6 +12,7 @@ platform_postgres_instance_name     = "dfo-dev-platform-postgres"
 platform_postgres_connection_name   = "dev-fin-observatory:northamerica-northeast1:dfo-dev-platform-postgres"
 studio_api_base                     = "https://dfo-dev-ai-zms5lj4zhq-nn.a.run.app"
 search_api_base                     = "https://dfo-dev-apis-zms5lj4zhq-nn.a.run.app"
+apis_service_name                   = "dfo-dev-apis" # apis output service_name
 website_url                         = "https://dfo-dev-website-staging-zms5lj4zhq-nn.a.run.app"
 datasets_pin_principal_secret_id    = "dfo-dev-datasets-pin-principal"
 live_refresh_principal_secret_id    = "dfo-dev-live-refresh-principal"

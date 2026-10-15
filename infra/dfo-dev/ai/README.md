@@ -10,9 +10,13 @@ The service reads `GOOGLE_API_KEY` from the process environment (google-adk's un
 
 ## data-mcp environment
 
-This stack sets one variable, `DFO_APIS_URL`, for the data-mcp component mounted inside the harness, which holds `/api/search` and `/api/datasets` as path-prefix constants to append to it. Unset, `DFO_APIS_URL` falls back to `http://localhost:8083` — an address nothing listens on inside this container. It is wired to the `dfo-dev-apis` Cloud Run service via `var.dfo_apis_url`, a bare host with no path suffix.
+This stack sets two variables, `DFO_APIS_URL` and `DFO_SITE_ORIGIN`, for the data-mcp component mounted inside the harness. data-mcp holds `/api/search` and `/api/datasets` as path-prefix constants to append to `DFO_APIS_URL`. Unset, `DFO_APIS_URL` falls back to `http://localhost:8083` — an address nothing listens on inside this container. It is wired to the `dfo-dev-apis` Cloud Run service via `var.dfo_apis_url`, a bare host with no path suffix.
 
 `var.dfo_apis_url` reaches this stack as a plain value in `env.auto.tfvars`, copied from the `apis` stack's `service_url` output rather than read via `terraform_remote_state` — the same rationale the `apis` stack records for its own cross-stack values — so a plan here never depends on that stack having applied.
+
+`DFO_SITE_ORIGIN` is the website's public origin with no path, set from `var.site_origin`. Its value is the `dfo-dev-website-staging` origin. data-mcp builds the artifact links it hands to models from it, and the website proxies those links to the apis service. The service fails to start without it. It reaches this stack as a plain value in `env.auto.tfvars`, copied from the `website` stack's `website_url`, for the same no-dependency-on-apply reason as `var.dfo_apis_url`.
+
+`google_cloud_run_v2_service_iam_member.ai_apis_invoker` in `main.tf` grants the runtime service account `roles/run.invoker` on the apis service, named by `var.apis_service_name`, a plain value copied from the `apis` stack's `service_name` output. The harness sends an ID token as that account on its calls to `DFO_APIS_URL`; see "Caller authentication" in the `apis` stack's README.
 
 `DATA_MCP_URL` and `ANALYSIS_MCP_URL`, which the harness also reads, stay unset. The harness derives both from `PORT` and reaches the two MCP servers over in-container loopback, which is the address this single-service topology wants.
 
@@ -22,7 +26,7 @@ This stack sets one variable, `DFO_APIS_URL`, for the data-mcp component mounted
 
 ## analysis-mcp environment
 
-The service receives `FRAME_STORE_BUCKET`, the name of the bucket for content-addressed analysis frames. The runtime service account can create and read objects. The bucket has no age rule, because a derived frame's object holds the only copy of its op-spec. [dfo-ai#187](https://github.com/ONEcampaign/dfo-ai/pull/187) owns the application change that writes analysis frames to the bucket.
+The service receives `FRAME_STORE_BUCKET`, the name of the bucket for content-addressed analysis frames. The runtime service account can create and read objects. The bucket has no age rule, because a derived frame's object holds the only copy of its op-spec. The ai service does not yet write analysis frames to the bucket.
 
 ## Studio engine
 
@@ -60,7 +64,7 @@ This is the interim scheme: #12's settled end-state for proxy-to-harness auth is
 
 ## MCP API token
 
-`mcp_token.tf` generates the shared bearer secret the harness's MCP mounts (`/mcp/data`, `/mcp/analysis`, `/mcp/presentation`) compare requests against, stores it as `dfo-dev-mcp-api-token`, and mounts it on the service as `MCP_API_TOKEN`. Unset, the harness mints a random token at startup for its own in-process clients only, so this mount is what lets callers outside the process — including the out-of-repo e2e test daemon that points at this service's deployed URL — reach the MCP mounts instead of drawing a `401`. Health routes are unaffected either way. [dfo-ai#190](https://github.com/ONEcampaign/dfo-ai/pull/190) owns the application change that puts the bearer gate on the three mounts and reads this variable.
+`mcp_token.tf` generates the shared bearer secret the harness's MCP mounts (`/mcp/data`, `/mcp/analysis`, `/mcp/presentation`) compare requests against, stores it as `dfo-dev-mcp-api-token`, and mounts it on the service as `MCP_API_TOKEN`. Unset, the harness mints a random token at startup for its own in-process clients only, so this mount is what lets callers outside the process — including the out-of-repo e2e test daemon that points at this service's deployed URL — reach the MCP mounts instead of drawing a `401`. Health routes are unaffected either way. The bearer gate on the three mounts lives in the ai repository's harness, which reads this variable.
 
 Humans who call the MCP mounts directly, and whoever configures the e2e test daemon, are granted read on this one secret through `var.mcp_token_readers`. Rotation is bumping `mcp_api_token_version`: the replacement version is created before the old one is destroyed, and the service's mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new token and warm and new instances can never disagree.
 

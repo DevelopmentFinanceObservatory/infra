@@ -15,11 +15,15 @@ platform_postgres_connection_name        = "prod-fin-observatory:europe-west1:df
 studio_token_readers = []
 
 dfo_apis_url                        = "https://dfo-prod-apis-533754688761.europe-west1.run.app"                                                                       # apis service, deterministic Cloud Run URL
+apis_service_name                   = "dfo-prod-apis"                                                                                                                 # apis output service_name
 platform_psc_service_attachment_uri = "projects/ic74f9d0cb948e2dap-tp/regions/europe-west1/serviceAttachments/a-b588fda303da-psc-service-attachment-18d4894ca2dc23a8" # platform output psc_service_attachment_uri
 platform_dns_name                   = "b588fda303da.1b8f7kohjv63q.europe-west1.sql.goog"                                                                              # platform output dns_name
 # The website's public origin (the website stack's website_url) plus
 # /mcp/presentation.
 presentation_public_url = "https://developmentfinance.org/mcp/presentation"
+
+# The website's public origin, the website stack's website_url.
+site_origin = "https://developmentfinance.org"
 
 # Terraform refuses to destroy or replace this stack's Cloud Run services and Jobs.
 stateless_deletion_protection = true

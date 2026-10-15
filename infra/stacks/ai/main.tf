@@ -88,6 +88,8 @@ module "ai_service" {
     FRAME_STORE_BUCKET      = google_storage_bucket.materialisation_store.name
     # The public origin and path prefix presentation-mcp's app views load their theme stylesheet from. See var.presentation_public_url.
     PRESENTATION_PUBLIC_URL = var.presentation_public_url
+    # The website origin data-mcp builds artifact links from. See var.site_origin.
+    DFO_SITE_ORIGIN = var.site_origin
     # The combined MCP server's service-wide ceiling on tool calls, one bucket
     # per instance shared by every outside caller (harness.combined_mcp).
     COMBINED_MCP_REQUESTS_PER_S = "20"
@@ -160,4 +162,15 @@ module "ai_service" {
     google_sql_provision_script.ai_sessions_revoke_public_connect.id,
     google_sql_provision_script.ai_sessions_schema_grant.id,
   ]
+}
+
+# The ai service calls the apis service at DFO_APIS_URL with an ID token
+# minted as this runtime account. The grant lives here, beside the account, because the apis stack
+# applies first and so cannot name an account this stack creates.
+resource "google_cloud_run_v2_service_iam_member" "ai_apis_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = var.apis_service_name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${module.ai_service.runtime_service_account_email}"
 }

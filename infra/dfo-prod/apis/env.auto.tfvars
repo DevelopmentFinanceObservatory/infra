@@ -34,3 +34,11 @@ stateless_deletion_protection = true
 # One warm datasets worker, so the first download after an idle spell starts
 # at once. cpu_idle bills it at the idle rate between operations.
 datasets_worker_min_instances = 1
+
+# True keeps the run.app URL open to anonymous callers. It turns false once
+# the apis request logs show every caller sending an ID token; see "Caller
+# authentication" in infra/dfo-dev/apis/README.md.
+allow_unauthenticated = true
+# Principals no stack owns, such as a developers' group. The website and ai
+# stacks grant their own runtime accounts invoker on this service.
+invoker_members = []

@@ -37,10 +37,10 @@
 # environment. It runs in dfo-dev only and needs only foundation applied.
 #
 # Run AFTER foundation and every stack the table reads are applied in that
-# environment (their outputs must exist): the stack itself, and apis as well
-# for dcp, whose DFO_APIS_BASE_URL is the apis service URL. Every output is
-# read and every environment checked before anything is written, so a
-# missing one changes nothing.
+# environment (their outputs must exist): the stack itself, and website as
+# well for dcp, whose DFO_SITE_ORIGIN is the website's public origin. Every
+# output is read and every environment checked before anything is written,
+# so a missing one changes nothing.
 #
 # Usage: scripts/handoff.sh <env> <stack>
 #   scripts/handoff.sh dfo-dev ai        # DevelopmentFinanceObservatory/ai, environment dev

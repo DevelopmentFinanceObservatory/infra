@@ -191,3 +191,24 @@ variable "datasets_worker_min_instances" {
   type        = number
   default     = 0
 }
+
+# Each environment sets both in env.auto.tfvars. The apis service's only
+# identity boundary is Cloud Run IAM, so with allow_unauthenticated false
+# a caller reaches it only by sending a Google ID token whose audience is the
+# service URL, minted as an identity listed in invoker_members.
+variable "allow_unauthenticated" {
+  description = "Grant roles/run.invoker on the apis service to allUsers. True lets any caller reach the run.app URL with no token. False admits only the identities in invoker_members, the grants other files in this stack make on the service by resource reference, and the grants the website and ai stacks make for their own runtime service accounts."
+  type        = bool
+  default     = true
+}
+
+variable "invoker_members" {
+  description = "IAM members granted roles/run.invoker on the apis service, such as serviceAccount:<email> or group:<email>. Each caller sends an ID token minted as one of these identities in X-Serverless-Authorization, with the service URL as its audience. For principals no stack owns, such as a group of developers. The website and ai stacks grant their own runtime service accounts invoker on this service, since they apply after this stack."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for m in var.invoker_members : !contains(["allUsers", "allAuthenticatedUsers"], m)])
+    error_message = "invoker_members names identities. Public access is allow_unauthenticated."
+  }
+}

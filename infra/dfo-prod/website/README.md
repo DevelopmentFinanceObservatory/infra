@@ -4,7 +4,7 @@ Prod's copy of the website stack: the `dfo-prod-website` Cloud Run service, its 
 
 ## Apply order
 
-Website applies last, after `foundation`, `platform`, `dcp`, `apis`, and `ai`. It reads the `apis` stack's `dfo-prod-datasets-pin-principal` secret and the `ai` stack's `dfo-prod-studio-api-token` and `dfo-prod-mcp-api-token` secrets, and plan fails until they exist. The commented lines in `env.auto.tfvars` take values from those stacks' outputs.
+Website applies last, after `foundation`, `platform`, `dcp`, `apis`, and `ai`. It reads the `apis` stack's `dfo-prod-datasets-pin-principal` secret and the `ai` stack's `dfo-prod-studio-api-token` and `dfo-prod-mcp-api-token` secrets, and plan fails until they exist. It also grants its runtime account `roles/run.invoker` on `dfo-prod-apis`, so apply fails until that service exists. The commented lines in `env.auto.tfvars` take values from those stacks' outputs.
 
 ## Made by hand first
 
