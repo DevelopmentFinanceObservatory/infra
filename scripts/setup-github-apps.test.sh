@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end tests for setup-github-apps.sh against a stub `gh`, so nothing
-# reaches GitHub. The stub logs every call and keeps each environment's
-# branch policies in a state directory, so the converge step runs as it
-# would against GitHub. Not wired into CI or pre-commit. Run by hand after
-# touching the script, github-environment.sh or deploy-targets.sh:
+# reaches GitHub. The stub logs every call and answers environment reads as
+# setup-github-repos.sh leaves them. Not wired into CI or pre-commit. Run by
+# hand after touching the script, github-environment.sh or
+# deploy-targets.sh:
 #   scripts/setup-github-apps.test.sh
 set -euo pipefail
 
@@ -15,20 +15,20 @@ mkdir "$WORK/bin" "$WORK/keys"
 REPO="$WORK/repo"
 mkdir -p "$REPO/scripts"
 cp "$SCRIPT_DIR"/deploy-targets.sh "$SCRIPT_DIR"/github-environment.sh "$SCRIPT_DIR"/setup-github-apps.sh "$REPO/scripts/"
-export STUB_LOG="$WORK/calls.log" STUB_STATE="$WORK/state"
+export STUB_LOG="$WORK/calls.log"
 
 # Fake keys whose bodies are unique strings, so a leak shows up in a grep.
-READER_KEY="$WORK/keys/reader.pem"
-RELEASE_KEY="$WORK/keys/release.pem"
-printf '%s\n' "-----BEGIN RSA PRIVATE KEY-----" "READERSECRETBODY" "-----END RSA PRIVATE KEY-----" >"$READER_KEY"
-printf '%s\n' "-----BEGIN PRIVATE KEY-----" "RELEASESECRETBODY" "-----END PRIVATE KEY-----" >"$RELEASE_KEY"
+for app in pin docsync release; do
+    printf '%s\n' "-----BEGIN RSA PRIVATE KEY-----" "$(echo "$app" | tr '[:lower:]' '[:upper:]')SECRETBODY" "-----END RSA PRIVATE KEY-----" >"$WORK/keys/$app.pem"
+done
 printf '%s\n' "not a key" >"$WORK/keys/bad.pem"
 
 # gh: logs its arguments. A `secret set` also logs the stdin it was fed, as
-# `stdin=<first body line>`, so a case can check which key reached which
-# secret. An environment GET answers 404 unless $STUB_STATE holds it, or
-# answers with a required_reviewers rule for the path in $STUB_FOREIGN. A
-# policy POST records the branch; a listing prints what was recorded.
+# `stdin=<second line>`, so a case can check which key reached which
+# secret. An environment GET answers with custom branch policies, and a
+# policy listing with `main` for production and `dev` otherwise, as
+# setup-github-repos.sh leaves them. The environment path in
+# $STUB_MISSING_ENV answers 404.
 cat >"$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 if [ "$1 $2" = "secret set" ]; then
@@ -37,25 +37,18 @@ else
     echo "gh $*" >>"$STUB_LOG"
 fi
 [ "$1" = api ] || exit 0
+case "$*" in *--method*) exit 0 ;; esac
 path=""
 for a in "$@"; do case "$a" in repos/*) path="$a" ;; esac; done
-key="$STUB_STATE/$(printf '%s' "${path%/deployment-branch-policies*}" | tr '/' '_')"
-case "$*" in
-*"--method PUT"*) mkdir -p "$STUB_STATE"; touch "$key.env" ;;
-*"--method POST"*) mkdir -p "$STUB_STATE"; for a in "$@"; do case "$a" in name=*) echo "${a#name=}" >"$key.branch" ;; esac; done ;;
-*"--method"*) ;;
-*deployment-branch-policies*'[.id,'*) [ -f "$key.branch" ] && printf '1\t%s\tbranch\n' "$(cat "$key.branch")" ;;
-*deployment-branch-policies*) [ -f "$key.branch" ] && printf '%s\tbranch\n' "$(cat "$key.branch")" ;;
-*/environments/*)
-    if [ "$path" = "${STUB_FOREIGN:-}" ]; then
-        echo '{"protection_rules":[{"type":"required_reviewers"}],"deployment_branch_policy":null}'
-    elif [ -f "$key.env" ]; then
-        echo '{"protection_rules":[{"type":"branch_policy"}],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
-    else
-        echo "gh: Not Found (HTTP 404)" >&2
-        exit 1
-    fi
-    ;;
+env_path="${path%/deployment-branch-policies}"
+if [ "$env_path" = "${STUB_MISSING_ENV:-}" ]; then
+    echo "gh: Not Found (HTTP 404)" >&2
+    exit 1
+fi
+case "$path" in
+*/production/deployment-branch-policies) printf 'main\tbranch\n' ;;
+*/deployment-branch-policies) printf 'dev\tbranch\n' ;;
+*/environments/*) echo '{"protection_rules":[{"type":"branch_policy"}],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' ;;
 esac
 exit 0
 STUB
@@ -65,11 +58,10 @@ export PATH="$WORK/bin:$PATH"
 
 failures=0
 
-# run <args...>: runs the script with fresh state and log, stdin closed so it
-# can never prompt, leaving $status, $out and $calls.
+# run <args...>: runs the script with a fresh log, stdin closed, leaving
+# $status, $out and $calls.
 run() {
     : >"$STUB_LOG"
-    rm -rf "$STUB_STATE"
     set +e
     out="$("$REPO/scripts/setup-github-apps.sh" "$@" 2>&1 </dev/null)"
     status=$?
@@ -95,112 +87,59 @@ lacks() { [[ "$calls" != *"$1"* ]] && echo true || echo false; }
 count() { grep -cE "$1" "$STUB_LOG" || true; }
 no_key_in_output() { [[ "$out" != *SECRETBODY* ]] && echo true || echo false; }
 
-reader_args=(--reader-key "$READER_KEY" --reader-client-id Iv23liReader)
-release_args=(--release-key "$RELEASE_KEY" --release-client-id Iv23liRelease)
-ten="infra dcp apis ai website pipelines docs ontology spec-kit skills"
+pin_args=(--pin-key "$WORK/keys/pin.pem" --pin-client-id Iv23liPin)
+docsync_args=(--docsync-key "$WORK/keys/docsync.pem" --docsync-client-id Iv23liDocsync)
+release_args=(--release-key "$WORK/keys/release.pem" --release-client-id Iv23liRelease)
 
-# 1. dfo-dev: the reader pair on the five repos that mint it, nothing else.
-run dfo-dev "${reader_args[@]}"
-check "dev exits 0" "$(is "$status" 0)"
+# 1. All three Apps: each pair lands in its one environment, and nowhere
+# else.
+run "${pin_args[@]}" "${docsync_args[@]}" "${release_args[@]}"
+check "all exits 0" "$(is "$status" 0)"
 covered=0
-for name in ai apis docs pipelines skills; do
-    check "dev sets the reader variable on dfo-$name" "$(has "gh variable set READER_APP_CLIENT_ID --repo ONEcampaign/dfo-$name --body Iv23liReader")"
-    check "dev sends the reader key to dfo-$name" "$(has "gh secret set READER_APP_PRIVATE_KEY --repo ONEcampaign/dfo-$name stdin=READERSECRETBODY")"
+while read -r prefix repo env id key; do
+    check "sets $prefix variable in $repo $env" "$(has "gh variable set ${prefix}_CLIENT_ID --env $env --repo DevelopmentFinanceObservatory/$repo --body $id")"
+    check "sends the $prefix key to $repo $env" "$(has "gh secret set ${prefix}_PRIVATE_KEY --env $env --repo DevelopmentFinanceObservatory/$repo stdin=$key")"
+    check "checks $repo $env before writing" "$(has "gh api repos/DevelopmentFinanceObservatory/$repo/environments/$env")"
     covered=$((covered + 1))
-done
-check "dev covered 5 repos (covered $covered)" "$(is "$covered" 5)"
-check "dev writes exactly 10 values" "$(is "$(count '^gh (variable|secret) set ')" 10)"
-check "dev creates no environment" "$(lacks '--method')"
-check "dev writes nothing environment-scoped" "$(lacks ' --env ')"
-check "dev sets no release value" "$(lacks RELEASE_APP)"
-check "dev touches no new-org repo" "$(lacks DevelopmentFinanceObservatory)"
-check "dev prints no key" "$(no_key_in_output)"
+done <<<"PIN_APP dcp dev Iv23liPin PINSECRETBODY
+DOCSYNC_APP docs docsync Iv23liDocsync DOCSYNCSECRETBODY
+RELEASE_APP dcp production Iv23liRelease RELEASESECRETBODY"
+check "covered 3 Apps (covered $covered)" "$(is "$covered" 3)"
+check "writes exactly 6 values" "$(is "$(count '^gh (variable|secret) set ')" 6)"
+check "writes nothing at repo level" "$(is "$(grep -E '^gh (variable|secret) set ' "$STUB_LOG" | grep -vc ' --env ' || true)" 0)"
+check "changes no environment" "$(lacks '--method')"
+check "sets no reader value" "$(lacks READER_APP)"
+check "touches no ONEcampaign repo" "$(lacks ONEcampaign)"
+check "prints no key" "$(no_key_in_output)"
 
-# 2. dfo-prod: the reader pair in sync-guard on all ten repos, sync and plan
-# on infra, and production on ai and apis; the release pair in sync-guard on
-# all ten, sync on infra and production on dcp. Each environment is created
-# with a main-only policy. infra's production is created with the same
-# policy and holds no value. No repo holds the reader pair at repo level.
-run dfo-prod "${reader_args[@]}" "${release_args[@]}"
-check "prod exits 0" "$(is "$status" 0)"
-covered=0
-for name in $ten; do
-    slug="DevelopmentFinanceObservatory/$name"
-    check "prod sets the reader variable in $name sync-guard" "$(has "gh variable set READER_APP_CLIENT_ID --env sync-guard --repo $slug --body Iv23liReader")"
-    check "prod sends the reader key to $name sync-guard" "$(has "gh secret set READER_APP_PRIVATE_KEY --env sync-guard --repo $slug stdin=READERSECRETBODY")"
-    check "prod restricts $name sync-guard to main" "$(has "gh api --method POST repos/$slug/environments/sync-guard/deployment-branch-policies -f name=main -f type=branch")"
-    check "prod sets the release pair in $name sync-guard" "$(has "gh secret set RELEASE_APP_PRIVATE_KEY --env sync-guard --repo $slug stdin=RELEASESECRETBODY")"
-    covered=$((covered + 1))
-done
-check "prod covered 10 repos (covered $covered)" "$(is "$covered" 10)"
-covered=0
-while read -r name env; do
-    check "prod restricts $name $env to main" "$(has "gh api --method POST repos/DevelopmentFinanceObservatory/$name/environments/$env/deployment-branch-policies -f name=main -f type=branch")"
-    check "prod sets the reader variable in $name $env" "$(has "gh variable set READER_APP_CLIENT_ID --env $env --repo DevelopmentFinanceObservatory/$name --body Iv23liReader")"
-    check "prod sends the reader key to $name $env" "$(has "gh secret set READER_APP_PRIVATE_KEY --env $env --repo DevelopmentFinanceObservatory/$name stdin=READERSECRETBODY")"
-    covered=$((covered + 1))
-done <<<"infra sync
-infra plan
-ai production
-apis production"
-check "prod covered 4 further reader environments (covered $covered)" "$(is "$covered" 4)"
-check "prod writes the reader pair in exactly 14 environments" "$(is "$(count '^gh (variable|secret) set READER_APP_[A-Z_]+ --env ')" 28)"
-check "prod writes no repo-level reader value" "$(is "$(count 'READER_APP_[A-Z_]+ --repo')" 0)"
-check "prod sends the reader key nowhere but those environments" "$(is "$(count 'stdin=READERSECRETBODY')" 14)"
-check "prod puts no reader value in dcp production" "$(lacks "READER_APP_CLIENT_ID --env production --repo DevelopmentFinanceObservatory/dcp")"
-while read -r name env; do
-    check "prod restricts $name $env to main" "$(has "gh api --method POST repos/DevelopmentFinanceObservatory/$name/environments/$env/deployment-branch-policies -f name=main -f type=branch")"
-    check "prod sets the release variable in $name $env" "$(has "gh variable set RELEASE_APP_CLIENT_ID --env $env --repo DevelopmentFinanceObservatory/$name --body Iv23liRelease")"
-    check "prod sends the release key to $name $env" "$(has "gh secret set RELEASE_APP_PRIVATE_KEY --env $env --repo DevelopmentFinanceObservatory/$name stdin=RELEASESECRETBODY")"
-done <<<"infra sync
-dcp production"
-check "prod restricts infra production to main" "$(has "gh api --method POST repos/DevelopmentFinanceObservatory/infra/environments/production/deployment-branch-policies -f name=main -f type=branch")"
-check "prod writes no value in infra production" "$(lacks "--env production --repo DevelopmentFinanceObservatory/infra")"
-check "prod writes no release value in infra plan" "$(lacks "RELEASE_APP_CLIENT_ID --env plan")"
-check "prod writes exactly 52 values" "$(is "$(count '^gh (variable|secret) set ')" 52)"
-check "prod creates exactly 16 environments" "$(is "$(count '^gh api --method PUT ')" 16)"
-check "prod creates each environment once" "$(is "$(grep -E '^gh api --method PUT ' "$STUB_LOG" | sort | uniq -d | wc -l | tr -d ' ')" 0)"
-check "prod never sends the release key to a repo-level secret" "$(is "$(count 'RELEASE_APP_PRIVATE_KEY --repo')" 0)"
-check "prod touches no ONEcampaign repo" "$(lacks ONEcampaign/)"
-check "prod prints no key" "$(no_key_in_output)"
+# 2. One App alone, as for a key rotation.
+run "${release_args[@]}"
+check "release alone exits 0" "$(is "$status" 0)"
+check "release alone writes 2 values" "$(is "$(count '^gh (variable|secret) set ')" 2)"
+check "release alone leaves pin alone" "$(lacks PIN_APP)"
 
-# 3. A rerun against converged environments makes no policy write. The
-# state survives because this case skips run's reset.
-: >"$STUB_LOG"
-set +e
-out="$("$REPO/scripts/setup-github-apps.sh" dfo-prod "${reader_args[@]}" "${release_args[@]}" 2>&1 </dev/null)"
-status=$?
-set -e
-calls="$(cat "$STUB_LOG")"
-check "prod rerun exits 0" "$(is "$status" 0)"
-check "prod rerun makes no policy write" "$(lacks '--method')"
-
-# 4. --dry-run reads but writes nothing, and prints every write it would
-# make, naming each key's file in place of its contents.
-run dfo-prod --dry-run "${reader_args[@]}" "${release_args[@]}"
+# 3. --dry-run reads but writes nothing, naming the key file in place of
+# its contents.
+run --dry-run "${pin_args[@]}"
 check "dry run exits 0" "$(is "$status" 0)"
-check "dry run makes no write" "$(is "$(count '^gh (variable set|secret set|api --method)')" 0)"
-check "dry run prints 52 value writes" "$(is "$(printf '%s\n' "$out" | grep -cE '^DRY-RUN: gh (variable|secret) set ')" 52)"
-check "dry run prints 16 environment creations" "$(is "$(printf '%s\n' "$out" | grep -cE '^DRY-RUN: gh api --method PUT ')" 16)"
-check "dry run prints 16 policy creations" "$(is "$(printf '%s\n' "$out" | grep -cE '^DRY-RUN: gh api --method POST ')" 16)"
-check "dry run names the reader key file for infra plan" "$(says "secret set READER_APP_PRIVATE_KEY --env plan --repo DevelopmentFinanceObservatory/infra < $READER_KEY")"
-check "dry run prints the reader variable in apis production" "$(says "DRY-RUN: gh variable set READER_APP_CLIENT_ID --env production --repo DevelopmentFinanceObservatory/apis --body Iv23liReader")"
-check "dry run prints no repo-level reader write" "$(is "$(printf '%s\n' "$out" | grep -cE 'READER_APP_[A-Z_]+ --repo')" 0)"
-check "dry run summary counts reader environments" "$(says "set the reader pair in 14 environments")"
+check "dry run makes no write" "$(is "$(count '^gh (variable set|secret set)')" 0)"
+check "dry run prints the key file" "$(says "DRY-RUN: gh secret set PIN_APP_PRIVATE_KEY --env dev --repo DevelopmentFinanceObservatory/dcp < $WORK/keys/pin.pem")"
 check "dry run prints no key" "$(no_key_in_output)"
 
-# 5. An environment carrying another protection rule stops the run before
-# any value is written, whether it holds release values or none.
-for foreign in dcp/environments/production infra/environments/plan apis/environments/production; do
-    export STUB_FOREIGN="repos/DevelopmentFinanceObservatory/$foreign"
-    run dfo-prod "${reader_args[@]}" "${release_args[@]}"
-    unset STUB_FOREIGN
-    check "foreign protection rule on $foreign exits 1" "$(is "$status" 1)"
-    check "foreign protection rule on $foreign names the rule" "$(says 'required_reviewers')"
-    check "foreign protection rule on $foreign writes no value" "$(lacks ' set ')"
-done
+# 4. A missing environment stops a real run before any write; a dry run
+# reports it and goes on.
+export STUB_MISSING_ENV=repos/DevelopmentFinanceObservatory/docs/environments/docsync
+run "${pin_args[@]}" "${docsync_args[@]}"
+check "missing environment exits 1" "$(is "$status" 1)"
+check "missing environment is named" "$(says 'DevelopmentFinanceObservatory/docs (docsync): environment does not exist')"
+check "missing environment writes nothing, pin included" "$(lacks ' set ')"
+check "missing environment creates nothing" "$(lacks '--method')"
+run --dry-run "${docsync_args[@]}"
+check "dry run with a missing environment exits 0" "$(is "$status" 0)"
+check "dry run with a missing environment says a real run stops" "$(says 'a real run stops here')"
+unset STUB_MISSING_ENV
 
-# 6. Bad or missing input fails before any gh call.
+# 5. Bad or missing input fails before any gh call.
 expect_refused() {
     local label="$1" fragment="$2"
     shift 2
@@ -209,17 +148,14 @@ expect_refused() {
     check "$label says '$fragment'" "$(says "$fragment")"
     check "$label makes no gh call" "$(is "$calls" "")"
 }
-expect_refused "no environment" "unknown environment ''" "${reader_args[@]}"
-expect_refused "unknown environment" "unknown environment 'dfo-staging'" dfo-staging "${reader_args[@]}"
-expect_refused "missing reader key off a terminal" "missing --reader-key" dfo-dev --reader-client-id Iv23liReader
-expect_refused "missing reader client ID off a terminal" "missing --reader-client-id" dfo-dev --reader-key "$READER_KEY"
-expect_refused "missing release key in prod" "missing --release-key" dfo-prod "${reader_args[@]}" --release-client-id Iv23liRelease
-expect_refused "release values in dev" "dfo-dev takes no release App credentials" dfo-dev "${reader_args[@]}" "${release_args[@]}"
-expect_refused "unreadable key" "is not a readable file" dfo-dev --reader-key "$WORK/keys/none.pem" --reader-client-id Iv23liReader
-expect_refused "non-PEM key" "does not start with a PEM private key header" dfo-dev --reader-key "$WORK/keys/bad.pem" --reader-client-id Iv23liReader
-expect_refused "numeric App ID" "is not a GitHub App client ID" dfo-dev --reader-key "$READER_KEY" --reader-client-id 123456
-expect_refused "option without a value" "--reader-key needs a value" dfo-dev --reader-key
-expect_refused "unknown option" "Unrecognized option: --force" dfo-dev --force
+expect_refused "no App" "give at least one App's key and client ID"
+expect_refused "half a pair" "give both --pin-key and --pin-client-id" --pin-key "$WORK/keys/pin.pem"
+expect_refused "reader App" "Unrecognized argument: --reader-key" --reader-key "$WORK/keys/pin.pem"
+expect_refused "an environment argument" "Unrecognized argument: dfo-prod" dfo-prod "${pin_args[@]}"
+expect_refused "unreadable key" "is not a readable file" --pin-key "$WORK/keys/none.pem" --pin-client-id Iv23liPin
+expect_refused "non-PEM key" "does not start with a PEM private key header" --pin-key "$WORK/keys/bad.pem" --pin-client-id Iv23liPin
+expect_refused "numeric App ID" "is not a GitHub App client ID" --pin-key "$WORK/keys/pin.pem" --pin-client-id 123456
+expect_refused "option without a value" "--docsync-key needs a value" --docsync-key
 
 run --help
 check "--help exits 0 and prints usage" "$([ "$status" -eq 0 ] && [[ "$out" == *"Usage: scripts/setup-github-apps.sh"* ]] && echo true || echo false)"
