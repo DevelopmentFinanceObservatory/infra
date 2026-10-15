@@ -3,10 +3,11 @@
 # .github/workflows/apply.yml.
 #
 # Usage:
-#   terraform-stacks.sh environment <github-owner>
-#     Prints the environment directory under infra/ that this owner's copy of
-#     the repo plans and applies: dfo-dev for ONEcampaign, dfo-prod for
-#     DevelopmentFinanceObservatory. Any other owner exits 1.
+#   terraform-stacks.sh environment <branch>
+#     Prints the environment directory under infra/ that a branch plans and
+#     applies: dfo-dev for dev, dfo-prod for main. The branch is the push's
+#     branch for an apply and the pull request's base branch for a plan. Any
+#     other branch exits 1.
 #
 #   terraform-stacks.sh changed <environment> [--allow-removed] < changed-paths
 #     Reads repository-relative paths, one per line, and prints a compact JSON
@@ -41,11 +42,11 @@ annotate() {
     fi
 }
 
-environment_for_owner() {
+environment_for_branch() {
     case "$1" in
-        ONEcampaign) echo dfo-dev ;;
-        DevelopmentFinanceObservatory) echo dfo-prod ;;
-        *) fail "no Terraform environment for repository owner '$1'" ;;
+        dev) echo dfo-dev ;;
+        main) echo dfo-prod ;;
+        *) fail "no Terraform environment for branch '$1'" ;;
     esac
 }
 
@@ -128,9 +129,9 @@ changed_stacks() {
     done | jq -Rsc 'split("\n") | map(select(. != ""))'
 }
 
-[ $# -ge 2 ] || fail "usage: terraform-stacks.sh environment <owner> | changed <environment> [--allow-removed]"
+[ $# -ge 2 ] || fail "usage: terraform-stacks.sh environment <branch> | changed <environment> [--allow-removed]"
 case "$1" in
-    environment) environment_for_owner "$2" ;;
+    environment) environment_for_branch "$2" ;;
     changed)
         case "${3:-}" in "" | --allow-removed) ;; *) fail "unknown option '$3'" ;; esac
         changed_stacks "$2" "${3:-}"

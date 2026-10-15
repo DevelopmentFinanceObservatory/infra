@@ -15,3 +15,21 @@ The six sign-in secrets, each with at least one version, since a secret with no 
 - `dfo-prod-website-microsoft-client-id` and `-microsoft-client-secret`, from the Entra app.
 
 Each OAuth client's callback must name the origin set in `website_url`.
+
+## Feedback Slack webhook
+
+The stack creates `dfo-prod-website-feedback-slack-webhook` with a first version holding the literal `disabled`, which the app reads as "notifications off". Feedback submitted on the site then returns 200 and never reaches Slack, so after the first apply add the Slack incoming webhook URL as a new version. Prod posts to the same channel as staging, so the URL is the one in `dfo-dev-website-staging-feedback-slack-webhook`:
+
+```
+printf '%s' 'https://hooks.slack.com/services/…' | gcloud secrets versions add \
+  dfo-prod-website-feedback-slack-webhook \
+  --project prod-fin-observatory --data-file=-
+```
+
+The service mounts `latest`, but running instances keep the value they started with, and `min_instances = 1` keeps one running. Roll a new revision by dispatching the website's production deploy:
+
+```
+gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main
+```
+
+`infra/dfo-dev/website/README.md` explains the placeholder and rotation in full.

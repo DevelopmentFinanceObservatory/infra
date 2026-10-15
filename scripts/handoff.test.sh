@@ -25,25 +25,38 @@ for env in dfo-dev dfo-prod; do
 done
 export STUB_LOG="$WORK/calls.log"
 
-# gh: logs its arguments. `auth status` succeeds. A GET of an environment
-# returns one carrying only a branch policy and custom policies on; a listing
-# of its branch policies returns the single branch in $STUB_POLICY_BRANCH, so
-# the converge step finds nothing to change. Any other call, including every
-# write, is only logged.
+# gh: logs its arguments. `auth status` succeeds. An environment GET
+# answers as setup-github-repos.sh leaves it: `dev-plan` with no branch
+# policy, every other environment with custom policies, listing one branch:
+# $STUB_POLICY_BRANCH if set, else `main` for plan and production and `dev`
+# otherwise. The environment path in $STUB_MISSING_ENV answers 404. Any
+# other call, including every write, is only logged.
 cat >"$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "gh $*" >>"$STUB_LOG"
 case "$1 $2" in
 "auth status") exit 0 ;;
 esac
-if [ "$1" = api ]; then
-    case "$*" in
-    *--method*) exit 0 ;;
-    *'[.id,'*) printf '1\t%s\tbranch\n' "$STUB_POLICY_BRANCH" ;;
-    *deployment-branch-policies*) printf '%s\tbranch\n' "$STUB_POLICY_BRANCH" ;;
-    *) echo '{"protection_rules":[{"type":"branch_policy"}],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' ;;
-    esac
+[ "$1" = api ] || exit 0
+case "$*" in *--method*) exit 0 ;; esac
+path=""
+for a in "$@"; do case "$a" in repos/*) path="$a" ;; esac; done
+env_path="${path%/deployment-branch-policies}"
+if [ -n "${STUB_MISSING_ENV:-}" ] && [ "$env_path" = "$STUB_MISSING_ENV" ]; then
+    echo "gh: Not Found (HTTP 404)" >&2
+    exit 1
 fi
+env="${env_path##*/}"
+case "$env" in
+plan | production) branch=main ;;
+*) branch=dev ;;
+esac
+branch="${STUB_POLICY_BRANCH:-$branch}"
+case "$path" in
+*/deployment-branch-policies) printf '%s\tbranch\n' "$branch" ;;
+*/environments/dev-plan) echo '{"protection_rules":[],"deployment_branch_policy":null}' ;;
+*/environments/*) echo '{"protection_rules":[{"type":"branch_policy"}],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' ;;
+esac
 STUB
 # terraform: `output -json NAME` prints `"value-of-<env>/<stack>/NAME"`,
 # naming the Terraform root it ran in, so an assertion on a written value also
@@ -67,12 +80,11 @@ export PATH="$WORK/bin:$PATH"
 
 failures=0
 
-# run <script> <policy-branch> <args...>: runs a script with a fresh log,
-# leaving its status in $status, its output in $out and the log in $calls.
+# run <script> <args...>: runs a script with a fresh log, leaving its
+# status in $status, its output in $out and the log in $calls.
 run() {
     local script="$1"
-    export STUB_POLICY_BRANCH="$2"
-    shift 2
+    shift
     : >"$STUB_LOG"
     set +e
     out="$("$REPO/scripts/$script" "$@" 2>&1)"
@@ -99,18 +111,31 @@ says() { [[ "$out" == *"$1"* ]] && echo true || echo false; }
 has() { [[ "$calls" == *"$1"* ]] && echo true || echo false; }
 lacks() { [[ "$calls" != *"$1"* ]] && echo true || echo false; }
 
-# 1. handoff.sh writes every variable and secret each service repo's
+# 1. handoff.sh writes every variable and secret each environment's
 # workflows read, from the right Terraform output, in both environments.
 # This list is written out independently of deploy_values, so a change to
 # that table must be made here too.
 expected_values() {
-    if [ "$1" = infra ]; then
+    case "$1" in
+    infra-plan)
         printf '%s\n' \
             "var WIF_PROVIDER foundation workload_identity_provider" \
-            "var WIF_PLAN_SA foundation planner_service_account" \
+            "var WIF_PLAN_SA foundation planner_service_account"
+        return
+        ;;
+    infra-apply)
+        printf '%s\n' \
+            "var WIF_PROVIDER foundation workload_identity_provider" \
             "var WIF_APPLY_SA foundation applier_service_account"
         return
-    fi
+        ;;
+    docs-sync)
+        printf '%s\n' \
+            "var GCP_WIF_PROVIDER foundation workload_identity_provider" \
+            "var DOCSYNC_SERVICE_ACCOUNT foundation docs_sync_service_account"
+        return
+        ;;
+    esac
     local common="var REGION foundation region
 var PROJECT_ID foundation project_id
 secret WIF_PROVIDER foundation workload_identity_provider
@@ -141,126 +166,150 @@ secret WIF_SA foundation $1_deployer_service_account"
     esac
 }
 
-# expect_handoff <env> <stack> <repo> <gh-env> <policy-branch>: runs handoff.sh
-# and checks each expected write, that nothing else is written, and that no
-# other org's repo is touched.
-expect_handoff() {
-    local dfo_env="$1" stack="$2" repo="$3" gh_env="$4" kind name root output want writes other
-    run handoff.sh "$5" "$dfo_env" "$stack"
-    check "$dfo_env $stack exits 0" "$([ "$status" -eq 0 ] && echo true || echo false)"
-    want=0
+# expect_writes <env> <stack> <repo> <gh-env> <values>: checks the last run
+# set each of <values>' entries in <gh-env>, read from <env>'s roots, and
+# adds their count to $want.
+expect_writes() {
+    local dfo_env="$1" stack="$2" repo="$3" gh_env="$4" kind name root output
     while read -r kind name root output; do
         [ -z "$kind" ] && continue
         want=$((want + 1))
         [ "$kind" = var ] && kind=variable
-        check "$dfo_env $stack sets $kind $name from $root output $output" \
+        check "$dfo_env $stack sets $kind $name in $gh_env from $root output $output" \
             "$(has "gh $kind set $name --env $gh_env --repo $repo --body value-of-$dfo_env/$root/$output")"
-    done <<<"$(expected_values "$stack")"
-    writes="$(grep -cE '^gh (variable|secret) set ' "$STUB_LOG" || true)"
-    check "$dfo_env $stack writes exactly $want values (wrote $writes)" "$([ "$writes" -eq "$want" ] && echo true || echo false)"
-    if [ "$dfo_env" = dfo-prod ]; then other=ONEcampaign; else other=DevelopmentFinanceObservatory; fi
-    check "$dfo_env $stack touches no $other repo" "$(lacks "$other")"
-    check "$dfo_env $stack reads no other environment's roots" "$(lacks "value-of-$([ "$dfo_env" = dfo-prod ] && echo dfo-dev || echo dfo-prod)")"
+    done <<<"$(expected_values "$5")"
 }
+
+# finish_case <env> <stack>: the write count, and no other environment's roots.
+finish_case() {
+    local writes other
+    writes="$(grep -cE '^gh (variable|secret) set ' "$STUB_LOG" || true)"
+    check "$1 $2 writes exactly $want values (wrote $writes)" "$([ "$writes" -eq "$want" ] && echo true || echo false)"
+    other="$([ "$1" = dfo-prod ] && echo dfo-dev || echo dfo-prod)"
+    check "$1 $2 reads no $other root" "$(lacks "value-of-$other")"
+    check "$1 $2 writes nothing at repo level" "$(is "$(grep -E '^gh (variable|secret) set ' "$STUB_LOG" | grep -vc ' --env ' || true)" 0)"
+    check "$1 $2 changes no environment" "$(lacks '--method')"
+    check "$1 $2 touches no ONEcampaign repo" "$(lacks ONEcampaign)"
+}
+
+is() { [ "$1" = "$2" ] && echo true || echo false; }
 
 cases=0
-for stack in ai apis dcp; do
-    expect_handoff dfo-dev "$stack" "ONEcampaign/dfo-$stack" dev dev
-    cases=$((cases + 1))
+for dfo_env in dfo-dev dfo-prod; do
+    gh_env="$([ "$dfo_env" = dfo-dev ] && echo dev || echo production)"
+    for stack in ai apis dcp website; do
+        run handoff.sh "$dfo_env" "$stack"
+        check "$dfo_env $stack exits 0" "$(is "$status" 0)"
+        want=0
+        expect_writes "$dfo_env" "$stack" "DevelopmentFinanceObservatory/$stack" "$gh_env" "$stack"
+        finish_case "$dfo_env" "$stack"
+        cases=$((cases + 1))
+    done
 done
-expect_handoff dfo-dev website ONEcampaign/dfo-website staging staging
-cases=$((cases + 1))
-for stack in ai apis dcp website; do
-    expect_handoff dfo-prod "$stack" "DevelopmentFinanceObservatory/$stack" production main
-    cases=$((cases + 1))
-done
-check "handoff covered 8 environment and stack pairs (covered $cases)" "$([ "$cases" -eq 8 ] && echo true || echo false)"
+check "handoff covered 8 environment and stack pairs (covered $cases)" "$(is "$cases" 8)"
 
-# The infra target writes its three values at repo level on the env's own
-# infra repo: no --env, and no environment or branch policy call.
-expect_repo_handoff() {
-    local dfo_env="$1" repo="$2" kind name root output want=0 writes
-    run handoff.sh main "$dfo_env" infra
-    check "$dfo_env infra exits 0" "$([ "$status" -eq 0 ] && echo true || echo false)"
-    while read -r kind name root output; do
-        [ -z "$kind" ] && continue
-        want=$((want + 1))
-        check "$dfo_env infra sets repo-level variable $name from $root output $output" \
-            "$(has "gh variable set $name --repo $repo --body value-of-$dfo_env/$root/$output")"
-    done <<<"$(expected_values infra)"
-    writes="$(grep -cE '^gh variable set ' "$STUB_LOG" || true)"
-    check "$dfo_env infra writes exactly $want variables (wrote $writes)" "$([ "$want" -eq 3 ] && [ "$writes" -eq "$want" ] && echo true || echo false)"
-    check "$dfo_env infra writes no secret" "$(lacks 'gh secret set')"
-    check "$dfo_env infra writes nothing environment-scoped" "$(lacks ' --env ')"
-    check "$dfo_env infra makes no environment or policy call" "$(lacks 'gh api')"
-}
-expect_repo_handoff dfo-dev ONEcampaign/dfo-infra
-check "dev infra touches no prod repo" "$(lacks DevelopmentFinanceObservatory)"
-expect_repo_handoff dfo-prod DevelopmentFinanceObservatory/infra
-check "prod infra touches no ONEcampaign repo" "$(lacks ONEcampaign)"
+# 2. infra writes the environment contract: the planner's values in
+# dev-plan or plan, the applier's in dev or production, nothing at repo
+# level.
+run handoff.sh dfo-dev infra
+check "dfo-dev infra exits 0" "$(is "$status" 0)"
+want=0
+expect_writes dfo-dev infra DevelopmentFinanceObservatory/infra dev-plan infra-plan
+expect_writes dfo-dev infra DevelopmentFinanceObservatory/infra dev infra-apply
+finish_case dfo-dev infra
+check "dfo-dev infra checks dev-plan has no branch policy" "$(says 'PASS  DevelopmentFinanceObservatory/infra (dev-plan): no branch policy')"
+check "dfo-dev infra writes no applier into dev-plan" "$(lacks 'WIF_APPLY_SA --env dev-plan')"
 
-run handoff.sh main dfo-prod apis
-check "prod apis makes no policy write (already converged on main)" "$(lacks '--method')"
+run handoff.sh dfo-prod infra
+check "dfo-prod infra exits 0" "$(is "$status" 0)"
+want=0
+expect_writes dfo-prod infra DevelopmentFinanceObservatory/infra plan infra-plan
+expect_writes dfo-prod infra DevelopmentFinanceObservatory/infra production infra-apply
+finish_case dfo-prod infra
+check "dfo-prod infra writes no applier into plan" "$(lacks 'WIF_APPLY_SA --env plan')"
 
-# A missing output stops the run before any policy change or write.
+# docs writes docsync.yml's two values into docsync, in dfo-dev only.
+run handoff.sh dfo-dev docs
+check "dfo-dev docs exits 0" "$(is "$status" 0)"
+want=0
+expect_writes dfo-dev docs DevelopmentFinanceObservatory/docs docsync docs-sync
+finish_case dfo-dev docs
+check "dfo-dev docs checks docsync admits only dev" "$(has 'repos/DevelopmentFinanceObservatory/docs/environments/docsync/deployment-branch-policies')"
+
+run handoff.sh dfo-prod docs
+check "dfo-prod docs exits 1" "$(is "$status" 1)"
+check "dfo-prod docs makes no call" "$(is "$calls" "")"
+
+# 3. A missing output stops the run before any write.
 export STUB_MISSING_OUTPUT=migrate_job_name
-run handoff.sh staging dfo-dev website
+run handoff.sh dfo-dev website
 unset STUB_MISSING_OUTPUT
-check "missing output exits 1" "$([ "$status" -eq 1 ] && echo true || echo false)"
+check "missing output exits 1" "$(is "$status" 1)"
 check "missing output names the output" "$(says "Could not read output 'migrate_job_name'")"
 check "missing output writes nothing" "$(lacks ' set ')"
-check "missing output changes no policy" "$(lacks '--method')"
 
-# 2. A stale policy is converged to the table's branch, never left in place.
-run handoff.sh dev dfo-prod ai
-check "prod ai with a stale 'dev' policy adds main" "$(has 'gh api --method POST repos/DevelopmentFinanceObservatory/ai/environments/production/deployment-branch-policies -f name=main -f type=branch')"
+# 4. A missing or mis-restricted environment stops the run before any write,
+# and handoff never creates or fixes one.
+export STUB_MISSING_ENV=repos/DevelopmentFinanceObservatory/infra/environments/production
+run handoff.sh dfo-prod infra
+unset STUB_MISSING_ENV
+check "missing environment exits 1" "$(is "$status" 1)"
+check "missing environment is named" "$(says 'DevelopmentFinanceObservatory/infra (production): environment does not exist')"
+check "missing environment writes nothing, plan included" "$(lacks ' set ')"
+check "missing environment creates nothing" "$(lacks '--method')"
 
-# 3. Bad input fails before any gh or terraform call.
-run handoff.sh dev dfo-staging ai
-check "handoff unknown env exits 1" "$([ "$status" -eq 1 ] && echo true || echo false)"
+export STUB_POLICY_BRANCH=staging
+run handoff.sh dfo-dev ai
+check "stale branch policy exits 1" "$(is "$status" 1)"
+check "stale branch policy names the expected branch" "$(says 'expected exactly {name=dev, type=branch}')"
+check "stale branch policy writes nothing" "$(lacks ' set ')"
+check "stale branch policy is left alone" "$(lacks '--method')"
+unset STUB_POLICY_BRANCH
+
+# 5. Bad input fails before any gh or terraform call.
+run handoff.sh dfo-staging ai
+check "handoff unknown env exits 1" "$(is "$status" 1)"
 check "handoff unknown env names it" "$(says "unknown environment 'dfo-staging'")"
-check "handoff unknown env makes no call" "$([ -z "$calls" ] && echo true || echo false)"
+check "handoff unknown env makes no call" "$(is "$calls" "")"
+run handoff.sh dfo-staging infra
+check "handoff infra in an unknown env exits 1" "$(is "$status" 1)"
+check "handoff infra in an unknown env makes no call" "$(is "$calls" "")"
+run handoff.sh dfo-prod foundation
+check "handoff unknown stack exits 1" "$(is "$status" 1)"
+check "handoff unknown stack makes no call" "$(is "$calls" "")"
+run handoff.sh ai
+check "handoff with one argument exits 1" "$(is "$status" 1)"
+check "handoff with one argument makes no call" "$(is "$calls" "")"
 
-run handoff.sh dev dfo-prod foundation
-check "handoff unknown stack exits 1" "$([ "$status" -eq 1 ] && echo true || echo false)"
-check "handoff unknown stack makes no call" "$([ -z "$calls" ] && echo true || echo false)"
-
-run handoff.sh dev ai
-check "handoff without an env exits 1 (the old stack-only form)" "$([ "$status" -eq 1 ] && echo true || echo false)"
-check "handoff old stack-only form makes no call" "$([ -z "$calls" ] && echo true || echo false)"
-
-run handoff.sh dev
-check "handoff with one argument exits 1" "$([ "$status" -eq 1 ] && echo true || echo false)"
-
-# 4. check-deploy-branch-policy.sh audits the same table.
-run check-deploy-branch-policy.sh main dfo-prod
-check "prod audit passes when every repo has only main" "$([ "$status" -eq 0 ] && echo true || echo false)"
+# 6. check-deploy-branch-policy.sh audits the same table.
+run check-deploy-branch-policy.sh dfo-prod
+check "prod audit passes when every repo has only main" "$(is "$status" 0)"
 for stack in ai apis dcp website; do
-    check "prod audit reads DevelopmentFinanceObservatory/$stack production" "$(has "gh api --paginate repos/DevelopmentFinanceObservatory/$stack/environments/production/deployment-branch-policies")"
+    check "prod audit reads $stack production" "$(has "gh api --paginate repos/DevelopmentFinanceObservatory/$stack/environments/production/deployment-branch-policies")"
 done
-check "prod audit touches no ONEcampaign repo" "$(lacks ONEcampaign)"
+run check-deploy-branch-policy.sh dfo-dev website
+check "dev website audit passes on dev" "$(is "$status" 0)"
+check "dev website audit reads the dev environment" "$(has 'repos/DevelopmentFinanceObservatory/website/environments/dev/deployment-branch-policies')"
+export STUB_POLICY_BRANCH=main
+run check-deploy-branch-policy.sh dfo-dev
+unset STUB_POLICY_BRANCH
+check "dev audit fails when dev admits main" "$(is "$status" 1)"
+check "dev audit reports all four" "$(is "$(printf '%s\n' "$out" | grep -c '^FAIL ')" 4)"
+export STUB_MISSING_ENV=repos/DevelopmentFinanceObservatory/dcp/environments/dev
+run check-deploy-branch-policy.sh dfo-dev dcp
+unset STUB_MISSING_ENV
+check "audit fails on a missing environment" "$(is "$status" 1)"
+check "audit names the missing environment" "$(says 'environment does not exist')"
 
-run check-deploy-branch-policy.sh dev dfo-prod apis
-check "prod audit fails on a wrong branch" "$([ "$status" -eq 1 ] && echo true || echo false)"
-check "prod audit failure names the expected branch" "$(says 'expected exactly {name=main, type=branch}')"
-
-run check-deploy-branch-policy.sh staging dfo-dev website
-check "dev website audit passes on staging" "$([ "$status" -eq 0 ] && echo true || echo false)"
-check "dev website audit reads ONEcampaign/dfo-website staging" "$(has 'repos/ONEcampaign/dfo-website/environments/staging/deployment-branch-policies')"
-
-run check-deploy-branch-policy.sh dev dfo-dev
-check "dev audit fails when website's staging is not the branch" "$([ "$status" -eq 1 ] && echo true || echo false)"
-check "dev audit covers ai, apis, dcp and website" "$(has 'repos/ONEcampaign/dfo-ai/' )"
-
-run check-deploy-branch-policy.sh dev dfo-nope
-check "audit unknown env exits 1" "$([ "$status" -eq 1 ] && echo true || echo false)"
-run check-deploy-branch-policy.sh dev dfo-nope apis
-check "audit unknown env with a stack exits 1" "$([ "$status" -eq 1 ] && echo true || echo false)"
+run check-deploy-branch-policy.sh dfo-nope
+check "audit unknown env exits 1" "$(is "$status" 1)"
+run check-deploy-branch-policy.sh dfo-nope apis
+check "audit unknown env with a stack exits 1" "$(is "$status" 1)"
 check "audit unknown env with a stack makes no api call" "$(lacks 'gh api')"
-run check-deploy-branch-policy.sh dev dfo-prod foundation
-check "audit unknown stack exits 1" "$([ "$status" -eq 1 ] && echo true || echo false)"
-run check-deploy-branch-policy.sh dev
-check "audit with no env exits 1" "$([ "$status" -eq 1 ] && echo true || echo false)"
+run check-deploy-branch-policy.sh dfo-prod foundation
+check "audit unknown stack exits 1" "$(is "$status" 1)"
+run check-deploy-branch-policy.sh
+check "audit with no env exits 1" "$(is "$status" 1)"
 
 if [ "$failures" -eq 0 ]; then
     echo "All scenarios passed."

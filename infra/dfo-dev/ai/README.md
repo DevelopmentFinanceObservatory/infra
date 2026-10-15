@@ -1,12 +1,12 @@
 # ai — the DFO AI service
 
-One Cloud Run service, `dfo-dev-ai`, running the `dfo-ai` repo's image: the agent harness with the search-mcp and analysis-mcp servers mounted in-process. The service consolidation rationale lives in that repo's `docs/architecture.md`.
+One Cloud Run service, `dfo-dev-ai`, running the `ai` repo's image: the agent harness with the search-mcp and analysis-mcp servers mounted in-process. The service consolidation rationale lives in that repo's `docs/architecture.md`.
 
 The service is defined via the reusable `../../modules/cloud-run-service` module (see that module's README) — a dedicated runtime service account, scaling config, and env vars/secrets.
 
 ## Model credentials
 
-The service reads `GOOGLE_API_KEY` from the process environment (google-adk's underlying `google-genai` client bypasses `dfo-ai`'s own settings classes for this). This stack wires that env var to the existing `dfo-dev-gemini-api-key` Secret Manager secret — the same secret the `dcp` stack's Search API already uses (`infra/dfo-dev/dcp/dfo.tf`). That secret is **not terraform-managed**; it's referenced here via a `data "google_secret_manager_secret"` source, not created. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
+The service reads `GOOGLE_API_KEY` from the process environment (google-adk's underlying `google-genai` client bypasses `ai`'s own settings classes for this). This stack wires that env var to the existing `dfo-dev-gemini-api-key` Secret Manager secret, the same secret the `dcp` stack's Search API already uses (`infra/dfo-dev/dcp/dfo.tf`). Terraform does not manage that secret. This stack references it through a `data "google_secret_manager_secret"` source. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
 
 ## data-mcp environment
 
@@ -28,9 +28,9 @@ The service receives `FRAME_STORE_BUCKET`, the name of the bucket for content-ad
 
 The stack sets `STUDIO_ENGINE` to `orchestrator`. The value `orchestrator` makes one agent answer a studio turn by calling tools itself, and `graph`, the harness default when the variable is unset, makes the workflow graph answer. Removing the entry returns the service to the graph engine on the next apply. The variable is declared here because an apply removes any variable set outside this stack.
 
-## Ownership split with the `dfo-ai` repo
+## Ownership split with the `ai` repo
 
-This stack owns the service _definition_; the `dfo-ai` repo's CI owns the _image_, updating it with image-only `gcloud run services update` calls. The module's `lifecycle.ignore_changes` on the container image is what makes that work without every `apply` reverting to the bootstrap placeholder image (`gcr.io/cloudrun/hello`) — see the module README for details.
+This stack owns the service _definition_. The `ai` repo's CI owns the _image_, updating it with image-only `gcloud run services update` calls. The module's `lifecycle.ignore_changes` on the container image is what makes that work without every `apply` reverting to the bootstrap placeholder image (`gcr.io/cloudrun/hello`). The module README has details.
 
 ## APIs
 
@@ -54,7 +54,7 @@ Three env vars carry this to the service: `SESSION_STORE_INSTANCE_CONNECTION_NAM
 
 ## Studio API token
 
-`studio_token.tf` generates the shared bearer secret the harness's studio routes compare requests against (`harness.auth` in dfo-ai), stores it as `dfo-dev-studio-api-token`, and mounts it on the service as `STUDIO_API_TOKEN`. Until that mount reaches a running revision, the harness accepts any non-empty bearer token and logs `STUDIO AUTH IS OPEN` at startup, on a public URL, so this is a gap being closed rather than a feature being added.
+`studio_token.tf` generates the shared bearer secret the harness's studio routes compare requests against (`harness.auth` in the `ai` repo), stores it as `dfo-dev-studio-api-token`, and mounts it on the service as `STUDIO_API_TOKEN`. Until that mount reaches a running revision, the harness accepts any non-empty bearer token and logs `STUDIO AUTH IS OPEN` at startup, on a public URL, so this is a gap being closed rather than a feature being added.
 
 This is the interim scheme: #12's settled end-state for proxy-to-harness auth is a service-to-service ID token from the website proxy, with this service coming off public access, and this secret retires when that lands. The website services get their own mount of this secret in a later PR, once the proxy code reads it; humans who call the studio routes directly are granted read on this one secret through `var.studio_token_readers`, and fetch it with `just studio-token`. Rotation is bumping `studio_api_token_version`: the replacement version is created before the old one is destroyed, and the service's mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new token and warm and new instances can never disagree.
 
@@ -82,7 +82,7 @@ The mount reads `latest`, so a rotation in `apis` reaches a running instance onl
 
 The harness exports traces to Langfuse Cloud EU when `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` are all set. This stack mounts the first two from the existing `dfo-dev-langfuse-public-key` and `dfo-dev-langfuse-secret-key` Secret Manager secrets, which are not terraform-managed and are referenced through `data "google_secret_manager_secret"` sources like the Gemini key. `LANGFUSE_BASE_URL` is set to `https://cloud.langfuse.com`, the region the keys belong to. `LANGFUSE_TRACING_ENVIRONMENT` is set to `dfo-dev-ai`, so deployed traces filter apart from a local harness's, which export under Langfuse's default environment. The module grants the runtime service account `roles/secretmanager.secretAccessor` on each of the two secrets, in the same project as the service.
 
-Both mounts read `latest`, since this stack does not own the version resources. Cloud Run resolves `latest` when an instance starts, so after a key rotation warm instances keep the key they started with. A rollout replaces them: an image-only deploy from `dfo-ai`'s CI, or a `terraform apply` here that changes the service.
+Both mounts read `latest`, since this stack does not own the version resources. Cloud Run resolves `latest` when an instance starts, so after a key rotation warm instances keep the key they started with. A rollout replaces them: an image-only deploy from `ai`'s CI, or a `terraform apply` here that changes the service.
 
 After a rollout, `curl <service-url>/status/telemetry` returns `{"telemetry": "langfuse"}` when tracing is on. `off` means one of the three variables is missing or empty, or tracing is disabled, and the startup log says which. Google Frontend answers `/healthz` on Cloud Run, so use `/status/telemetry`.
 
@@ -90,8 +90,8 @@ A rejected key pair leaves the state `langfuse`. The harness's startup credentia
 
 ## Handoff after `apply`
 
-`dfo-ai`'s deploy workflow reads `REGION`, `PROJECT_ID`, `AR_REPO` and `SERVICE_AI` as variables and `WIF_PROVIDER` and `WIF_SA` as secrets from its `dev` GitHub Environment. Each is an output of this stack or `foundation`, and `deploy_values` in `scripts/deploy-targets.sh` maps each name to its output.
+`ai`'s deploy workflow reads `REGION`, `PROJECT_ID`, `AR_REPO` and `SERVICE_AI` as variables and `WIF_PROVIDER` and `WIF_SA` as secrets from its `dev` GitHub Environment. Each is an output of this stack or `foundation`, and `deploy_values` in `scripts/deploy-targets.sh` maps each name to its output.
 
-Run **`just handoff ai`** (`scripts/handoff.sh dfo-dev ai`) after applying the `foundation` and `ai` stacks, and again after either renames a resource it hands over. It reads those outputs and sets them on `dfo-ai`'s `dev` GitHub Environment with `gh`, using your GitHub login. Nothing else sets them.
+Run **`just handoff ai`** (`scripts/handoff.sh dfo-dev ai`) after applying the `foundation` and `ai` stacks, and again after either renames a resource it hands over. It reads those outputs and sets them on `ai`'s `dev` GitHub Environment with `gh`, using your GitHub login. Nothing else sets them.
 
-The script uses `gh` because a Terraform `integrations/github` resource would need a long-lived GitHub admin credential stored in Secret Manager, which defeats the keyless WIF design. `dfo-ai`'s `deploy/README.md` describes how its workflow uses each value.
+The script uses `gh` because a Terraform `integrations/github` resource would need a long-lived GitHub admin credential stored in Secret Manager, which defeats the keyless WIF design. `ai`'s `deploy/README.md` describes how its workflow uses each value.
