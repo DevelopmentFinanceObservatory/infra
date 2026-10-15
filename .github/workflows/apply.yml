@@ -3,8 +3,9 @@
 # What this does
 # ---------------
 # On every push to `dev` or `main` that touches `infra/**`, this workflow:
-#   1. Detects which of this repo's environment stacks changed, with the same
-#      `scripts/terraform-stacks.sh` rules plan.yml uses.
+#   1. Detects which of this repo's environment stacks changed since the
+#      branch's previous commit, with the same `scripts/terraform-stacks.sh`
+#      rules plan.yml uses.
 #   2. Applies the changed stacks in three tiers (see "Tiered ordering"
 #      below): `foundation`, then the changed producer stacks, then every
 #      other changed stack. Each call delegates the actual
@@ -172,6 +173,11 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         uses: dorny/paths-filter@v3
         with:
+          # Naming the pushed branch as the base makes paths-filter diff
+          # against the branch's previous commit. Without it a push to a
+          # non-default branch diffs against its merge-base with the default
+          # branch, which re-applies every stack changed since the last release.
+          base: ${{ github.ref_name }}
           list-files: json
           filters: |
             infra:

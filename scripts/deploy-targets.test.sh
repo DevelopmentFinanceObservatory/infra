@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Scenario tests for deploy-targets.sh. Not wired into CI or pre-commit,
-# matching check-image-pin-diff.test.sh. Run by hand after touching the
-# table:
+# Scenario tests for deploy-targets.sh. Not wired into CI or pre-commit.
+# Run by hand after touching the table:
 #   scripts/deploy-targets.test.sh
 #
 # load_deploy_target maps an environment (dfo-dev or dfo-prod) and a stack to
