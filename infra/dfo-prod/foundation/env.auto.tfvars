@@ -28,6 +28,7 @@ billing_export_dataset_id = "billing_export"
 # whose ref is refs/pull/<n>/merge, matches neither.
 planner_wif_ref         = "refs/heads/main"
 planner_wif_environment = "plan"
+applier_wif_ref         = "refs/heads/main"
 applier_wif_environment = "production"
 
 # Placeholder: list the project owners who may impersonate the applier, as

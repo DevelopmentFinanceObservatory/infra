@@ -3,17 +3,19 @@
 project_id      = "dev-fin-observatory"
 region          = "northamerica-northeast1"
 namespace       = "dfo-dev"
-github_owner    = "ONEcampaign"
-github_owner_id = "6450343"
+github_owner    = "DevelopmentFinanceObservatory"
+github_owner_id = "305725777"
 github_repositories = {
-  infra = { name = "dfo-infra", id = "1278400310" }
-  ai    = { name = "dfo-ai", id = "1302999900", deploy_environment = "dev", deploy_branch = "dev" }
-  apis  = { name = "dfo-apis", id = "1311485891", deploy_environment = "dev", deploy_branch = "dev" }
-  dcp   = { name = "dfo-dcp", id = "1279046697", deploy_environment = "dev", deploy_branch = "dev" }
-  # dfo-website deploys one environment, staging, from its own staging branch.
-  website = { name = "dfo-website", id = "1302999580", deploy_environment = "staging", deploy_branch = "staging" }
-  docs    = { name = "dfo-docs", id = "1371825207" }
-  site_qa = { name = "dfo-site-qa", id = "1406139622" }
+  infra   = { name = "infra", id = "1401633456" }
+  ai      = { name = "ai", id = "1401633727", deploy_environment = "dev", deploy_branch = "dev" }
+  apis    = { name = "apis", id = "1401633649", deploy_environment = "dev", deploy_branch = "dev" }
+  dcp     = { name = "dcp", id = "1401633556", deploy_environment = "dev", deploy_branch = "dev" }
+  website = { name = "website", id = "1401633828", deploy_environment = "dev", deploy_branch = "dev" }
+  docs    = { name = "docs", id = "1401634043" }
+  # DevelopmentFinanceObservatory/site-qa does not exist yet. Replace the
+  # placeholder with its id once it does; the foundation's id validation
+  # fails every plan until then.
+  site_qa = { name = "site-qa", id = "SITE-QA-REPO-ID" }
 }
 website_deployer_account_id    = "dfo-website-staging-deployer"
 website_artifact_repository_id = "dfo-website-staging"
@@ -22,8 +24,9 @@ applier_impersonators          = ["user:jorge.rivera@one.org"]
 # Dev's ingestion operators hold their roles by hand or through owner.
 ingestion_operators = []
 # Dev's plan.yml runs on pull_request, whose ref is refs/pull/<n>/merge, so the
-# planner's binding stays repo-scoped. Dev's apply declares no environment, so
-# the applier binds on refs/heads/main alone.
+# planner's binding stays repo-scoped. The applier binds to the `dev`
+# environment on refs/heads/dev, which apply-stack.yml declares for dfo-dev.
 planner_wif_ref         = null
 planner_wif_environment = null
-applier_wif_environment = null
+applier_wif_ref         = "refs/heads/dev"
+applier_wif_environment = "dev"

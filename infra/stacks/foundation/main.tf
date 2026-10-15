@@ -143,7 +143,7 @@ resource "google_artifact_registry_repository" "dcp_build_cache" {
 
 # dfo-website's own repo, separate from `datacommons` so its writer grant
 # below can be scoped to the website deployer alone. AR IAM has no
-# granularity below the repository, and dev's staging branch deploys on
+# granularity below the repository, and dev's `dev` branch deploys on
 # every push with no review gate, so sharing it with dcp/ai/apis would let
 # that push reach their images too.
 resource "google_artifact_registry_repository" "website" {
@@ -221,10 +221,10 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # All three guard on the claims being present rather than referencing them
   # bare.
   # This mapping is evaluated for every token the pool exchanges, including
-  # dev's planner and applier jobs, which declare no `environment:` and so
-  # carry no `environment` claim; an unguarded concatenation would fail those
-  # exchanges and take dfo-infra's own CI down with them. The guard uses `in`
-  # and a ternary — both documented for the restricted CEL subset attribute
+  # jobs that declare no `environment:` and so carry no `environment` claim,
+  # such as the apis repository's search eval jobs; an unguarded
+  # concatenation would fail those exchanges. The guard uses `in` and a
+  # ternary — both documented for the restricted CEL subset attribute
   # mappings accept, unlike the `has()` macro. repo_env_ref nests two of
   # those guards rather than joining them with `&&`, which is documented for
   # attribute conditions but not for mappings, and every construct here has
@@ -389,10 +389,11 @@ resource "google_secret_manager_secret_iam_member" "dc_key_planner" {
   member    = module.planner.member
 }
 
-# Applies this repo's stacks on merge to main. No separate state_bucket grant:
-# roles/storage.admin above already covers the state bucket. The binding is
-# pinned to main, and in prod also to the `production` environment through
-# var.applier_wif_environment.
+# Applies this environment's stacks on a push to its branch. No separate
+# state_bucket grant: roles/storage.admin above already covers the state
+# bucket. var.applier_wif_ref pins the binding to that branch and
+# var.applier_wif_environment to the environment apply-stack.yml declares
+# for it.
 module "applier" {
   source = "../../modules/github-deployer"
 
@@ -406,7 +407,7 @@ module "applier" {
   display_name    = "dfo-infra Terraform applier (CI)"
   project_roles   = local.applier_project_roles
   wif_environment = var.applier_wif_environment
-  wif_ref         = "refs/heads/main"
+  wif_ref         = var.applier_wif_ref
 
   depends_on = [google_project_service.apis]
 }
@@ -526,7 +527,7 @@ module "apis_deployer" {
   depends_on = [google_project_service.apis]
 }
 
-# Image-only Cloud Run updates from dfo-website. Dev's `staging`
+# Image-only Cloud Run updates from dfo-website. Dev's `dev`
 # environment auto-deploys on every push to its branch with no review
 # requirement. Bounded to its own Cloud Run service and migrate job (granted
 # in the website stack) and its own Artifact Registry repo, keeping that
