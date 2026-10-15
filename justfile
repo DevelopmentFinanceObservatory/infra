@@ -102,10 +102,9 @@ apply: _check-gcloud
 
 # Break-glass dcp deploy: apply a built services image directly against live
 # state with your own gcloud credentials, then pin it. The routine path is
-# dfo-dcp's CI opening a PR against image.auto.tfvars, auto-approved and
-# auto-merged by .github/workflows/approve-image-pin.yml. Use this recipe
-# only when that path is unavailable: it skips the PR review, the
-# plan-comment trail, and the destroy guard the automated path runs.
+# dfo-dcp's CI opening a PR against image.auto.tfvars. Use this recipe
+# only when that path is unavailable: it skips the PR, the plan-comment
+# trail, and the destroy guard the automated path runs.
 # The pin CI writes is a digest, so pass one here too, to keep the
 # committed pin matching the automated shape.
 # Usage: just deploy northamerica-northeast1-docker.pkg.dev/.../dfo-services-image@sha256:<digest>

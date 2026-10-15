@@ -7,8 +7,3 @@ paths:
     ignore:
       - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"'
       - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'
-  # GitHub documents `concurrency.queue` in the workflow syntax reference, but actionlint's
-  # schema lacks the key (rhysd/actionlint#657). Only sync.yml uses it.
-  .github/workflows/sync.yml:
-    ignore:
-      - 'unexpected key "queue" for "concurrency" section'
