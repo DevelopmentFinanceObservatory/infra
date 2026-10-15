@@ -64,11 +64,11 @@ bootstrap: _check-gcloud
 grant-dc-key email: _check-gcloud
     gcloud secrets add-iam-policy-binding {{DC_KEY_SECRET}} --member='user:{{email}}' --role='roles/secretmanager.secretAccessor' --project={{PROJECT}}
 
-# Print the studio API token, for an account listed in the ai stack's
-# studio_token_readers. The token goes to stdout and everything else to
+# Print the studio API token, for an account in a group listed in the ai
+# stack's studio_token_readers. The token goes to stdout and everything else to
 # stderr, so `export STUDIO_API_TOKEN=$(just studio-token)` works. Needs
 # only `gcloud auth login`, not application-default credentials.
-[doc("Print the studio API token (for accounts in studio_token_readers)")]
+[doc("Print the studio API token (for members of the studio_token_readers group)")]
 studio-token:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -79,7 +79,7 @@ studio-token:
     fi
     echo "Reading {{STUDIO_TOKEN_SECRET}} in {{PROJECT}} as $account" >&2
     gcloud secrets versions access latest --secret={{STUDIO_TOKEN_SECRET}} --project={{PROJECT}} \
-        || { echo "Hint: check $account is the account listed in studio_token_readers ('gcloud config set account <email>'), and that 'gcloud config get billing/quota_project' is unset." >&2; exit 1; }
+        || { echo "Hint: check $account belongs to the group listed in studio_token_readers ('gcloud config set account <email>'), and that 'gcloud config get billing/quota_project' is unset." >&2; exit 1; }
 
 # Install dev tooling (uv sync + pre-commit hooks)
 install:

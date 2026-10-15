@@ -11,4 +11,3 @@ serve_from_lb                   = true
 edge_api_requests_per_minute    = 600
 edge_studio_requests_per_minute = 60
 preview_access_email_domains    = ["one.org", "ode.partners"]
-preview_access_emails           = ["mikolaj@huncwot.com"]
