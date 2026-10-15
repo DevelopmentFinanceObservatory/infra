@@ -18,8 +18,9 @@
 #   3. The `dev` ruleset, from dev_ruleset below. infra's needs no approval
 #      and requires `Changed stacks planned`, `terraform fmt check` and
 #      `Prod pin placeholder unchanged`, so dcp's dev pin PRs auto-merge
-#      once planned. The other repos mirror the protection ONEcampaign put
-#      on their integration branches.
+#      once planned. dcp's needs a pull request, no approval, and its
+#      `checks / prototypes` check. The other repos mirror the protection
+#      ONEcampaign put on their integration branches.
 #   4. Every environment in REPO_ENVIRONMENTS, with exactly its branch
 #      policy and reviewers (scripts/github-environment.sh,
 #      converge_environment).
@@ -28,6 +29,7 @@
 #      and admitted `main` with no reviewers.
 #   6. The default branch, from default_branch in scripts/deploy-targets.sh.
 #      A repo whose default would be `dev` must have a `dev` branch first.
+#      infra also allows auto-merge, which dcp's dev pin PRs arm.
 #   7. infra's repo-level WIF_PROVIDER, WIF_PLAN_SA and WIF_APPLY_SA are
 #      deleted once every infra environment holds its own (scripts/handoff.sh
 #      <env> infra writes them). Until then they stay, and the run says so:
@@ -37,8 +39,13 @@
 # exist before --apply writes anything. A dry run reports what is missing
 # and skips a missing repo.
 #
-# Required checks are pinned to GitHub Actions (app id 15368), so a commit
-# status of the same name from anything else does not count.
+# Required checks are pinned to GitHub Actions (app id 15368). That stops a
+# commit status or a check run of the same name from any other App. It does
+# not stop a workflow the PR's own head adds from posting a check run of the
+# same name, since that run also comes from GitHub Actions. On infra `main`,
+# the boundary is the `production` environment's `release` approval before
+# any apply: a reviewer approves only after the PR's `Terraform Plan (prod)`
+# run itself succeeded for the merged head.
 #
 # Usage: scripts/setup-github-repos.sh [--apply]
 #   scripts/setup-github-repos.sh            # dry run
@@ -87,6 +94,7 @@ fi
 MAIN_BYPASS_USER=jm-rivera
 RELEASE_TEAM=release
 RETIRED_ENVIRONMENTS="sync sync-guard staging"
+AUTO_MERGE_REPOS="infra"
 ACTIONS_APP_ID=15368
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -145,9 +153,11 @@ main_ruleset() {
 # with no `dev` branch. The service repos copy what ONEcampaign enforced on
 # their integration branches: dfo-apis and dfo-ai `dev` and dfo-website
 # `staging` through classic protection with admins exempt, dfo-pipelines
-# `develop` through its protect-develop ruleset with an admin bypass. dcp,
-# ontology, docs, spec-kit and skills had no protection there and get only
-# the deletion and force-push blocks every ruleset carries.
+# `develop` through its protect-develop ruleset with an admin bypass. dcp
+# needs a pull request with no approval and `checks / prototypes`, the one
+# job of checks.yml that ci.yml runs on pull requests into dev. ontology,
+# docs, spec-kit and skills had no protection there and get only the
+# deletion and force-push blocks every ruleset carries.
 dev_ruleset() {
     case "$1" in
     infra)
@@ -169,10 +179,12 @@ dev_ruleset() {
         ruleset dev refs/heads/dev "$ADMIN_BYPASS" "$(pr 1 false false false '["squash","rebase"]')" \
             '["lint","test"]' true
         ;;
-    dcp | ontology | docs | spec-kit | skills)
+    dcp)
+        ruleset dev refs/heads/dev '[]' "$(pr 0 false false false "$ALL_METHODS")" '["checks / prototypes"]' false
+        ;;
+    ontology | docs | spec-kit | skills)
         ruleset dev refs/heads/dev '[]' null '[]' false
         ;;
-    site-qa) ;;
     *) return 1 ;;
     esac
 }
@@ -333,7 +345,15 @@ for name in $repos; do
     done
 done
 
-# ── 6. Default branches ───────────────────────
+# ── 6. Default branches and auto-merge ────────
+
+# auto_merge <name> prints true if the repo must allow auto-merge, else
+# nothing.
+auto_merge() {
+    case " $AUTO_MERGE_REPOS " in
+    *" $1 "*) printf 'true' ;;
+    esac
+}
 
 for name in $repos; do
     slug="$(org_repo "$name")"
@@ -344,6 +364,13 @@ for name in $repos; do
     else
         echo ">> Moving $slug's default branch from '$have' to '$want'."
         gh_write api --method PATCH "repos/$slug" -f default_branch="$want" --silent
+    fi
+    [ -n "$(auto_merge "$name")" ] || continue
+    if [ "$(gh api "repos/$slug" --jq .allow_auto_merge)" = true ]; then
+        echo ">> $slug already allows auto-merge."
+    else
+        echo ">> Allowing auto-merge on $slug."
+        gh_write api --method PATCH "repos/$slug" -F allow_auto_merge=true --silent
     fi
 done
 
@@ -423,6 +450,14 @@ for name in $repos; do
     else
         echo "FAIL  $slug: defaults to '$have', expected '$(default_branch "$name")'."
         failed=$((failed + 1))
+    fi
+    if [ -n "$(auto_merge "$name")" ]; then
+        if [ "$(gh api "repos/$slug" --jq .allow_auto_merge)" = true ]; then
+            echo "PASS  $slug: allows auto-merge."
+        else
+            echo "FAIL  $slug: does not allow auto-merge."
+            failed=$((failed + 1))
+        fi
     fi
 done
 if [ -z "$infra_wif_pending" ] && case " $repos " in *" infra "*) true ;; *) false ;; esac; then

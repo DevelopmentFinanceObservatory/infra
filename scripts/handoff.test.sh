@@ -129,6 +129,12 @@ expected_values() {
             "var WIF_APPLY_SA foundation applier_service_account"
         return
         ;;
+    docs-sync)
+        printf '%s\n' \
+            "var GCP_WIF_PROVIDER foundation workload_identity_provider" \
+            "var DOCSYNC_SERVICE_ACCOUNT foundation docs_sync_service_account"
+        return
+        ;;
     esac
     local common="var REGION foundation region
 var PROJECT_ID foundation project_id
@@ -221,6 +227,18 @@ expect_writes dfo-prod infra DevelopmentFinanceObservatory/infra plan infra-plan
 expect_writes dfo-prod infra DevelopmentFinanceObservatory/infra production infra-apply
 finish_case dfo-prod infra
 check "dfo-prod infra writes no applier into plan" "$(lacks 'WIF_APPLY_SA --env plan')"
+
+# docs writes docsync.yml's two values into docsync, in dfo-dev only.
+run handoff.sh dfo-dev docs
+check "dfo-dev docs exits 0" "$(is "$status" 0)"
+want=0
+expect_writes dfo-dev docs DevelopmentFinanceObservatory/docs docsync docs-sync
+finish_case dfo-dev docs
+check "dfo-dev docs checks docsync admits only dev" "$(has 'repos/DevelopmentFinanceObservatory/docs/environments/docsync/deployment-branch-policies')"
+
+run handoff.sh dfo-prod docs
+check "dfo-prod docs exits 1" "$(is "$status" 1)"
+check "dfo-prod docs makes no call" "$(is "$calls" "")"
 
 # 3. A missing output stops the run before any write.
 export STUB_MISSING_OUTPUT=migrate_job_name

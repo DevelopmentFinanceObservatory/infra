@@ -63,9 +63,9 @@ website  production  main  release
 docs     docsync     dev   -
 "
 
-# org_repos prints the eleven repos' short names, space-separated.
+# org_repos prints the ten repos' short names, space-separated.
 org_repos() {
-    printf '%s' "infra dcp apis ai website pipelines docs ontology spec-kit skills site-qa"
+    printf '%s' "infra dcp apis ai website pipelines docs ontology spec-kit skills"
 }
 
 # org_repo <name> prints <owner>/<name> for a short name from org_repos.
@@ -79,13 +79,12 @@ org_repo() {
 
 # default_branch <name> prints the repo's default branch: `main` for infra,
 # whose plan-prod.yml runs on pull_request_target and so always loads from
-# the default branch, and for site-qa, a dev QA tool with no `dev` branch;
-# `dev` everywhere else, so workflow_run and scheduled workflows run the
-# code dfo-dev runs.
+# the default branch; `dev` everywhere else, so workflow_run and scheduled
+# workflows run the code dfo-dev runs.
 default_branch() {
     org_repo "${1:-}" >/dev/null || return 1
     case "$1" in
-    infra | site-qa) printf 'main' ;;
+    infra) printf 'main' ;;
     *) printf 'dev' ;;
     esac
 }
@@ -180,10 +179,27 @@ load_deploy_target() {
 #   <owner>/<repo> <environment> <branch> <values>
 # <values> is the deploy_values key for that environment. A service stack
 # has one line, its deploy environment. infra has two: the planner's
-# environment with infra-plan and the applier's with infra-apply. Returns 1
-# with a message on stderr, printing nothing, as load_deploy_target does.
+# environment with infra-plan and the applier's with infra-apply. docs has
+# one, in dfo-dev only: its `docsync` environment with docs-sync, since
+# docsync.yml authenticates to dfo-dev alone. Returns 1 with a message on
+# stderr, printing nothing, as load_deploy_target does.
 handoff_targets() {
     local env="${1:-}" stack="${2:-}" plan_env apply_env
+    if [ "$stack" = docs ]; then
+        case "$env" in
+        dfo-dev) ;;
+        dfo-prod)
+            echo "ERROR: stack 'docs' hands off only in dfo-dev, the one environment docsync.yml authenticates to." >&2
+            return 1
+            ;;
+        *)
+            echo "ERROR: unknown environment '$env' (expected dfo-dev or dfo-prod)." >&2
+            return 1
+            ;;
+        esac
+        printf '%s %s %s %s\n' "$(org_repo docs)" docsync "$(environment_branch docs docsync)" docs-sync
+        return 0
+    fi
     if [ "$stack" = infra ]; then
         if ! plan_env="$(plan_environment "$env")"; then
             echo "ERROR: unknown environment '$env' (expected dfo-dev or dfo-prod)." >&2
@@ -203,8 +219,9 @@ handoff_targets() {
 # secret one environment's workflows read, as
 #   <var|secret> <NAME> <root> <output>
 # where <root> is the stack whose Terraform root holds <output> in the same
-# Terraform environment. <values> is a service stack, or infra-plan or
-# infra-apply for infra's planner and applier environments. Names and
+# Terraform environment. <values> is a service stack, infra-plan or
+# infra-apply for infra's planner and applier environments, or docs-sync for
+# docs' docsync environment. Names and
 # outputs are the same in dfo-dev and dfo-prod, so the table takes no
 # environment. Returns 1, printing nothing, for anything else.
 #
@@ -228,6 +245,11 @@ secret WIF_SA foundation ${1:-}_deployer_service_account"
         printf '%s\n' \
             "var WIF_PROVIDER foundation workload_identity_provider" \
             "var WIF_APPLY_SA foundation applier_service_account"
+        ;;
+    docs-sync)
+        printf '%s\n' \
+            "var GCP_WIF_PROVIDER foundation workload_identity_provider" \
+            "var DOCSYNC_SERVICE_ACCOUNT foundation docs_sync_service_account"
         ;;
     ai)
         printf '%s\n' "$common" \
