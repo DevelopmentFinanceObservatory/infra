@@ -17,4 +17,4 @@ Apply after `foundation`, `platform`, and `dcp`. Each commented line in `env.aut
 
 ## Caller authentication
 
-`env.auto.tfvars` sets `allow_unauthenticated = true` and an empty `invoker_members`. The prod `website` and `ai` stacks grant their own runtime service accounts `roles/run.invoker` on `dfo-prod-apis`. Prod has no eval reader. "Caller authentication" in `infra/dfo-dev/apis/README.md` describes the token each caller sends, the staged flip to `allow_unauthenticated = false`, and the break-glass command, which here names `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-observatory`.
+`env.auto.tfvars` sets `allow_unauthenticated = false` and an empty `invoker_members`, so the service refuses anonymous callers. The prod `website` and `ai` stacks grant their own runtime service accounts `roles/run.invoker` on `dfo-prod-apis`. Prod has no eval reader. "Caller authentication" in `infra/dfo-dev/apis/README.md` describes the token each caller sends, how to add a caller, and the break-glass command, which here names `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-observatory`.
