@@ -54,7 +54,7 @@ output "site_qa_deployer_service_account" {
 }
 
 output "docs_sync_service_account" {
-  description = "Email of the dfo-docs Google Docs sync service account. This is dfo-docs' WIF_SA value; it holds no project roles, and Drive access comes from its membership of the ONE Data shared drive."
+  description = "Email of the dfo-docs Google Docs sync service account. scripts/handoff.sh writes it into dfo-docs' docsync environment as DOCSYNC_SERVICE_ACCOUNT; it holds no project roles, and Drive access comes from its membership of the ONE Data shared drive."
   value       = module.docs_sync.email
 }
 
