@@ -11,7 +11,6 @@ just auth                  # gcloud + application-default login
 just bootstrap             # terraform init for the dcp stack
 just plan                  # preview dcp changes
 just STACK=foundation plan # preview another stack
-just load data/oecd-wage   # stage a dataset and trigger ingestion
 ```
 
 Local plan/apply of the `dcp` stack reads the Data Commons API key from the `dc-api-key` secret. Ask an admin to run `just grant-dc-key you@one.org`, then `just bootstrap`.
@@ -32,9 +31,7 @@ dfo-infra/
 │   │   └── website/
 │   └── dfo-prod/       # the same stacks for prod, plus...
 │       └── edge/       # ...the prod-only public edge
-├── data/               # Datasets in Data Commons custom format (config.json + CSVs + variables.mcf)
 └── scripts/
-    └── load.sh         # Helper: stage a dataset into GCS and trigger ingestion
 ```
 
 ## Stacks
@@ -129,14 +126,6 @@ just dcp-scaffold 1.1.5
 ```
 
 Regenerates `main.tf`, `variables.tf`, `outputs.tf`, and `README.md` from the upstream CLI at the given version. It copies the three `.tf` files over the tracked files in `infra/stacks/dcp`, which every environment's dcp root links to, and `README.md` into `infra/<ENV>/dcp`. It never touches `backend.tf` or `terraform.tfvars`: the CLI's own `backend.tf` assumes one stack per instance and would point this stack at empty state. See `infra/dfo-dev/dcp/dfo.README.md` for why. It hard-fails on uncommitted edits to `backend.tf` or any `dfo.*` file, so those don't blend into the diff it prints. It also checks the file set the CLI actually emitted against the expected six, catching upstream drift the copy loop would otherwise drop silently. The recipe only stages files. Read the diff, then run `terraform init` in that directory before `just plan`: the module source ref moves on every version bump, so the installed module goes stale until you do. Use plain `init`, not `-upgrade` — only the module source changed, and `-upgrade` would also re-resolve every provider and rewrite the committed `.terraform.lock.hcl`, which pins provider versions on purpose. `terraform init -backend=false` runs the same install with no GCP credentials at all, enough to regenerate and review an upgrade before you have a session. Then check the plan for relocated resources that need `moved` blocks before committing.
-
-### Load data
-
-```bash
-just load data/oecd-wage
-```
-
-This clears the ingestion input bucket, uploads the dataset files, and triggers the ingestion workflow. Watch the Workflow console URL printed by the command to monitor progress. Provenance names in `config.json` must be space-free and lowercase-hyphenated. Spaces break the generated ingestion Dataflow job name.
 
 ### Verify
 

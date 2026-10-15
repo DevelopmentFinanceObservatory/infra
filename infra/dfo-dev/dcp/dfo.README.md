@@ -36,16 +36,13 @@ Two resources appear in every plan. `null_resource.search_api_gemini_key` carrie
 
 ## The database commands
 
-Four `just` recipes touch the dcp database. Terraform grants none of the IAM they need, so grant it by hand before the first run.
+Three `just` recipes touch the dcp database. Terraform grants none of the IAM they need, so grant it by hand before the first run.
 
-| Recipe                  | What it does                                                                | Spanner role on your principal | Token creator on the workflow account |
-| ----------------------- | --------------------------------------------------------------------------- | ------------------------------ | ------------------------------------- |
-| `just init-db`          | Creates the schema on a brand-new database                                  | `roles/spanner.databaseReader` | yes                                   |
-| `just migrate-db`       | Applies pending Spanner schema migrations                                   | `roles/spanner.databaseAdmin`  | yes                                   |
-| `just seed-db`          | Re-applies Base DC's own geographic and schema seeds                        | none                           | yes                                   |
-| `just load data/<name>` | Stages one of this repo's datasets into the ingestion bucket and ingests it | none                           | yes                                   |
-
-`just datasets` lists the values `load` accepts. `load` reaches the bucket named by the `storage_artifacts_bucket_name` output under your own credentials rather than the workflow account's, and it needs object write and object delete there.
+| Recipe            | What it does                                         | Spanner role on your principal | Token creator on the workflow account |
+| ----------------- | ---------------------------------------------------- | ------------------------------ | ------------------------------------- |
+| `just init-db`    | Creates the schema on a brand-new database           | `roles/spanner.databaseReader` | yes                                   |
+| `just migrate-db` | Applies pending Spanner schema migrations            | `roles/spanner.databaseAdmin`  | yes                                   |
+| `just seed-db`    | Re-applies Base DC's own geographic and schema seeds | none                           | yes                                   |
 
 A permission error from any of these names the resource it denied rather than the principal it denied, which sends you to the wrong service account. Read the principal off the table first.
 
@@ -61,11 +58,11 @@ Take a Spanner backup. Migrations are forward-only, the framework has no `downgr
 
 Then wait for a `terraform apply` on this stack to finish. `apply.yml` runs asynchronously, so a merged PR leaves the apply still in flight. The ingestion-helper has to reach the matching image before the lock endpoints exist, and these commands read their targets from `terraform output -json`, which stays empty until the apply populates state.
 
-### load replaces the whole input prefix
+### Ingestion merges dcids across imports
 
-Ingestion reads every file under `gs://<bucket>/ingestion/input/` against a single `config.json`, so `load` clears that prefix before uploading. The clear runs under your own credentials and discards its own errors. Without object delete on the bucket it does nothing, the new dataset lands on top of the old files, and ingestion reads both.
+Ingestion's preprocessing step always runs with `forceCombineNodes` set to true. A Node dcid declared by two imports merges into one node, whether those imports run separately or are reprocessed together later. Check for dcid collisions with what is already ingested before loading a new dataset by hand.
 
-`seed-db` and `load` both add data. `seed-db` re-applies Data Commons' own base seeds. `load` imports the datasets under `data/`. `seed-db` has no already-seeded check and no confirmation prompt, so it reseeds the moment you run it.
+`seed-db` re-applies Data Commons' own base seeds, with no already-seeded check and no confirmation prompt, so it reseeds the moment you run it.
 
 ## Migrator password rotation and recovery
 
