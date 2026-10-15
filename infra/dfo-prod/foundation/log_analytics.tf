@@ -1,0 +1,1 @@
+../../stacks/foundation/log_analytics.tf
