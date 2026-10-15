@@ -86,10 +86,10 @@ name: Terraform Plan
 # `terraform fmt check` is a required status check on dev and main, and
 # `Changed stacks planned` on dev. A required check that never runs leaves a
 # pull request unmergeable indefinitely rather than failing it. A `paths`
-# filter here is therefore a deadlock for every pull request it excludes — docs, scripts,
-# justfile — so there is none. A pull request that changes no stack still gets
-# every required check and an empty plan matrix, for a few seconds of runner
-# time.
+# filter here is therefore a deadlock for every pull request it excludes, such
+# as docs, scripts and the justfile, so there is none. A pull request that
+# changes no stack still gets every required check and an empty plan matrix,
+# for a few seconds of runner time.
 #
 # `labeled` and `unlabeled` are in the trigger types because the destroy guard
 # below reads `allow-destroy` from the event payload, and the default types

@@ -1,8 +1,8 @@
 # Fail any PR into dev that adds, edits, renames or deletes
 # infra/dfo-prod/dcp/image.auto.tfvars. The dcp repo's prod release build
-# writes that pin with a PR straight into main. A release merges dev into main, and
-# the merge keeps main's pin only while dev never touches the file, so an
-# edit on dev would roll prod's dcp image back at the next release.
+# writes that pin with a PR straight into main. A release merges dev into
+# main, and the merge keeps main's pin only while dev leaves the file alone,
+# so an edit on dev would roll prod's dcp image back at the next release.
 #
 # Runs on every ready PR into dev, with no paths filter, so it can be a
 # required check on dev. It skips while the PR is a draft and runs again on

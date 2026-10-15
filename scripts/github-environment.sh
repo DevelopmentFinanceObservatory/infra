@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # GitHub Environment helpers shared by the scripts that read or write
-# environments. Sourced; targets bash 3.2.
+# environments. Other scripts source it. It targets bash 3.2.
 #
 # scripts/setup-github-repos.sh is the one writer of an environment's
 # protection: it calls converge_environment. scripts/handoff.sh and
