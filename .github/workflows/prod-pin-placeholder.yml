@@ -1,15 +1,17 @@
-# Fail any ONEcampaign PR that edits infra/dfo-prod/dcp/image.auto.tfvars.
-# The sync keeps that file from the new org's own main, where prod's dcp
-# build writes the pin, so an edit here never reaches prod. Adding the file
-# passes, since that seeds the placeholder the first snapshot copies.
+# Fail any PR into dev that adds, edits, renames or deletes
+# infra/dfo-prod/dcp/image.auto.tfvars. The dcp repo's prod release build
+# writes that pin with a PR straight into main. A release merges dev into main, and
+# the merge keeps main's pin only while dev never touches the file, so an
+# edit on dev would roll prod's dcp image back at the next release.
 #
-# Runs on every ready PR, with no paths filter, so it can be a required check.
-# It skips while the PR is a draft and runs again on `ready_for_review`.
+# Runs on every ready PR into dev, with no paths filter, so it can be a
+# required check on dev. It skips while the PR is a draft and runs again on
+# `ready_for_review`.
 name: Prod pin placeholder
 
 on:
   pull_request:
-    branches: [main]
+    branches: [dev]
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
@@ -19,8 +21,7 @@ permissions:
 jobs:
   check:
     name: Prod pin placeholder unchanged
-    # ONEcampaign-only. In the new org the sync and sync-guard own the file.
-    if: github.repository_owner == 'ONEcampaign' && github.event.pull_request.draft != true
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -35,7 +36,7 @@ jobs:
           gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
             --jq '.[] | "\(.status) \(.filename) \(.previous_filename // "")"' >files.txt
           echo "Checked $(wc -l <files.txt) changed file(s)."
-          if awk -v pin="$PIN_FILE" '($2 == pin && $1 != "added") || $3 == pin { found = 1 } END { exit !found }' files.txt; then
-            echo "::error file=$PIN_FILE::This PR edits $PIN_FILE. Prod's sync keeps that file from the new org's main, so ONEcampaign edits never reach prod. Revert the change."
+          if awk -v pin="$PIN_FILE" '$2 == pin || $3 == pin { found = 1 } END { exit !found }' files.txt; then
+            echo "::error file=$PIN_FILE::This PR changes $PIN_FILE. Only the dcp repo's prod release writes that file, on main, and a dev edit would roll prod's dcp image back at the next release. Revert the change."
             exit 1
           fi
