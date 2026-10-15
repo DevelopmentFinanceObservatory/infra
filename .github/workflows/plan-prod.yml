@@ -1,39 +1,55 @@
-# Terraform plan on pull requests in the DevelopmentFinanceObservatory org.
+# Terraform plan on pull requests into main, which release to prod.
 #
-# plan.yml plans dev in ONEcampaign on `pull_request`, which runs the PR's
-# Terraform. In the new org that would hand any PR the prod planner, which
-# reads prod state, before sync-guard has ruled on it. This file plans prod
-# instead, in this order:
-#   1. `Prod PR verified` runs on `pull_request_target`, so this file and the
-#      scripts come from base main. It runs `scripts/sync-guard.sh`, the same
-#      rules as the sync-guard check, on the event's base and head commits.
-#      It reads git objects and the GitHub API and runs nothing from the PR.
-#   2. Only a PR it passes, an exact sync of a ONEcampaign commit or a
-#      release App image pin, has its head checked out. `Prod detect changed
-#      stacks` maps the PR's files to stacks under `infra/dfo-prod`.
-#   3. `Prod plan (<stack>)` plans each changed stack as the planner, with the
-#      destroy guard and the PR comment plan.yml uses.
+# plan.yml plans pull requests into dev on `pull_request`. This file plans
+# `infra/dfo-prod` on `pull_request_target` instead, the only pull request
+# event whose OIDC token carries `refs/heads/main`, which the `plan`
+# environment's branch policy and the prod planner's WIF binding both require.
+# That event loads this file and its scripts from main, the infra default
+# branch, whatever the PR changes them to. The jobs run in this order:
+#   1. `Prod PR verified` rejects a head from a fork, so a fork's PR never
+#      asks a reviewer to approve its plan. It then finds the PR's merge
+#      commit, `refs/pull/<n>/merge`, through the API and refuses it unless
+#      its parents are the event's base and head commits. It declares no
+#      environment and checks out nothing.
+#   2. `Prod detect changed stacks` maps the files that differ between the
+#      base and that merge commit to stacks under `infra/dfo-prod`.
+#   3. `Prod plan (<stack>)` plans each changed stack as the prod planner,
+#      with the destroy guard and the PR comment plan.yml uses.
 #   4. `Prod changed stacks planned` fails unless every step above passed.
+#      It is the required plan check on main.
 #
-# detect and plan check out base main to ./base and the PR head to ./head.
-# Every script they run comes from ./base. Only the Terraform under
-# head/infra comes from the PR.
+# The plan covers the merge commit because prod's dcp image pin lands on main
+# straight from the dcp repo's release build, and dev never edits that file
+# (prod-pin-placeholder.yml), so the merge keeps main's pin. The PR head
+# holds dev's older pin, so planning the head would show a rollback of
+# prod's image that the merge never applies. Planning the merge shows what
+# the apply on main will do. The merge commit is planned by its SHA, so a push
+# while this runs cannot change what the plan job reads.
 #
-# The plan job runs the PR's Terraform on pull_request_target, so its OIDC
-# token carries refs/heads/main, the applier's ref. It declares the `plan`
-# environment, and the foundation stack binds the prod planner to `plan` on
-# main and the prod applier to `production` on main, so that token matches
-# the planner only. `Prod PR verified` also declares `plan`, to read the
-# reader key held there; it authenticates to nothing in GCP. No other job may
-# declare `plan`.
+# A release PR's head is a branch cut from dev. Updating a release head from
+# main pushes to it, which dev's ruleset refuses on dev itself, and a head of
+# dev would re-run this plan on every merge to dev.
 #
-# Every job is prod-only. In ONEcampaign they all skip, and plan.yml plans.
+# The plan job runs the merge commit's Terraform, and that Terraform can run
+# code, with the prod planner's identity, so it declares the `plan`
+# environment. `plan` admits only main and requires approval from the
+# `release` team, which reads the PR before approving. The prod planner's WIF
+# binding requires `plan` on `refs/heads/main`, and the prod applier's
+# requires `production`, so this token never matches the applier. No other
+# job may declare `plan`. detect and plan check out main to ./base and the
+# merge commit to ./merge, and every script they run comes from ./base.
 #
-# Required checks on main in the new org: `terraform fmt check`, from
-# plan.yml, `Prod changed stacks planned`, and `sync-guard`. ONEcampaign
-# keeps `terraform fmt check`, `Detect changed stacks` and `Changed stacks
-# planned`. The two orgs' names differ because a skipped job counts as
-# passed, so a name shared across both files would pass on the skipped copy.
+# The plan job holds no concurrency group. It runs `-lock=false` and writes
+# nothing, and a job waiting for approval in apply-stack.yml's group would
+# risk cancelling a queued apply, or being cancelled by one.
+#
+# No job runs while the PR is a draft, so a draft asks no reviewer for
+# anything. `ready_for_review` starts the run when it is marked ready.
+#
+# Required checks on main: `terraform fmt check`, from plan.yml, and
+# `Prod changed stacks planned`. Its name differs from plan.yml's
+# `Changed stacks planned`, which skips on PRs into main, and a skipped job
+# counts as passed.
 #
 # A removed stack root under infra/dfo-prod fails detection unless the PR
 # carries `allow-destroy`, as in plan.yml.
@@ -41,48 +57,76 @@ name: Terraform Plan (prod)
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
     branches: [main]
 
 permissions:
   contents: read
 
+# A newer push cancels the older run, which may still wait for a `release`
+# approval. The group is per PR, so it never touches apply-stack.yml's groups.
+concurrency:
+  group: plan-prod-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     name: Prod PR verified
-    if: github.repository_owner == 'DevelopmentFinanceObservatory'
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
-    # Holds the reader pair, which prod keeps only in environments that admit
-    # main. This event runs on the base ref, so it qualifies.
-    environment: plan
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      merge_sha: ${{ steps.merge.outputs.merge_sha }}
     steps:
-      # Base main, the default ref for pull_request_target.
-      - name: Checkout base
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Mint a read token for the source repo
-        id: source-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ vars.READER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.READER_APP_PRIVATE_KEY }}
-          owner: ONEcampaign
-          repositories: dfo-infra
-          permission-contents: read
-
-      # Every value comes from the event, so a push while this runs cannot
-      # change which head it judges, and the jobs below plan that same head.
-      - name: Check the PR with sync-guard.sh
+      - name: Reject a head from a fork
         env:
-          SYNC_TARGET_TOKEN: ${{ github.token }}
-          SYNC_SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
-          TARGET: ${{ github.event.repository.name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::error::The head branch lives in '$HEAD_REPO'. Prod plans only PRs whose head branch is in $REPO."
+            exit 1
+          fi
+
+      # GitHub builds refs/pull/<n>/merge in the background after each push,
+      # and `mergeable` stays null until it has. Every value is checked
+      # against the event, so a later push or a newer main is refused rather
+      # than planned under this run's approval.
+      - name: Resolve the merge commit
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-        run: scripts/sync-guard.sh "$TARGET" "$BASE_SHA" "$HEAD_SHA" "$AUTHOR"
+        run: |
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            pr="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
+            mergeable="$(jq -r '.mergeable' <<<"$pr")"
+            [ "$mergeable" != "null" ] && break
+            echo "Merge commit not ready (attempt $attempt of 12)."
+            sleep 5
+          done
+          if [ "$(jq -r '.head.sha' <<<"$pr")" != "$HEAD_SHA" ]; then
+            echo "::error::The PR head moved past $HEAD_SHA. The run for the newer push plans it."
+            exit 1
+          fi
+          case "$mergeable" in
+            true) ;;
+            false) echo "::error::The PR does not merge cleanly into main. Resolve the conflicts on the head branch."; exit 1 ;;
+            *) echo "::error::GitHub had not built the merge commit after a minute. Re-run this workflow."; exit 1 ;;
+          esac
+          merge_sha="$(jq -r '.merge_commit_sha' <<<"$pr")"
+          parents="$(gh api "repos/$REPO/commits/$merge_sha" --jq '[.parents[].sha] | join(" ")')"
+          if [ "$parents" != "$BASE_SHA $HEAD_SHA" ]; then
+            echo "::error::Merge commit $merge_sha has parents '$parents', expected '$BASE_SHA $HEAD_SHA'. main has moved since this event; push to the head branch, or close and reopen the PR, to plan against the current main."
+            exit 1
+          fi
+          echo "Planning merge commit $merge_sha of base $BASE_SHA and head $HEAD_SHA."
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
 
   detect:
     name: Prod detect changed stacks
@@ -98,66 +142,59 @@ jobs:
           path: base
           persist-credentials: false
 
-      # The verified head, and its parent, which verify proved is the base.
-      - name: Checkout head
+      # The merge commit and its first parent, which verify proved is the base.
+      - name: Checkout merge commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          path: head
+          ref: ${{ needs.verify.outputs.merge_sha }}
+          path: merge
           fetch-depth: 2
           persist-credentials: false
 
       - name: Resolve environment
         id: env
         env:
-          OWNER: ${{ github.repository_owner }}
-        run: echo "env=$(base/scripts/terraform-stacks.sh environment "$OWNER")" >> "$GITHUB_OUTPUT"
+          BASE_REF: ${{ github.base_ref }}
+        run: echo "env=$(base/scripts/terraform-stacks.sh environment "$BASE_REF")" >> "$GITHUB_OUTPUT"
 
       - name: Map changed files to stacks
         id: changed
         env:
           ENV_DIR: ${{ steps.env.outputs.env }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ needs.verify.outputs.merge_sha }}
           ALLOW_DESTROY: ${{ contains(github.event.pull_request.labels.*.name, 'allow-destroy') }}
-        # base's terraform-stacks.sh reads the head's tree, from its root.
-        working-directory: head
+        # base's terraform-stacks.sh reads the merge commit's tree, from its
+        # root.
+        working-directory: merge
         run: |
           allow=""
           [ "$ALLOW_DESTROY" = "true" ] && allow="--allow-removed"
-          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" -- infra >"$RUNNER_TEMP/files.txt"
+          git diff --name-only --no-renames "$BASE_SHA" "$MERGE_SHA" -- infra >"$RUNNER_TEMP/files.txt"
           echo "Changed $(wc -l <"$RUNNER_TEMP/files.txt") file(s) under infra/."
           stacks="$(../base/scripts/terraform-stacks.sh changed "$ENV_DIR" ${allow:+"$allow"} <"$RUNNER_TEMP/files.txt")"
           echo "Changed stacks in infra/$ENV_DIR: $stacks"
           echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
 
   plan:
-    # Named apart from plan.yml's plan (<stack>), which approve-image-pin.yml
-    # polls by name in ONEcampaign.
     name: Prod plan (${{ matrix.stack }})
-    needs: detect
+    needs: [verify, detect]
     if: needs.detect.outputs.stacks != '[]' && needs.detect.outputs.stacks != ''
     runs-on: ubuntu-latest
-    # The planner's WIF binding requires this environment, and the applier's
-    # never matches it. The environment admits only main, the ref
-    # pull_request_target runs carry.
+    # Admits only main and waits for a `release` approval. Holds the prod
+    # planner's WIF values, which no other environment does.
     environment: plan
     permissions:
       contents: read
       id-token: write
       pull-requests: write
-    # Same group as apply-stack.yml, so a plan and an apply for one stack
-    # never race on state.
-    concurrency:
-      group: terraform-${{ needs.detect.outputs.env }}-${{ matrix.stack }}
-      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
         stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
     defaults:
       run:
-        working-directory: head/infra/${{ needs.detect.outputs.env }}/${{ matrix.stack }}
+        working-directory: merge/infra/${{ needs.detect.outputs.env }}/${{ matrix.stack }}
     steps:
       - name: Checkout base
         uses: actions/checkout@v4
@@ -165,11 +202,11 @@ jobs:
           path: base
           persist-credentials: false
 
-      - name: Checkout head
+      - name: Checkout merge commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          path: head
+          ref: ${{ needs.verify.outputs.merge_sha }}
+          path: merge
           persist-credentials: false
 
       - name: Authenticate to GCP (WIF)
@@ -248,7 +285,7 @@ jobs:
   planned:
     name: Prod changed stacks planned
     needs: [verify, detect, plan]
-    if: always() && github.repository_owner == 'DevelopmentFinanceObservatory'
+    if: always() && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - name: Check the PR was verified and every changed stack planned
@@ -260,7 +297,7 @@ jobs:
           STACKS: ${{ needs.detect.outputs.stacks }}
         run: |
           if [ "$VERIFY_RESULT" != "success" ]; then
-            echo "::error::Prod PR verified ended '$VERIFY_RESULT', so nothing was planned. See sync-guard's report."
+            echo "::error::Prod PR verified ended '$VERIFY_RESULT', so nothing was planned. See its log."
             exit 1
           fi
           if [ "$DETECT_RESULT" != "success" ]; then

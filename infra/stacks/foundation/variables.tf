@@ -19,15 +19,19 @@ variable "github_owner" {
 }
 
 variable "github_owner_id" {
-  description = "Immutable numeric id of var.github_owner, gating the WIF attribute condition instead of the org name. Org names can be released and re-registered by someone else, but the id cannot — it must be read from the GitHub API (GET /orgs/{org} -> id), not guessed or derived from the name."
+  description = "Immutable numeric id of var.github_owner, gating the WIF attribute condition instead of the org name. Org names can be released and re-registered by someone else, but the id cannot — it must be read from the GitHub API (GET /orgs/{org} -> id), not guessed or derived from the name. A github_repositories entry under another owner carries that owner's name and id in its own owner field."
   type        = string
 }
 
 variable "github_repositories" {
-  description = "The GitHub repositories this environment trusts, keyed by role (infra, ai, apis, dcp, website, docs, and optionally site_qa, which only dev lists). Each entry carries the repository's name under var.github_owner and its immutable numeric id, read from the GitHub API (GET /repos/{owner}/{repo} -> id) and never guessed: a name can be released and re-registered by someone else, an id cannot. The ids gate the WIF attribute condition alongside github_owner_id, and each binding's repository comes from the same entry. The four image deployers (ai, apis, dcp, website) also carry deploy_environment and deploy_branch, the GitHub Environment and git branch their WIF binding is pinned to, so only a run on that branch under that Environment can mint the identity. Those two are kept in step with scripts/deploy-targets.sh, which writes and audits the matching deployment branch policy; the two disagreeing breaks that repository's next deploy at the auth step rather than widening anything. A repository gains an entry only when it gains a deployer."
+  description = "The GitHub repositories this environment trusts, keyed by role (infra, ai, apis, dcp, website, docs, and optionally site_qa, which only dev lists). Each entry carries the repository's name under var.github_owner, or under owner.name when the entry sets owner, and its immutable numeric id, read from the GitHub API (GET /repos/{owner}/{repo} -> id) and never guessed: a name can be released and re-registered by someone else, an id cannot. The ids gate the WIF attribute condition alongside their owner's id (owner.id, or github_owner_id when owner is unset): the condition admits each owner's own listed repositories and nothing else, and each binding's repository comes from the same entry. Dev lists site_qa, ONEcampaign/dfo-site-qa, with owner ONEcampaign (6450343). The four image deployers (ai, apis, dcp, website) also carry deploy_environment and deploy_branch, the GitHub Environment and git branch their WIF binding is pinned to, so only a run on that branch under that Environment can mint the identity. docs carries deploy_branch, and optionally deploy_environment, for the dfo-docs-sync binding: dev sets docsync on dev, where docsync.yml runs. Those two are kept in step with scripts/deploy-targets.sh, which writes and audits the matching deployment branch policy; the two disagreeing breaks that repository's next deploy at the auth step rather than widening anything. A repository gains an entry only when it gains a deployer."
   type = map(object({
-    name               = string
-    id                 = string
+    name = string
+    id   = string
+    owner = optional(object({
+      name = string
+      id   = string
+    }))
     deploy_environment = optional(string)
     deploy_branch      = optional(string)
   }))
@@ -41,10 +45,25 @@ variable "github_repositories" {
     condition     = alltrue([for role in ["ai", "apis", "dcp", "website"] : try(var.github_repositories[role].deploy_environment != null && var.github_repositories[role].deploy_branch != null, false)])
     error_message = "The ai, apis, dcp, and website entries of github_repositories must set deploy_environment and deploy_branch."
   }
+
+  validation {
+    condition     = try(var.github_repositories["docs"].deploy_branch != null, false)
+    error_message = "The docs entry of github_repositories must set deploy_branch, the branch the dfo-docs-sync binding is pinned to."
+  }
+
+  validation {
+    condition     = alltrue([for repo in values(var.github_repositories) : can(regex("^[0-9]+$", repo.id))])
+    error_message = "Every github_repositories id must be the repository's numeric GitHub id (GET /repos/{owner}/{repo} -> id)."
+  }
+
+  validation {
+    condition     = alltrue([for repo in values(var.github_repositories) : repo.owner == null || can(regex("^[0-9]+$", repo.owner.id))])
+    error_message = "Every github_repositories owner.id must be the owner's numeric GitHub id (GET /users/{owner} -> id)."
+  }
 }
 
 variable "planner_wif_ref" {
-  description = "Git ref the dfo-infra-planner WIF binding is pinned to, such as refs/heads/main, or null. With planner_wif_environment also null, the binding is repo-scoped and any workflow in the infra repository can use it. Prod sets refs/heads/main, because plan-prod.yml runs on pull_request_target, whose ref is the base branch. Dev sets null, because its plan.yml runs on pull_request and carries refs/pull/<n>/merge. Every environment sets it, so no new environment inherits the repo-scoped binding by omission."
+  description = "Git ref the dfo-infra-planner WIF binding is pinned to, such as refs/heads/main, or null. With planner_wif_environment also null, the binding is repo-scoped and any workflow in the infra repository can use it. Prod sets refs/heads/main, because plan-prod.yml runs on pull_request_target, whose ref is the default branch, main. Dev sets null, because its plan.yml runs on pull_request and carries refs/pull/<n>/merge. Every environment sets it, so no new environment inherits the repo-scoped binding by omission."
   type        = string
 }
 
@@ -53,13 +72,23 @@ variable "planner_wif_environment" {
   type        = string
 }
 
-variable "applier_wif_environment" {
-  description = "GitHub Environment the dfo-infra-applier WIF binding requires on refs/heads/main, or null to bind on the ref alone. Prod sets production, which apply-stack.yml declares for dfo-prod, so a job on main in any other environment, or in none, cannot impersonate the applier. Dev sets null, because dev's apply declares no environment and no dev job that runs PR code carries the main ref."
+variable "applier_wif_ref" {
+  description = "Git ref the dfo-infra-applier WIF binding is pinned to: the branch whose pushes apply this environment. Prod sets refs/heads/main and dev refs/heads/dev, the branches apply.yml applies dfo-prod and dfo-dev from."
   type        = string
 
   validation {
-    condition     = !(var.applier_wif_environment == var.planner_wif_environment && var.planner_wif_ref == "refs/heads/main")
-    error_message = "The planner and applier WIF bindings would be the same member. Give them different GitHub Environments or the planner a different ref."
+    condition     = can(regex("^refs/heads/.+$", var.applier_wif_ref))
+    error_message = "applier_wif_ref must be a branch ref, such as refs/heads/main."
+  }
+}
+
+variable "applier_wif_environment" {
+  description = "GitHub Environment the dfo-infra-applier WIF binding requires on applier_wif_ref, or null to bind on the ref alone. Prod sets production and dev sets dev, the environments apply-stack.yml declares for dfo-prod and dfo-dev, so a job on that ref in any other environment, or in none, cannot impersonate the applier."
+  type        = string
+
+  validation {
+    condition     = !(var.applier_wif_environment == var.planner_wif_environment && var.applier_wif_ref == var.planner_wif_ref)
+    error_message = "The planner and applier WIF bindings would be the same member. Give them different GitHub Environments or different refs."
   }
 }
 

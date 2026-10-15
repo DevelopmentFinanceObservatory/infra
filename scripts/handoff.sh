@@ -9,47 +9,44 @@
 # scripts/deploy-targets.sh's deploy_values holds the one table of which
 # variable or secret comes from which stack's output.
 #
-# This copies those values into the service repo's GitHub Environment with
-# `gh`, using your existing GitHub login. It is deliberately NOT done in
+# This copies those values into the repo's GitHub Environment with `gh`,
+# using your existing GitHub login. It is deliberately NOT done in
 # Terraform: that would need a long-lived GitHub admin credential stored in
 # Secret Manager, defeating the keyless WIF design, and these values change
 # only when the stacks rename something, so a one-shot script is the right
-# tool. The same reasoning covers the environment's deployment branch policy
-# this script also sets: the WIF binding already pins the target
-# environment's subject to one git ref (infra/modules/github-deployer's
-# repo_env_ref mode), but that pin lives in dfo-infra's Terraform state and
-# GCP's IAM policy, which GitHub has no visibility into. The deployment
-# branch policy is a second, independent check that lives on the
-# environment itself, where this Terraform can't assert it, and it too
-# needs a GitHub admin credential this script borrows from your login
-# rather than storing.
+# tool.
 #
 # The first argument is the Terraform environment, `dfo-dev` or `dfo-prod`;
 # the second is the stack. scripts/deploy-targets.sh maps that pair to the
-# service repo (`ONEcampaign/dfo-<stack>` in dev,
-# `DevelopmentFinanceObservatory/<stack>` in prod), the GitHub Environment
-# (`dev`, `staging` for the dev website, or `production`), and the one
-# deploy branch the environment's policy admits. The branch is the value
-# pinned in that file, not the repo's current default branch on GitHub; see
-# the file for why. An unknown environment or stack fails before anything is
-# read or written.
+# repo (`DevelopmentFinanceObservatory/<stack>`), the GitHub Environment
+# (`dev` or `production`) and the one branch the environment admits. The
+# environment must already exist with exactly that branch policy, which
+# scripts/setup-github-repos.sh sets. This script checks it, refuses
+# otherwise, and changes no environment's protection itself. An unknown
+# environment or stack fails before anything is read or written.
 #
-# The stack `infra` hands this repo its own values instead: WIF_PROVIDER,
-# WIF_PLAN_SA and WIF_APPLY_SA, which the plan and apply workflows read, go
-# to the env's infra repo (`ONEcampaign/dfo-infra` or
-# `DevelopmentFinanceObservatory/infra`) as repo-level variables, with no
-# environment or branch policy. It needs only foundation applied.
+# The stack `infra` hands this repo its own values, into the environments
+# its workflows declare: the planner's WIF_PROVIDER and WIF_PLAN_SA into
+# `dev-plan` (dfo-dev) or `plan` (dfo-prod), and the applier's WIF_PROVIDER
+# and WIF_APPLY_SA into `dev` or `production`. It writes nothing at repo
+# level, so a job that declares no environment cannot authenticate. It
+# needs only foundation applied.
+#
+# The stack `docs` hands dfo-docs the GCP_WIF_PROVIDER and
+# DOCSYNC_SERVICE_ACCOUNT that docsync.yml reads, into its `docsync`
+# environment. It runs in dfo-dev only and needs only foundation applied.
 #
 # Run AFTER foundation and every stack the table reads are applied in that
 # environment (their outputs must exist): the stack itself, and apis as well
 # for dcp, whose DFO_APIS_BASE_URL is the apis service URL. Every output is
-# read before anything is written, so a missing one changes nothing.
+# read and every environment checked before anything is written, so a
+# missing one changes nothing.
 #
 # Usage: scripts/handoff.sh <env> <stack>
-#   scripts/handoff.sh dfo-dev ai        # ONEcampaign/dfo-ai, environment dev, branch dev
-#   scripts/handoff.sh dfo-dev website   # ONEcampaign/dfo-website, environment staging, branch staging
-#   scripts/handoff.sh dfo-prod apis     # DevelopmentFinanceObservatory/apis, environment production, branch main
-#   scripts/handoff.sh dfo-prod infra    # DevelopmentFinanceObservatory/infra, repo-level variables
+#   scripts/handoff.sh dfo-dev ai        # DevelopmentFinanceObservatory/ai, environment dev
+#   scripts/handoff.sh dfo-prod apis     # DevelopmentFinanceObservatory/apis, environment production
+#   scripts/handoff.sh dfo-dev infra     # DevelopmentFinanceObservatory/infra, environments dev-plan and dev
+#   scripts/handoff.sh dfo-dev docs      # DevelopmentFinanceObservatory/docs, environment docsync
 set -euo pipefail
 
 # The usage text lives once, in the "Usage:" block of the header comment
@@ -93,16 +90,13 @@ source "$repo_root/scripts/deploy-targets.sh"
 # shellcheck disable=SC1091
 source "$repo_root/scripts/github-environment.sh"
 
-# The repo, GitHub Environment and deploy branch all come from the shared
-# table. An unknown environment or stack stops here, before any
-# gh call or Terraform read. An empty env means repo-level values (infra).
-load_handoff_target "$dfo_env" "$stack" || exit 1
-repo="$DEPLOY_REPO"
-env="$DEPLOY_GH_ENV"
-branch="$DEPLOY_BRANCH"
-values="$(deploy_values "$stack")"
+# Where the values go comes from the shared table. An unknown environment
+# or stack stops here, before any gh call or Terraform read. A plain
+# assignment, so a failed lookup stops the script.
+targets="$(handoff_targets "$dfo_env" "$stack")" || exit 1
 
 command -v gh >/dev/null || { echo "gh CLI not found. Install: https://cli.github.com" >&2; exit 1; }
+command -v jq >/dev/null || { echo "jq not found." >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "Not logged in to GitHub. Run 'gh auth login'." >&2; exit 1; }
 
 # Read one infra-derived value from a stack's Terraform state, failing loudly
@@ -123,63 +117,74 @@ read_output() {
 }
 
 # Read every value before writing any, into parallel arrays (bash 3.2 has no
-# associative arrays). The loop reads from a variable, not a command
-# substitution, so a deploy_values failure cannot pass as an empty table.
+# associative arrays), one entry per environment and value. The loops read
+# from variables, not command substitutions, so a failed lookup cannot pass
+# as an empty table.
 echo ">> Reading dfo-infra outputs..."
-kinds=() names=() vals=()
-while read -r kind name root output; do
-    [ -z "$kind" ] && continue
-    case "$kind" in
-    var | secret) ;;
-    *)
-        echo "ERROR: unknown kind '$kind' for $name in deploy_values." >&2
+repos=() envs=() kinds=() names=() vals=()
+checked=""
+while read -r repo env branch values_key; do
+    [ -z "$repo" ] && continue
+    values="$(deploy_values "$values_key")" || {
+        echo "ERROR: deploy_values lists nothing for $values_key." >&2
         exit 1
-        ;;
-    esac
-    # A plain assignment, so a failed read stops the script under errexit.
-    val="$(read_output "$repo_root/$(deploy_tf_dir "$dfo_env" "$root")" "$output")"
-    kinds+=("$kind")
-    names+=("$name")
-    vals+=("$val")
-    printf '   %-24s = %s  (%s output %s)\n' "$name" "$val" "$root" "$output"
-done <<<"$values"
+    }
+    echo "   -> $repo  (environment: $env; terraform env: $dfo_env)"
+    while read -r kind name root output; do
+        [ -z "$kind" ] && continue
+        case "$kind" in
+        var | secret) ;;
+        *)
+            echo "ERROR: unknown kind '$kind' for $name in deploy_values." >&2
+            exit 1
+            ;;
+        esac
+        # A plain assignment, so a failed read stops the script under errexit.
+        val="$(read_output "$repo_root/$(deploy_tf_dir "$dfo_env" "$root")" "$output")"
+        repos+=("$repo")
+        envs+=("$env")
+        kinds+=("$kind")
+        names+=("$name")
+        vals+=("$val")
+        printf '      %-24s = %s  (%s output %s)\n' "$name" "$val" "$root" "$output"
+    done <<<"$values"
+    checked="${checked}${repo} ${env} ${branch}"$'\n'
+done <<<"$targets"
 if [ "${#names[@]}" -eq 0 ]; then
-    echo "ERROR: deploy_values listed nothing for $stack." >&2
+    echo "ERROR: no values resolved for $stack in $dfo_env." >&2
     exit 1
 fi
-if [ -n "$env" ]; then
-    echo "   -> $repo  (environment: $env, deploy branch: $branch; terraform env: $dfo_env)"
-    # Create the environment if needed and restrict it to the deploy branch,
-    # before any value is written. scripts/github-environment.sh documents
-    # the guard against environments with other protection rules.
-    converge_branch_policy "$repo" "$env" "$branch" || exit 1
-    scope=(--env "$env")
-else
-    echo "   -> $repo  (repo-level; terraform env: $dfo_env)"
-    scope=()
+
+# Every target environment must exist with the branch policy the table
+# gives it before any value lands in it. A value written to a missing
+# environment would create it unrestricted.
+echo ">> Checking the target environments..."
+ok=true
+while read -r repo env branch; do
+    [ -z "$repo" ] && continue
+    check_environment "$repo" "$env" "$branch" || ok=false
+done <<<"$checked"
+if [ "$ok" != true ]; then
+    echo "ERROR: fix the environments above with scripts/setup-github-repos.sh --apply; nothing was written." >&2
+    exit 1
 fi
 
-# Variables and secrets follow how the service repo's workflows read them
-# (vars.* or secrets.*). The secrets' values are non-sensitive identifiers,
-# but this script keeps that repo's split.
+# Variables and secrets follow how the repo's workflows read them (vars.* or
+# secrets.*). The secrets' values are non-sensitive identifiers, but this
+# script keeps that repo's split.
 i=0
 while [ "$i" -lt "${#names[@]}" ]; do
-    echo ">> Setting ${names[$i]} ${kinds[$i]}..."
+    echo ">> Setting ${names[$i]} ${kinds[$i]} in '${envs[$i]}' on ${repos[$i]}..."
     case "${kinds[$i]}" in
-    # The +-expansion keeps an empty scope from tripping bash 3.2's nounset.
-    var) gh variable set "${names[$i]}" ${scope[@]+"${scope[@]}"} --repo "$repo" --body "${vals[$i]}" ;;
-    secret) gh secret set "${names[$i]}" ${scope[@]+"${scope[@]}"} --repo "$repo" --body "${vals[$i]}" ;;
+    var) gh variable set "${names[$i]}" --env "${envs[$i]}" --repo "${repos[$i]}" --body "${vals[$i]}" ;;
+    secret) gh secret set "${names[$i]}" --env "${envs[$i]}" --repo "${repos[$i]}" --body "${vals[$i]}" ;;
     esac
     i=$((i + 1))
 done
 
 echo ""
-if [ -n "$env" ]; then
-    echo "Done. $repo '$env' environment now has ${#names[@]} values (${names[*]}),"
-    echo "and a deployment branch policy restricted to '$branch'."
-    echo "Verify: gh variable list --env $env --repo $repo && gh secret list --env $env --repo $repo"
-    echo "   && scripts/check-deploy-branch-policy.sh $dfo_env $stack"
-else
-    echo "Done. $repo now has ${#names[@]} repo-level values (${names[*]})."
-    echo "Verify: gh variable list --repo $repo"
-fi
+echo "Done. Wrote ${#names[@]} values for $stack in $dfo_env:"
+while read -r repo env branch; do
+    [ -z "$repo" ] && continue
+    echo "   $repo '$env': gh variable list --env $env --repo $repo && gh secret list --env $env --repo $repo"
+done <<<"$checked"
