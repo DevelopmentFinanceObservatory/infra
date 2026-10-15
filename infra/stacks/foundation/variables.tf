@@ -41,10 +41,15 @@ variable "github_repositories" {
     condition     = alltrue([for role in ["ai", "apis", "dcp", "website"] : try(var.github_repositories[role].deploy_environment != null && var.github_repositories[role].deploy_branch != null, false)])
     error_message = "The ai, apis, dcp, and website entries of github_repositories must set deploy_environment and deploy_branch."
   }
+
+  validation {
+    condition     = alltrue([for repo in values(var.github_repositories) : can(regex("^[0-9]+$", repo.id))])
+    error_message = "Every github_repositories id must be the repository's numeric GitHub id (GET /repos/{owner}/{repo} -> id)."
+  }
 }
 
 variable "planner_wif_ref" {
-  description = "Git ref the dfo-infra-planner WIF binding is pinned to, such as refs/heads/main, or null. With planner_wif_environment also null, the binding is repo-scoped and any workflow in the infra repository can use it. Prod sets refs/heads/main, because plan-prod.yml runs on pull_request_target, whose ref is the base branch. Dev sets null, because its plan.yml runs on pull_request and carries refs/pull/<n>/merge. Every environment sets it, so no new environment inherits the repo-scoped binding by omission."
+  description = "Git ref the dfo-infra-planner WIF binding is pinned to, such as refs/heads/main, or null. With planner_wif_environment also null, the binding is repo-scoped and any workflow in the infra repository can use it. Prod sets refs/heads/main, because plan-prod.yml runs on pull_request_target, whose ref is the default branch, main. Dev sets null, because its plan.yml runs on pull_request and carries refs/pull/<n>/merge. Every environment sets it, so no new environment inherits the repo-scoped binding by omission."
   type        = string
 }
 
@@ -53,13 +58,23 @@ variable "planner_wif_environment" {
   type        = string
 }
 
-variable "applier_wif_environment" {
-  description = "GitHub Environment the dfo-infra-applier WIF binding requires on refs/heads/main, or null to bind on the ref alone. Prod sets production, which apply-stack.yml declares for dfo-prod, so a job on main in any other environment, or in none, cannot impersonate the applier. Dev sets null, because dev's apply declares no environment and no dev job that runs PR code carries the main ref."
+variable "applier_wif_ref" {
+  description = "Git ref the dfo-infra-applier WIF binding is pinned to: the branch whose pushes apply this environment. Prod sets refs/heads/main and dev refs/heads/dev, the branches apply.yml applies dfo-prod and dfo-dev from."
   type        = string
 
   validation {
-    condition     = !(var.applier_wif_environment == var.planner_wif_environment && var.planner_wif_ref == "refs/heads/main")
-    error_message = "The planner and applier WIF bindings would be the same member. Give them different GitHub Environments or the planner a different ref."
+    condition     = can(regex("^refs/heads/.+$", var.applier_wif_ref))
+    error_message = "applier_wif_ref must be a branch ref, such as refs/heads/main."
+  }
+}
+
+variable "applier_wif_environment" {
+  description = "GitHub Environment the dfo-infra-applier WIF binding requires on applier_wif_ref, or null to bind on the ref alone. Prod sets production and dev sets dev, the environments apply-stack.yml declares for dfo-prod and dfo-dev, so a job on that ref in any other environment, or in none, cannot impersonate the applier."
+  type        = string
+
+  validation {
+    condition     = !(var.applier_wif_environment == var.planner_wif_environment && var.applier_wif_ref == var.planner_wif_ref)
+    error_message = "The planner and applier WIF bindings would be the same member. Give them different GitHub Environments or different refs."
   }
 }
 
