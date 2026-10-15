@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Validate the shape of a dcp image-pin PR diff, for
-# .github/workflows/approve-image-pin.yml.
+# Validate the shape of a dcp image-pin PR diff.
 #
 # Checks:
 #   (a) the diff between base and head touches exactly one file:
