@@ -4,15 +4,10 @@
 # and refuses every caller regardless of header -- its own fail-closed
 # default. The pin door reads its own separate value, generated in
 # datasets_pin_principal.tf.
-# This is interim. It does not close the exposure "Unauthenticated writes on
-# the Datasets surface" below records: the apis service still has `allUsers` as
-# an invoker with no proxy validating the caller, so an internet caller who
-# learns this value reaches publish the same as one who does not know it
-# reaches the other writes. A generated secret is what keeps the value from
-# being guessable on the first try, not what removes the exposure. It retires
-# into ONEcampaign/dfo-ai#41, the tracking issue for the service-to-service ID
-# tokens data-mcp does not mint today; once that lands, the door
-# authenticates the caller instead of comparing a shared value.
+# While var.allow_unauthenticated is true, any caller reaches the apis
+# service, so a caller who learns this value reaches publish. With it false,
+# only identities holding an invoker grant reach the service and this value is
+# a second check behind Cloud Run IAM. See "Caller authentication" in the README.
 
 locals {
   # Single counter for the write-only pair below. The ephemeral value

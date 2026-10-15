@@ -49,7 +49,7 @@ output "dcp_deployer_service_account" {
 }
 
 output "site_qa_deployer_service_account" {
-  description = "Email of the dfo-site-qa Firebase deployer service account, or null in an environment that does not list site_qa. dfo-site-qa's deploy workflow names it."
+  description = "Email of the site QA repository's Firebase deployer service account, or null in an environment that does not list site_qa. The site QA repository's deploy workflow names it."
   value       = one(module.site_qa_deployer[*].email)
 }
 

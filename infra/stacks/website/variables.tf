@@ -63,6 +63,11 @@ variable "search_api_base" {
   type        = string
 }
 
+variable "apis_service_name" {
+  description = "Name of the apis stack's Cloud Run service, in this stack's project and region, on which this stack grants the website's runtime service account roles/run.invoker. Copied from the `apis` stack's `service_name` output. The apis stack applies before this one, so the service exists when this grant applies."
+  type        = string
+}
+
 variable "website_url" {
   description = "The website service's own public URL. A module self-reference to module.website_service.service_url would cycle, since the module can't consume its own not-yet-created service's URL as one of its inputs, so this value is copied in as a literal instead."
   type        = string

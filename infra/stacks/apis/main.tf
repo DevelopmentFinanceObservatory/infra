@@ -236,7 +236,7 @@ module "apis_service" {
   startup_cpu_boost = true
   cpu_idle          = true
 
-  allow_unauthenticated = true # accepted for dev. See "Unauthenticated writes on the Datasets surface" in README.md
+  allow_unauthenticated = var.allow_unauthenticated
 
   # Direct VPC egress onto this stack's own PSC subnet (network.tf) — the path
   # to the shared Cloud SQL instance the Datasets API's grants in
@@ -245,6 +245,18 @@ module "apis_service" {
     network    = module.psc_network.network_id
     subnetwork = module.psc_network.subnetwork_id
   }
+}
+
+# One invoker grant per identity in var.invoker_members. Every other grant sits
+# beside the account it names: eval_reader.tf's in the dev apis stack, and the
+# website and ai runtime accounts' in those stacks, which apply after this one.
+resource "google_cloud_run_v2_service_iam_member" "apis_invoker" {
+  for_each = toset(var.invoker_members)
+  project  = var.project_id
+  location = var.region
+  name     = module.apis_service.service_name
+  role     = "roles/run.invoker"
+  member   = each.value
 }
 
 # The tag the apis service is running, read fresh on every plan and

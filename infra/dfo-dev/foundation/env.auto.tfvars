@@ -12,7 +12,7 @@ github_repositories = {
   dcp     = { name = "dcp", id = "1401633556", deploy_environment = "dev", deploy_branch = "dev" }
   website = { name = "website", id = "1401633828", deploy_environment = "dev", deploy_branch = "dev" }
   docs    = { name = "docs", id = "1401634043", deploy_environment = "docsync", deploy_branch = "dev" }
-  # dfo-site-qa stays private in ONEcampaign, so its entry names that owner.
+  # The site QA repository stays private under its original owner, so its entry names that owner.
   site_qa = { name = "dfo-site-qa", id = "1406139622", owner = { name = "ONEcampaign", id = "6450343" } }
 }
 website_deployer_account_id    = "dfo-website-staging-deployer"

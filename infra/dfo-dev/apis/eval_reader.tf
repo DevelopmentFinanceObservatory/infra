@@ -1,6 +1,7 @@
 # The apis repository's search eval job identity. The job stages the coverage index
 # and the origin catalogue onto a GitHub runner and starts two local apps
-# against them, so it reads both buckets and writes nothing.
+# against them, so it reads both buckets and writes nothing. It also calls the
+# dev apis service, so it holds run.invoker there.
 #
 # The account lives here, beside the buckets, and not in ../foundation with
 # the deployers: both stacks apply in parallel on merge, so a foundation
@@ -62,6 +63,28 @@ resource "google_storage_bucket_iam_member" "eval_reader_origin_catalogue_viewer
   bucket = google_storage_bucket.origin_catalogue.name
   role   = "roles/storage.objectViewer"
   member = google_service_account.eval_reader.member
+}
+
+# The eval jobs call the dev apis service with an ID token minted as this
+# account, so it holds run.invoker on that one service. The grant names the
+# service and the account by reference, so neither can drift from a copied
+# value.
+resource "google_cloud_run_v2_service_iam_member" "eval_reader_apis_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = module.apis_service.service_name
+  role     = "roles/run.invoker"
+  member   = google_service_account.eval_reader.member
+}
+
+# The job's credentials are this account's, reached through WIF
+# impersonation, and minting an ID token through the IAM Credentials
+# generateIdToken call needs iam.serviceAccounts.getOpenIdToken on the
+# account itself, which an account does not hold on itself by default.
+resource "google_service_account_iam_member" "eval_reader_self_id_token" {
+  service_account_id = google_service_account.eval_reader.name
+  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
+  member             = google_service_account.eval_reader.member
 }
 
 output "eval_reader_service_account_email" {

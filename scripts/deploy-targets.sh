@@ -227,8 +227,9 @@ handoff_targets() {
 #
 # REGION and PROJECT_ID come from foundation, which owns the Artifact
 # Registry repos the image path names, so the image path and AR_REPO cannot
-# disagree. DFO_APIS_BASE_URL is baked into the dcp image at build time, so
-# the dcp handoff needs the apis stack applied first.
+# disagree. DFO_SITE_ORIGIN, the website origin whose proxy the dcp
+# prototype calls, is baked into the dcp image at build time, so the dcp
+# handoff needs the website stack applied first.
 deploy_values() {
     local common
     common="var REGION foundation region
@@ -272,7 +273,7 @@ secret WIF_SA foundation ${1:-}_deployer_service_account"
         printf '%s\n' "$common" \
             "var AR_REPO foundation artifact_registry_datacommons_repository_id" \
             "var AR_CACHE_REPO foundation artifact_registry_dcp_build_cache_repository_id" \
-            "var DFO_APIS_BASE_URL apis service_url"
+            "var DFO_SITE_ORIGIN website website_url"
         ;;
     website)
         printf '%s\n' "$common" \
