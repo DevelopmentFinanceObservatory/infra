@@ -223,28 +223,36 @@ validate:
 
 # ── Handoff ───────────────────────────────────
 
-# Copy every deploy variable and secret a service repo's workflows read
+# Copy every deploy variable and secret a repo's workflows read
 # (deploy_values in scripts/deploy-targets.sh) from Terraform outputs into its
 # GitHub Environment. Run after the foundation + <stack> stacks are applied,
-# and apis too for dcp. Needs a GitHub login (gh auth login) in addition to
-# gcloud. ENV picks the target: `just handoff apis` writes to
-# ONEcampaign/dfo-apis's `dev` environment, and `just ENV=dfo-prod handoff
-# apis` to DevelopmentFinanceObservatory/apis's `production`. `just handoff`
-# defaults to the ai stack. The repo, GitHub Environment and deploy branch
-# come from scripts/deploy-targets.sh. `just handoff infra` sets this repo's
-# own WIF repo variables instead, and needs only foundation applied.
-[doc("Copy deploy config from Terraform outputs into a service repo")]
+# and apis too for dcp, and after `just setup-github-repos --apply` has
+# created the environments. Needs a GitHub login (gh auth login) in addition
+# to gcloud. ENV picks the target: `just handoff apis` writes to
+# DevelopmentFinanceObservatory/apis's `dev` environment, and
+# `just ENV=dfo-prod handoff apis` to its `production`. `just handoff`
+# defaults to the ai stack. `just handoff infra` writes this repo's planner
+# and applier values into `dev-plan` and `dev` (or `plan` and `production`),
+# and needs only foundation applied.
+[doc("Copy deploy config from Terraform outputs into a repo's environments")]
 handoff stack="ai": _check-gcloud
     scripts/handoff.sh {{ENV}} {{stack}}
 
-# Set the dfo-reader and dfo-release App credentials in ENV's GitHub org,
-# and create the release App's environments in prod. Needs a GitHub login
-# (gh auth login) and the Apps' key files; missing values are prompted for.
-#   just setup-github-apps --dry-run
-#   just ENV=dfo-prod setup-github-apps --reader-key ~/keys/reader.pem --reader-client-id Iv23li...
-[doc("Set the GitHub App credentials and release environments for ENV")]
+# Converge every DevelopmentFinanceObservatory repo's default branch,
+# `main` and `dev` rulesets and environments. Dry run unless --apply.
+#   just setup-github-repos
+#   just setup-github-repos --apply
+[doc("Converge the repos' rulesets, environments and default branches")]
+setup-github-repos *args:
+    scripts/setup-github-repos.sh {{args}}
+
+# Set the dfo-pin, dfo-docsync and dfo-release App credentials in their
+# environments. Needs a GitHub login (gh auth login) and the Apps' key
+# files; pass only the Apps to set.
+#   just setup-github-apps --dry-run --pin-key ~/keys/dfo-pin.pem --pin-client-id Iv23li...
+[doc("Set the GitHub App credentials in their environments")]
 setup-github-apps *args:
-    scripts/setup-github-apps.sh {{ENV}} {{args}}
+    scripts/setup-github-apps.sh {{args}}
 
 # ── Data ──────────────────────────────────────
 

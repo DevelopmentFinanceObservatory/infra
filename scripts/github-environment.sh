@@ -1,7 +1,13 @@
 # shellcheck shell=bash
-# GitHub Environment helpers shared by scripts/handoff.sh and
-# scripts/setup-github-apps.sh, so both create environments and set their
-# deployment branch policies the same way. Sourced; targets bash 3.2.
+# GitHub Environment helpers shared by the scripts that read or write
+# environments. Sourced; targets bash 3.2.
+#
+# scripts/setup-github-repos.sh is the one writer of an environment's
+# protection: it calls converge_environment. scripts/handoff.sh and
+# scripts/setup-github-apps.sh only write values, after check_environment
+# has confirmed the environment exists with the branch policy
+# scripts/deploy-targets.sh gives it. scripts/check-deploy-branch-policy.sh
+# audits with check_environment too.
 #
 # Every write goes through gh_write. With GH_DRY_RUN=true it prints the call
 # and makes none; reads still run, so a dry run reports the writes a real
@@ -29,109 +35,171 @@ gh_write() {
     fi
 }
 
-# converge_branch_policy <owner/repo> <environment> <branch> creates the
-# environment if it does not exist and leaves its deployment branch policy
-# set to exactly {name=<branch>, type=branch}.
+# The environment's protection as one comparable line, from the JSON of an
+# environment GET:
+#   reviewers=<type:id,...> self=<bool> wait=<n> branches=<none|protected|custom>
+ENVIRONMENT_STATE_JQ='
+"reviewers=" + ([.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]? | "\(.type):\(.reviewer.id)"] | sort | join(","))
++ " self=" + ([.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review // false] | any | tostring)
++ " wait=" + ([.protection_rules[]? | select(.type == "wait_timer") | .wait_timer // 0] | add // 0 | tostring)
++ " branches=" + (if .deployment_branch_policy == null then "none"
+    elif .deployment_branch_policy.custom_branch_policies then "custom"
+    else "protected" end)'
+
+# check_environment <owner/repo> <environment> <branch|->: prints one PASS or
+# FAIL line saying what it found, and returns 1 on FAIL or on any error
+# reaching the API. With a branch, the environment must admit exactly
+# {name=<branch>, type=branch}; with `-`, it must have no branch policy.
 #
-# It refuses an environment that already carries a protection rule other
-# than a branch_policy (required reviewers, a wait timer, self-review
-# prevention). The environment-update PUT accepts those same settings, and
-# GitHub does not document whether omitting them on a PUT leaves them alone
-# or clears them. A 404 on the first read means the environment does not
-# exist yet, and the PUT creates it. A lone branch_policy rule is this
-# function's own past run (enabling custom_branch_policies creates that
-# rule), so it does not trip the guard.
-converge_branch_policy() {
-    local repo="$1" env="$2" branch="$3"
+# The branch-policies listing 404s both when the environment does not exist
+# and when it exists without custom policies, so the environment itself is
+# read first.
+check_environment() {
+    local repo="$1" env="$2" branch="$3" err env_json dbp policies expected
+    err="$(mktemp)"
+    if ! env_json="$(gh api "repos/$repo/environments/$env" 2>"$err")"; then
+        if grep -q "HTTP 404" "$err"; then
+            echo "FAIL  $repo ($env): environment does not exist. Run scripts/setup-github-repos.sh."
+        else
+            echo "FAIL  $repo ($env): could not read the environment:"
+            sed 's/^/        /' "$err"
+        fi
+        rm -f "$err"
+        return 1
+    fi
+    dbp="$(printf '%s' "$env_json" | jq -r 'if .deployment_branch_policy == null then "none"
+        elif .deployment_branch_policy.custom_branch_policies then "custom" else "protected" end')"
+
+    if [ "$branch" = - ]; then
+        rm -f "$err"
+        if [ "$dbp" = none ]; then
+            echo "PASS  $repo ($env): no branch policy, as intended."
+            return 0
+        fi
+        echo "FAIL  $repo ($env): expected no branch policy, found '$dbp'."
+        return 1
+    fi
+    case "$dbp" in
+    none)
+        rm -f "$err"
+        echo "FAIL  $repo ($env): unrestricted; deployment_branch_policy is null, so every branch and tag may deploy."
+        return 1
+        ;;
+    protected)
+        rm -f "$err"
+        echo "FAIL  $repo ($env): restricted to GitHub's protected branches, not to the named '$branch' branch."
+        return 1
+        ;;
+    esac
+
+    if ! policies="$(gh api --paginate "repos/$repo/environments/$env/deployment-branch-policies" \
+        --jq '.branch_policies[] | [.name, (.type // "branch")] | @tsv' 2>"$err")"; then
+        echo "FAIL  $repo ($env): could not read deployment branch policies:"
+        sed 's/^/        /' "$err"
+        rm -f "$err"
+        return 1
+    fi
+    rm -f "$err"
+    expected="$(printf '%s\t%s' "$branch" branch)"
+    if [ "$policies" = "$expected" ]; then
+        echo "PASS  $repo ($env): restricted to '$branch'."
+        return 0
+    fi
+    echo "FAIL  $repo ($env): expected exactly {name=$branch, type=branch}, found:"
+    if [ -z "$policies" ]; then
+        echo "        (none; every branch is rejected)"
+    else
+        printf '%s\n' "$policies" | sed 's/^/        /'
+    fi
+    return 1
+}
+
+# converge_environment <owner/repo> <environment> <branch|-> <team-id|->
+# leaves the environment existing with exactly this protection: required
+# reviewers the one team (self-review allowed) or none, no wait timer, and
+# a deployment branch policy of exactly {name=<branch>, type=branch}, or
+# none for `-`. The PUT sends every protection setting, so nothing it omits
+# survives. It skips the PUT when the environment already matches, and
+# reads the result back after a real run.
+converge_environment() {
+    local repo="$1" env="$2" branch="$3" team="$4"
     local env_path="repos/$repo/environments/$env"
     local policies_path="$env_path/deployment-branch-policies"
-    local err env_json foreign_rules custom_enabled=false policies
-    local keep_id="" others="" id name type final expected
+    local err env_json current="absent" want body policies
+    local keep_id="" others="" id name type
     err="$(mktemp)"
 
+    want="reviewers=$([ "$team" = - ] || printf 'Team:%s' "$team") self=false wait=0 branches=$([ "$branch" = - ] && echo none || echo custom)"
     if env_json="$(gh api "$env_path" 2>"$err")"; then
-        foreign_rules="$(printf '%s' "$env_json" |
-            jq -r '[.protection_rules[]?.type | select(. != "branch_policy")] | join(", ")')"
-        if [ -n "$foreign_rules" ]; then
-            echo "ERROR: '$env' environment on $repo already has protection rule(s) this script must not risk clobbering: $foreign_rules." >&2
-            echo "Set the deployment branch policy on this environment by hand instead." >&2
-            rm -f "$err"
-            return 1
-        fi
-        custom_enabled="$(printf '%s' "$env_json" | jq -r '.deployment_branch_policy.custom_branch_policies // false')"
+        current="$(printf '%s' "$env_json" | jq -r "$ENVIRONMENT_STATE_JQ")"
     elif ! grep -q "HTTP 404" "$err"; then
         cat "$err" >&2
         rm -f "$err"
         return 1
     fi
 
-    # Skip the PUT when custom policies are on already, so a rerun does not
-    # resend protected_branches and custom_branch_policies, which GitHub does
-    # not document as leaving the environment's other settings untouched.
-    if [ "$custom_enabled" = "true" ]; then
-        echo ">> '$env' environment on $repo already has custom branch policies enabled."
+    if [ "$current" = "$want" ]; then
+        echo ">> '$env' on $repo already has $want."
     else
-        echo ">> Enabling custom deployment branch policies on '$env' environment ($repo)..."
-        gh_write api --method PUT "$env_path" \
-            -F 'deployment_branch_policy[protected_branches]=false' \
-            -F 'deployment_branch_policy[custom_branch_policies]=true' \
-            --silent || { rm -f "$err"; return 1; }
+        echo ">> Setting '$env' on $repo: $current -> $want"
+        body="$(jq -n --arg team "$team" --arg branch "$branch" '{
+            wait_timer: 0,
+            prevent_self_review: false,
+            reviewers: (if $team == "-" then [] else [{type: "Team", id: ($team | tonumber)}] end),
+            deployment_branch_policy: (if $branch == "-" then null
+                else {protected_branches: false, custom_branch_policies: true} end)
+        }')"
+        printf '%s' "$body" >"$err.body"
+        gh_write api --method PUT "$env_path" --input "$err.body" --silent || { rm -f "$err" "$err.body"; return 1; }
+        rm -f "$err.body"
     fi
 
-    # Create before delete, so the set is never empty: with custom policies
-    # on, an empty set rejects every branch. A tag policy can share the
-    # branch's name, so type is checked with name. The type field is absent
-    # on policies older than tag policies, which are branch policies.
-    #
-    # The listing is a plain assignment so a failed read stops here. Fed to
-    # the loop through a command substitution in a here-string, it would
-    # read as zero existing policies.
-    #
-    # A dry run against an environment that does not exist yet lists
-    # nothing, since the PUT above was only printed.
-    if ! policies="$(gh api --paginate "$policies_path" --jq '.branch_policies[] | [.id, .name, (.type // "branch")] | @tsv' 2>"$err")"; then
-        if [ "${GH_DRY_RUN:-false}" = true ] && grep -q "HTTP 404" "$err"; then
-            policies=""
-        else
-            echo "ERROR: could not list '$env' environment's deployment branch policies on $repo before converging:" >&2
-            cat "$err" >&2
-            rm -f "$err"
-            return 1
+    if [ "$branch" != - ]; then
+        # Create before delete, so the set is never empty: with custom
+        # policies on, an empty set rejects every branch. A tag policy can
+        # share the branch's name, so type is checked with name. The type
+        # field is absent on policies older than tag policies.
+        #
+        # A dry run against an environment that does not exist yet, or has
+        # no custom policies yet, lists nothing, since the PUT was printed.
+        if ! policies="$(gh api --paginate "$policies_path" --jq '.branch_policies[] | [.id, .name, (.type // "branch")] | @tsv' 2>"$err")"; then
+            if grep -q "HTTP 404" "$err" && { [ "${GH_DRY_RUN:-false}" = true ] || [ "$current" = absent ]; }; then
+                policies=""
+            else
+                echo "ERROR: could not list '$env' environment's deployment branch policies on $repo:" >&2
+                cat "$err" >&2
+                rm -f "$err"
+                return 1
+            fi
         fi
+        while IFS=$'\t' read -r id name type; do
+            [ -z "$id" ] && continue
+            if [ "$name" = "$branch" ] && [ "$type" = branch ] && [ -z "$keep_id" ]; then
+                keep_id="$id"
+            else
+                others="${others}${id}"$'\t'"${name}"$'\t'"${type}"$'\n'
+            fi
+        done <<<"$policies"
+        if [ -z "$keep_id" ]; then
+            echo ">> Adding '$branch' to '$env' environment's branch policy on $repo..."
+            gh_write api --method POST "$policies_path" -f name="$branch" -f type=branch --silent || { rm -f "$err"; return 1; }
+        fi
+        while IFS=$'\t' read -r id name type; do
+            [ -z "$id" ] && continue
+            echo ">> Removing $type policy '$name' (id $id) from '$env' on $repo; only '$branch' may use it."
+            gh_write api --method DELETE "$policies_path/$id" --silent || { rm -f "$err"; return 1; }
+        done <<<"$others"
     fi
     rm -f "$err"
 
-    while IFS=$'\t' read -r id name type; do
-        [ -z "$id" ] && continue
-        if [ "$name" = "$branch" ] && [ "$type" = "branch" ] && [ -z "$keep_id" ]; then
-            keep_id="$id"
-        else
-            others="${others}${id}"$'\t'"${name}"$'\t'"${type}"$'\n'
-        fi
-    done <<<"$policies"
-
-    if [ -n "$keep_id" ]; then
-        echo ">> '$branch' branch policy already present on '$env' environment ($repo)."
-    else
-        echo ">> Adding '$branch' to the deployment branch policy on '$env' environment ($repo)..."
-        gh_write api --method POST "$policies_path" -f name="$branch" -f type=branch --silent || return 1
-    fi
-
-    # Any other policy, a different branch or a same-named tag, would let
-    # another ref run jobs in this environment.
-    while IFS=$'\t' read -r id name type; do
-        [ -z "$id" ] && continue
-        echo ">> Removing deployment $type policy '$name' (id $id) from '$env' environment on $repo; only the '$branch' branch may use it."
-        gh_write api --method DELETE "$policies_path/$id" --silent || return 1
-    done <<<"$others"
-
-    # A dry run changed nothing, so there is nothing to verify.
     [ "${GH_DRY_RUN:-false}" = true ] && return 0
-    final="$(gh api --paginate "$policies_path" --jq '.branch_policies[] | [.name, (.type // "branch")] | @tsv')" || return 1
-    expected="$(printf '%s\t%s' "$branch" branch)"
-    if [ "$final" != "$expected" ]; then
-        echo "ERROR: after converging, '$env' environment's deployment branch policies on $repo are not exactly {name=$branch, type=branch}:" >&2
-        printf '%s\n' "$final" >&2
+    current="$(gh api "$env_path" --jq "$ENVIRONMENT_STATE_JQ")" || return 1
+    if [ "$current" != "$want" ]; then
+        echo "ERROR: '$env' on $repo reads back as '$current', expected '$want'." >&2
         return 1
     fi
+    check_environment "$repo" "$env" "$branch" >/dev/null || {
+        check_environment "$repo" "$env" "$branch" >&2
+        return 1
+    }
 }
