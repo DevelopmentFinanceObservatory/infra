@@ -19,15 +19,19 @@ variable "github_owner" {
 }
 
 variable "github_owner_id" {
-  description = "Immutable numeric id of var.github_owner, gating the WIF attribute condition instead of the org name. Org names can be released and re-registered by someone else, but the id cannot — it must be read from the GitHub API (GET /orgs/{org} -> id), not guessed or derived from the name."
+  description = "Immutable numeric id of var.github_owner, gating the WIF attribute condition instead of the org name. Org names can be released and re-registered by someone else, but the id cannot — it must be read from the GitHub API (GET /orgs/{org} -> id), not guessed or derived from the name. A github_repositories entry under another owner carries that owner's name and id in its own owner field."
   type        = string
 }
 
 variable "github_repositories" {
-  description = "The GitHub repositories this environment trusts, keyed by role (infra, ai, apis, dcp, website, docs, and optionally site_qa, which only dev lists). Each entry carries the repository's name under var.github_owner and its immutable numeric id, read from the GitHub API (GET /repos/{owner}/{repo} -> id) and never guessed: a name can be released and re-registered by someone else, an id cannot. The ids gate the WIF attribute condition alongside github_owner_id, and each binding's repository comes from the same entry. The four image deployers (ai, apis, dcp, website) also carry deploy_environment and deploy_branch, the GitHub Environment and git branch their WIF binding is pinned to, so only a run on that branch under that Environment can mint the identity. Those two are kept in step with scripts/deploy-targets.sh, which writes and audits the matching deployment branch policy; the two disagreeing breaks that repository's next deploy at the auth step rather than widening anything. A repository gains an entry only when it gains a deployer."
+  description = "The GitHub repositories this environment trusts, keyed by role (infra, ai, apis, dcp, website, docs, and optionally site_qa, which only dev lists). Each entry carries the repository's name under var.github_owner, or under owner.name when the entry sets owner, and its immutable numeric id, read from the GitHub API (GET /repos/{owner}/{repo} -> id) and never guessed: a name can be released and re-registered by someone else, an id cannot. The ids gate the WIF attribute condition alongside their owner's id (owner.id, or github_owner_id when owner is unset): the condition admits each owner's own listed repositories and nothing else, and each binding's repository comes from the same entry. Dev lists site_qa, ONEcampaign/dfo-site-qa, with owner ONEcampaign (6450343). The four image deployers (ai, apis, dcp, website) also carry deploy_environment and deploy_branch, the GitHub Environment and git branch their WIF binding is pinned to, so only a run on that branch under that Environment can mint the identity. docs carries deploy_branch, and optionally deploy_environment, for the dfo-docs-sync binding: dev sets docsync on dev, where docsync.yml runs. Those two are kept in step with scripts/deploy-targets.sh, which writes and audits the matching deployment branch policy; the two disagreeing breaks that repository's next deploy at the auth step rather than widening anything. A repository gains an entry only when it gains a deployer."
   type = map(object({
-    name               = string
-    id                 = string
+    name = string
+    id   = string
+    owner = optional(object({
+      name = string
+      id   = string
+    }))
     deploy_environment = optional(string)
     deploy_branch      = optional(string)
   }))
@@ -43,8 +47,18 @@ variable "github_repositories" {
   }
 
   validation {
+    condition     = try(var.github_repositories["docs"].deploy_branch != null, false)
+    error_message = "The docs entry of github_repositories must set deploy_branch, the branch the dfo-docs-sync binding is pinned to."
+  }
+
+  validation {
     condition     = alltrue([for repo in values(var.github_repositories) : can(regex("^[0-9]+$", repo.id))])
     error_message = "Every github_repositories id must be the repository's numeric GitHub id (GET /repos/{owner}/{repo} -> id)."
+  }
+
+  validation {
+    condition     = alltrue([for repo in values(var.github_repositories) : repo.owner == null || can(regex("^[0-9]+$", repo.owner.id))])
+    error_message = "Every github_repositories owner.id must be the owner's numeric GitHub id (GET /users/{owner} -> id)."
   }
 }
 

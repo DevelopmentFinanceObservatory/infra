@@ -268,7 +268,12 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # GitHub Actions run loses GCP access, including the applier that would
   # normally fix it forward — recovery then means a human running Terraform
   # locally with owner credentials.
-  attribute_condition = "assertion.repository_owner_id == '${var.github_owner_id}' && assertion.repository_id in ${jsonencode([for role, repo in var.github_repositories : repo.id])}"
+  #
+  # The condition holds one clause per owner, each pairing that owner's id
+  # with that owner's repository ids, so a repository id is admitted only
+  # under the owner that lists it. With a single owner, as in prod, the
+  # condition is that one clause unwrapped.
+  attribute_condition = length(local.wif_owner_clauses) == 1 ? local.wif_owner_clauses[0] : join(" || ", [for clause in local.wif_owner_clauses : "(${clause})"])
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -283,7 +288,14 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 # Adding another deployer means adding its entry to var.github_repositories
 # and referencing it here by role; nothing else needs to change.
 locals {
-  deployer_repository = { for role, repo in var.github_repositories : role => "${var.github_owner}/${repo.name}" }
+  repository_owner    = { for role, repo in var.github_repositories : role => repo.owner != null ? repo.owner : { name = var.github_owner, id = var.github_owner_id } }
+  deployer_repository = { for role, repo in var.github_repositories : role => "${local.repository_owner[role].name}/${repo.name}" }
+
+  # Repository ids grouped by owner id. A `for` over a map visits roles in
+  # sorted order, so each owner's list, and the condition built from it, is
+  # stable across plans.
+  owner_repository_ids = { for role, repo in var.github_repositories : local.repository_owner[role].id => repo.id... }
+  wif_owner_clauses    = [for owner_id, ids in local.owner_repository_ids : "assertion.repository_owner_id == '${owner_id}' && assertion.repository_id in ${jsonencode(ids)}"]
 }
 
 # Project-level roles for the applier SA, one entry per resource type the
@@ -565,12 +577,12 @@ moved {
   to   = module.website_deployer
 }
 
-# dfo-docs' Google Docs sync, which runs on main and on manual dispatch. The
-# service account holds no project role and no Terraform-managed resource
-# grant: it reaches Drive, Docs, and Sheets only as a member of the ONE Data
-# shared drive, a membership granted outside Terraform. Its WIF binding is
-# pinned to refs/heads/main, which covers push and workflow_dispatch runs
-# started from main.
+# dfo-docs' Google Docs sync. The service account holds no project role and
+# no Terraform-managed resource grant: it reaches Drive, Docs, and Sheets
+# only as a member of the ONE Data shared drive, a membership granted outside
+# Terraform. Its WIF binding is pinned to the docs entry's deploy_branch and,
+# when set, its deploy_environment: dev pins docsync.yml's runs from dev in
+# the docsync environment.
 module "docs_sync" {
   source = "../../modules/github-deployer"
 
@@ -580,11 +592,12 @@ module "docs_sync" {
   repository     = local.deployer_repository["docs"]
   repository_id  = var.github_repositories["docs"].id
 
-  account_id    = "dfo-docs-sync"
-  display_name  = "dfo-docs Google Docs sync (CI)"
-  description   = "Reads and writes the ONE Data shared drive for dfo-docs' Google Docs sync; holds no project roles"
-  project_roles = []
-  wif_ref       = "refs/heads/main"
+  account_id      = "dfo-docs-sync"
+  display_name    = "dfo-docs Google Docs sync (CI)"
+  description     = "Reads and writes the ONE Data shared drive for dfo-docs' Google Docs sync; holds no project roles"
+  project_roles   = []
+  wif_environment = var.github_repositories["docs"].deploy_environment
+  wif_ref         = "refs/heads/${var.github_repositories["docs"].deploy_branch}"
 
   depends_on = [google_project_service.apis]
 }
@@ -592,8 +605,8 @@ module "docs_sync" {
 # dfo-site-qa's Firebase deploy: the dfo-site-qa Hosting site and the rules
 # and indexes of the site-qa Firestore database, on every push to main. The
 # tracker exists only in dev, so the account exists only in an environment
-# whose github_repositories lists site_qa. Its WIF binding is pinned to
-# refs/heads/main, like docs_sync's.
+# whose github_repositories lists site_qa, which stays in ONEcampaign. Its
+# WIF binding is pinned to refs/heads/main.
 module "site_qa_deployer" {
   count  = contains(keys(var.github_repositories), "site_qa") ? 1 : 0
   source = "../../modules/github-deployer"

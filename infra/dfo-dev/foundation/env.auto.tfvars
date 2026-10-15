@@ -11,11 +11,9 @@ github_repositories = {
   apis    = { name = "apis", id = "1401633649", deploy_environment = "dev", deploy_branch = "dev" }
   dcp     = { name = "dcp", id = "1401633556", deploy_environment = "dev", deploy_branch = "dev" }
   website = { name = "website", id = "1401633828", deploy_environment = "dev", deploy_branch = "dev" }
-  docs    = { name = "docs", id = "1401634043" }
-  # DevelopmentFinanceObservatory/site-qa does not exist yet. Replace the
-  # placeholder with its id once it does; the foundation's id validation
-  # fails every plan until then.
-  site_qa = { name = "site-qa", id = "SITE-QA-REPO-ID" }
+  docs    = { name = "docs", id = "1401634043", deploy_environment = "docsync", deploy_branch = "dev" }
+  # dfo-site-qa stays private in ONEcampaign, so its entry names that owner.
+  site_qa = { name = "dfo-site-qa", id = "1406139622", owner = { name = "ONEcampaign", id = "6450343" } }
 }
 website_deployer_account_id    = "dfo-website-staging-deployer"
 website_artifact_repository_id = "dfo-website-staging"

@@ -11,7 +11,7 @@ github_repositories = {
   apis    = { name = "apis", id = "1401633649", deploy_environment = "production", deploy_branch = "main" }
   dcp     = { name = "dcp", id = "1401633556", deploy_environment = "production", deploy_branch = "main" }
   website = { name = "website", id = "1401633828", deploy_environment = "production", deploy_branch = "main" }
-  docs    = { name = "docs", id = "1401634043" }
+  docs    = { name = "docs", id = "1401634043", deploy_branch = "main" }
 }
 website_deployer_account_id    = "dfo-website-deployer"
 website_artifact_repository_id = "dfo-website"
