@@ -188,3 +188,18 @@ variable "billing_export_dataset_id" {
   type        = string
   default     = ""
 }
+
+variable "usage_logs" {
+  description = "The usage_logs Log Analytics bucket (log_analytics.tf): how many days it keeps lines, and the Cloud Run services whose lines it keeps, website_service for request and event lines and apis_service for resolve lines. Null creates no bucket, sink or linked dataset."
+  type = object({
+    retention_days  = number
+    website_service = string
+    apis_service    = string
+  })
+  default = null
+
+  validation {
+    condition     = var.usage_logs == null || try(var.usage_logs.retention_days >= 1 && var.usage_logs.retention_days <= 3650, false)
+    error_message = "usage_logs.retention_days must be between 1 and 3650, the range Cloud Logging accepts."
+  }
+}

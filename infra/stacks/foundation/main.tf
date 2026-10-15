@@ -44,6 +44,7 @@ resource "google_project_service" "apis" {
     "docs.googleapis.com",
     "sheets.googleapis.com",
     "workflows.googleapis.com",
+    "bigquery.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
@@ -336,7 +337,7 @@ locals {
     "roles/dns.admin",                            # consumer PSC DNS zone + record set (apis, website)
     "roles/cloudtasks.queueAdmin",                # google_cloud_tasks_queue (apis datasets worker dispatch)
     "roles/cloudscheduler.admin",                 # google_cloud_scheduler_job (apis coverage tick)
-    "roles/logging.configWriter",                 # google_logging_metric (apis coverage staleness alert)
+    "roles/logging.configWriter",                 # google_logging_metric (apis), the usage_logs bucket, sink and linked dataset (foundation)
     "roles/monitoring.alertPolicyEditor",         # google_monitoring_alert_policy (apis coverage staleness alert)
     "roles/monitoring.notificationChannelEditor", # google_monitoring_notification_channel (foundation Gemini budget)
   ]

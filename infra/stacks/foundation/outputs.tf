@@ -72,3 +72,8 @@ output "artifact_registry_website_repository_id" {
   description = "Repository ID of dfo-website's Artifact Registry repo (its service and migrate job images; the website deployer is the only writer)."
   value       = google_artifact_registry_repository.website.repository_id
 }
+
+output "usage_logs_dataset" {
+  description = "The usage_logs bucket's linked BigQuery dataset, as project.dataset, or null where usage_logs is unset. Its _AllLogs view holds the usage log lines."
+  value       = local.usage_logs_enabled ? "${var.project_id}.${google_logging_linked_dataset.usage_logs[0].link_id}" : null
+}

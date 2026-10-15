@@ -28,3 +28,11 @@ planner_wif_ref         = null
 planner_wif_environment = null
 applier_wif_ref         = "refs/heads/dev"
 applier_wif_environment = "dev"
+
+# Keeps the website's request and event lines and the apis resolve lines
+# for SQL (log_analytics.tf). Dev keeps 30 days.
+usage_logs = {
+  retention_days  = 30
+  website_service = "dfo-dev-website-staging"
+  apis_service    = "dfo-dev-apis"
+}

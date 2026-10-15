@@ -81,6 +81,58 @@ where service.description = "Gemini API" and date(usage_start_time) = current_da
 group by 1, 2 order by cost desc
 ```
 
+## Usage logs
+
+`log_analytics.tf` keeps three kinds of log line for SQL, in a Log Analytics bucket named `usage_logs` in `eu`:
+
+- the website's request lines, which `logRequest` in dfo-website writes with `message: "request"`
+- the website's event lines, which `track()` writes with `message: "event"`
+- the apis service's resolve lines, which the `search.engine.core` logger writes as the text `resolve ` followed by a JSON object.
+
+One sink, `usage-logs`, routes the lines from the two Cloud Run services that `usage_logs` in `env.auto.tfvars` names. The lines reach `_Default` as well, and this stack leaves `_Default` alone. A sink into a bucket in its own project needs no IAM grant. Dev keeps 30 days and prod 400. Null `usage_logs` creates nothing.
+
+Three things cannot change once the bucket exists: the Log Analytics upgrade, the `eu` location, and the bucket id, which stays reserved for 7 days after a delete. Unsetting `usage_logs` and setting it again within a week fails apply.
+
+The linked dataset `usage_logs` exposes the bucket to BigQuery as read-only views, in the same `EU` location as `billing_export`. Every line is in the `_AllLogs` view, with the JSON payload in the `json_payload` column. The Log Analytics page in the console queries it at no charge, and a query through BigQuery bills as a normal query. The resolve line's object parses with `SAFE.PARSE_JSON(SUBSTR(JSON_VALUE(json_payload.message), 9))`. Resolve lines by cache outcome for one day:
+
+```sql
+with resolves as (
+  select safe.parse_json(substr(json_value(json_payload.message), 9)) as resolve
+  from `prod-fin-observatory.usage_logs._AllLogs`
+  where json_value(json_payload.logger) = "search.engine.core"
+    and date(timestamp) = current_date()
+)
+select json_value(resolve.cache) as cache, count(*) as resolves,
+  approx_quantiles(lax_float64(resolve.total_ms), 100)[offset(50)] as median_ms
+from resolves
+group by 1 order by resolves desc
+```
+
+Website events by name for the same day:
+
+```sql
+select json_value(json_payload.name) as name, count(*) as events
+from `prod-fin-observatory.usage_logs._AllLogs`
+where json_value(json_payload.message) = "event" and date(timestamp) = current_date()
+group by 1 order by events desc
+```
+
+The resolve line carries `trace_id`, the same id as `diagnostics.trace_id` in the response. The website puts that id in the event's `props.traceId`, so a join on the two ties an event to the resolve behind it:
+
+```sql
+with resolves as (
+  select safe.parse_json(substr(json_value(json_payload.message), 9)) as resolve
+  from `prod-fin-observatory.usage_logs._AllLogs`
+  where json_value(json_payload.logger) = "search.engine.core"
+    and date(timestamp) = current_date()
+)
+select json_value(e.json_payload.name) as name, json_value(r.resolve.cache) as cache
+from `prod-fin-observatory.usage_logs._AllLogs` as e
+join resolves as r
+  on json_value(e.json_payload.props.traceId) = json_value(r.resolve.trace_id)
+where json_value(e.json_payload.message) = "event" and date(e.timestamp) = current_date()
+```
+
 ## Repository allowlist
 
 The condition holds one clause per owner: `DevelopmentFinanceObservatory`'s id with its repository ids, and in dev ONEcampaign's id with `dfo-site-qa`'s id alone, so no other ONEcampaign repository can exchange a token. The owner-id gate alone would confine token exchange to those owners, and a token with no matching service-account binding can do nothing there, since the only IAM grants on this pool are the eight deployer identities' bindings above. So the repository-id gate closes one specific gap left by the owner-id gate alone: a repository deleted and its name re-registered by someone else under the same owner, which would otherwise present a token whose `attribute.repository` still matches a deployer's binding.
