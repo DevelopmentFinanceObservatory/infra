@@ -233,7 +233,8 @@ validate:
 # `just ENV=dfo-prod handoff apis` to its `production`. `just handoff`
 # defaults to the ai stack. `just handoff infra` writes this repo's planner
 # and applier values into `dev-plan` and `dev` (or `plan` and `production`),
-# and needs only foundation applied.
+# and needs only foundation applied. `just handoff docs` writes docs'
+# `docsync` values, in dfo-dev only.
 [doc("Copy deploy config from Terraform outputs into a repo's environments")]
 handoff stack="ai": _check-gcloud
     scripts/handoff.sh {{ENV}} {{stack}}

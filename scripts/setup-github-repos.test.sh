@@ -2,7 +2,7 @@
 # End-to-end tests for setup-github-repos.sh against a stub `gh` that keeps
 # GitHub's state in files, so --apply's writes land and its read-back reads
 # them. Nothing reaches GitHub. It takes about 30 seconds: each case runs
-# the script over eleven repos, and every stub call starts jq. Not wired
+# the script over ten repos, and every stub call starts jq. Not wired
 # into CI or pre-commit. Run by
 # hand after touching the script, github-environment.sh or
 # deploy-targets.sh:
@@ -38,7 +38,7 @@ while [ "$#" -gt 0 ]; do
     --input) input="$2"; shift ;;
     --jq) jqf="$2"; shift ;;
     -H) shift ;;
-    -f) fields+=("$2"); shift ;;
+    -f | -F) fields+=("$2"); shift ;;
     --silent) silent=true ;;
     --paginate) ;;
     *) path="${1%%\?*}" ;;
@@ -99,7 +99,11 @@ PUT)
     esac
     ;;
 PATCH)
-    jq --arg b "$(field default_branch)" '.default_branch = $b' "$(f "$path")" >"$STATE/tmp" && mv "$STATE/tmp" "$(f "$path")"
+    # Only the fields the call sends change; -F allow_auto_merge=true is a
+    # boolean, as gh sends it.
+    jq --arg b "$(field default_branch)" --arg m "$(field allow_auto_merge)" '
+        (if $b == "" then . else .default_branch = $b end)
+        | (if $m == "" then . else .allow_auto_merge = ($m == "true") end)' "$(f "$path")" >"$STATE/tmp" && mv "$STATE/tmp" "$(f "$path")"
     ;;
 DELETE)
     case "$path" in
@@ -124,7 +128,7 @@ chmod +x "$WORK/bin/gh"
 export PATH="$WORK/bin:$PATH"
 [ "$(command -v gh)" = "$WORK/bin/gh" ] || { echo "gh stub not first on PATH" >&2; exit 1; }
 
-all="infra dcp apis ai website pipelines docs ontology spec-kit skills site-qa"
+all="infra dcp apis ai website pipelines docs ontology spec-kit skills"
 
 # put <path> <json>: writes one stub state file.
 put() { printf '%s\n' "$2" >"$STATE/$(printf '%s' "$1" | tr '/' '_').json"; }
@@ -143,7 +147,7 @@ seed() {
     for name in $all; do
         slug="$OWNER/$name"
         id=$((id + 1))
-        put "repos/$slug" '{"default_branch":"main"}'
+        put "repos/$slug" '{"default_branch":"main","allow_auto_merge":false}'
         put "repos/$slug/branches/dev" '{"name":"dev"}'
         put "orgs/$OWNER/teams/release/repos/$slug" '{"permissions":{"push":true}}'
         put "repos/$slug/rulesets" "[{\"id\":$id,\"name\":\"main\",\"source_type\":\"Repository\"}]"
@@ -201,15 +205,16 @@ ruleset() {
 rule() { printf '%s' "$(ruleset "$1" "$2")" | jq -c "$3"; }
 
 # 1. A dry run (the default) reads, writes nothing, and reports what is
-# missing: here site-qa.
+# missing: here skills.
 seed
-rm "$STATE/repos_${OWNER}_site-qa.json"
+rm "$STATE/repos_${OWNER}_skills.json"
 run
 check "dry run exits 0" "$(is "$status" 0)"
 check "dry run makes no write" "$(is "$(count '[-]-method')" 0)"
-check "dry run reports the missing repo" "$(says "PRECONDITION  $OWNER/site-qa does not exist")"
+check "dry run reports the missing repo" "$(says "PRECONDITION  $OWNER/skills does not exist")"
 check "dry run prints the main retarget" "$(says "DRY-RUN: gh api --method PUT repos/$OWNER/infra/rulesets/101")"
 check "dry run prints the default branch move" "$(says "DRY-RUN: gh api --method PATCH repos/$OWNER/apis -f default_branch=dev")"
+check "dry run prints infra's auto-merge" "$(says "DRY-RUN: gh api --method PATCH repos/$OWNER/infra -F allow_auto_merge=true")"
 
 # 2. --apply writes nothing while a precondition is unmet.
 run --apply
@@ -234,7 +239,7 @@ for name in $all; do
     check "$name main ruleset needs one approval, merge commits only" "$(is "$(rule "$name" main '.rules[] | select(.type == "pull_request") | .parameters | [.required_approving_review_count, .require_last_push_approval, .allowed_merge_methods]')" '[1,true,["merge"]]')"
     covered=$((covered + 1))
 done
-check "covered 11 repos (covered $covered)" "$(is "$covered" 11)"
+check "covered 10 repos (covered $covered)" "$(is "$covered" 10)"
 checks() { rule "$1" "$2" '[.rules[] | select(.type == "required_status_checks") | .parameters | .strict_required_status_checks_policy, [.required_status_checks[] | .context, .integration_id]]'; }
 check "infra main requires fmt and the prod plan, not strict, from Actions" "$(is "$(checks infra main)" '[false,["terraform fmt check",15368,"Prod changed stacks planned",15368]]')"
 check "apis main requires no check" "$(is "$(checks apis main)" '[]')"
@@ -242,8 +247,9 @@ check "infra dev requires its three checks, no approval, no bypass" "$(is "$(che
 check "apis dev mirrors ONEcampaign dfo-apis dev" "$(is "$(checks apis dev)|$(rule apis dev '.rules[] | select(.type == "pull_request") | .parameters | [.required_approving_review_count, .required_review_thread_resolution]')" '[false,["lint",15368,"test",15368,"docker",15368]]|[0,true]')"
 check "website dev mirrors ONEcampaign dfo-website staging" "$(is "$(checks website dev)" '[false,["ci",15368]]')"
 check "pipelines dev mirrors ONEcampaign protect-develop" "$(is "$(checks pipelines dev)|$(rule pipelines dev '[(.rules[] | select(.type == "pull_request") | .parameters | .required_approving_review_count, .allowed_merge_methods), .bypass_actors[0].actor_type]')" '[true,["lint",15368,"test",15368]]|[1,["squash","rebase"],"RepositoryRole"]')"
-check "dcp dev blocks deletion and force pushes only" "$(is "$(rule dcp dev '[.rules[].type]')" '["deletion","non_fast_forward"]')"
-check "site-qa has no dev ruleset" "$(is "$(ruleset site-qa dev)" absent)"
+check "dcp dev needs a pull request with no approval and checks / prototypes" "$(is "$(checks dcp dev)|$(rule dcp dev '[(.rules[] | select(.type == "pull_request") | .parameters.required_approving_review_count), .bypass_actors]')" '[false,["checks / prototypes",15368]]|[0,[]]')"
+check "ontology dev blocks deletion and force pushes only" "$(is "$(rule ontology dev '[.rules[].type]')" '["deletion","non_fast_forward"]')"
+check "the run touches no site-qa repo" "$(lacks site-qa)"
 envstate() { state "repos/$OWNER/$1/environments/$2" '[([.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.id]), (.deployment_branch_policy != null)]'; }
 policy() { state "repos/$OWNER/$1/environments/$2/deployment-branch-policies" '[.branch_policies[].name]'; }
 check "infra dev-plan: no reviewers, no branch policy" "$(is "$(envstate infra dev-plan)" '[[],false]')"
@@ -258,7 +264,8 @@ check "docs docsync: dev only" "$(is "$(envstate docs docsync)|$(policy docs doc
 check "no sync, sync-guard or staging environment remains" "$(is "$(cat "$STATE"/*_environments.json | jq -s -c '[.[].environments[].name | select(. == "sync" or . == "sync-guard" or . == "staging")]')" '[]')"
 defaults=""
 for name in $all; do defaults="$defaults $name=$(state "repos/$OWNER/$name" .default_branch | tr -d '"')"; done
-check "default branches moved" "$(is "$defaults" " infra=main dcp=dev apis=dev ai=dev website=dev pipelines=dev docs=dev ontology=dev spec-kit=dev skills=dev site-qa=main")"
+check "default branches moved" "$(is "$defaults" " infra=main dcp=dev apis=dev ai=dev website=dev pipelines=dev docs=dev ontology=dev spec-kit=dev skills=dev")"
+check "infra allows auto-merge, and only infra" "$(is "$(for name in $all; do state "repos/$OWNER/$name" .allow_auto_merge; done | tr '\n' ' ')" "true false false false false false false false false false ")"
 first_patch="$(grep -n -- '--method PATCH' "$STUB_LOG" | head -1 | cut -d: -f1)"
 last_main="$(grep -n -- '--method PUT repos/[^ ]*/rulesets/1[0-9][0-9] ' "$STUB_LOG" | tail -1 | cut -d: -f1)"
 check "every main ruleset is retargeted before any default branch moves" "$([ -n "$first_patch" ] && [ -n "$last_main" ] && [ "$last_main" -lt "$first_patch" ] && echo true || echo false)"

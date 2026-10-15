@@ -32,6 +32,10 @@
 # level, so a job that declares no environment cannot authenticate. It
 # needs only foundation applied.
 #
+# The stack `docs` hands dfo-docs the GCP_WIF_PROVIDER and
+# DOCSYNC_SERVICE_ACCOUNT that docsync.yml reads, into its `docsync`
+# environment. It runs in dfo-dev only and needs only foundation applied.
+#
 # Run AFTER foundation and every stack the table reads are applied in that
 # environment (their outputs must exist): the stack itself, and apis as well
 # for dcp, whose DFO_APIS_BASE_URL is the apis service URL. Every output is
@@ -42,6 +46,7 @@
 #   scripts/handoff.sh dfo-dev ai        # DevelopmentFinanceObservatory/ai, environment dev
 #   scripts/handoff.sh dfo-prod apis     # DevelopmentFinanceObservatory/apis, environment production
 #   scripts/handoff.sh dfo-dev infra     # DevelopmentFinanceObservatory/infra, environments dev-plan and dev
+#   scripts/handoff.sh dfo-dev docs      # DevelopmentFinanceObservatory/docs, environment docsync
 set -euo pipefail
 
 # The usage text lives once, in the "Usage:" block of the header comment

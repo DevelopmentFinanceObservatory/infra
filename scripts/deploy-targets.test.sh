@@ -102,6 +102,9 @@ check "handoff_targets dfo-dev infra: dev-plan with no branch, dev on dev" "$(is
 DevelopmentFinanceObservatory/infra dev dev infra-apply")"
 check "handoff_targets dfo-prod infra: plan and production on main" "$(is "$(handoff_targets dfo-prod infra)" "DevelopmentFinanceObservatory/infra plan main infra-plan
 DevelopmentFinanceObservatory/infra production main infra-apply")"
+check "handoff_targets dfo-dev docs: docsync on dev" "$(is "$(handoff_targets dfo-dev docs)" "DevelopmentFinanceObservatory/docs docsync dev docs-sync")"
+check "handoff_targets refuses docs in dfo-prod" "$(handoff_targets dfo-prod docs >/dev/null 2>&1 && echo false || echo true)"
+check "handoff_targets refuses an unknown environment for docs" "$(handoff_targets dfo-nope docs >/dev/null 2>&1 && echo false || echo true)"
 check "handoff_targets refuses an unknown environment for infra" "$(handoff_targets dfo-nope infra >/dev/null 2>&1 && echo false || echo true)"
 check "handoff_targets refuses an unknown stack" "$(handoff_targets dfo-dev foundation >/dev/null 2>&1 && echo false || echo true)"
 
@@ -111,6 +114,8 @@ check "deploy_values infra-plan" "$(is "$(deploy_values infra-plan)" "var WIF_PR
 var WIF_PLAN_SA foundation planner_service_account")"
 check "deploy_values infra-apply" "$(is "$(deploy_values infra-apply)" "var WIF_PROVIDER foundation workload_identity_provider
 var WIF_APPLY_SA foundation applier_service_account")"
+check "deploy_values docs-sync" "$(is "$(deploy_values docs-sync)" "var GCP_WIF_PROVIDER foundation workload_identity_provider
+var DOCSYNC_SERVICE_ACCOUNT foundation docs_sync_service_account")"
 check "deploy_values refuses infra and foundation" "$(deploy_values infra >/dev/null || deploy_values foundation >/dev/null || echo true)"
 
 # 5. The environment table: infra's contract, the service repos' deploy
@@ -130,12 +135,12 @@ check "environment_branch infra dev-plan is -" "$(is "$(environment_branch infra
 check "environment_branch refuses an unlisted environment" "$(environment_branch infra staging >/dev/null && echo false || echo true)"
 
 # 6. Repos, names and default branches.
-check "org_repos lists the eleven repos" "$(is "$(org_repos)" "infra dcp apis ai website pipelines docs ontology spec-kit skills site-qa")"
+check "org_repos lists the ten repos" "$(is "$(org_repos)" "infra dcp apis ai website pipelines docs ontology spec-kit skills")"
 check "org_repo maps spec-kit" "$(is "$(org_repo spec-kit)" DevelopmentFinanceObservatory/spec-kit)"
 check "org_repo refuses an unknown or empty name" "$(org_repo foundation >/dev/null || org_repo "" >/dev/null || echo true)"
 defaults=""
 for name in $(org_repos); do defaults="$defaults $name=$(default_branch "$name")"; done
-check "default branches: main for infra and site-qa, dev elsewhere" "$(is "$defaults" " infra=main dcp=dev apis=dev ai=dev website=dev pipelines=dev docs=dev ontology=dev spec-kit=dev skills=dev site-qa=main")"
+check "default branches: main for infra, dev elsewhere" "$(is "$defaults" " infra=main dcp=dev apis=dev ai=dev website=dev pipelines=dev docs=dev ontology=dev spec-kit=dev skills=dev")"
 check "deploy_stacks lists four stacks and refuses an unknown environment" "$([ "$(deploy_stacks dfo-prod)" = "ai apis dcp website" ] && ! deploy_stacks dfo-nope >/dev/null && echo true || echo false)"
 check "deploy_tf_dir" "$(is "$(deploy_tf_dir dfo-prod dcp)" infra/dfo-prod/dcp)"
 
