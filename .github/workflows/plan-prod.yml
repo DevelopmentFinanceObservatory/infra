@@ -63,6 +63,12 @@ on:
 permissions:
   contents: read
 
+# A newer push cancels the older run, which may still wait for a `release`
+# approval. The group is per PR, so it never touches apply-stack.yml's groups.
+concurrency:
+  group: plan-prod-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     name: Prod PR verified

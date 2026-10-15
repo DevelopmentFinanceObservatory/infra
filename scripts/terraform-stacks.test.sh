@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Scenario tests for terraform-stacks.sh. Not wired into CI or pre-commit,
-# matching check-image-pin-diff.test.sh. Run by hand after touching the
-# script:
+# Scenario tests for terraform-stacks.sh. Not wired into CI or pre-commit.
+# Run by hand after touching the script:
 #   scripts/terraform-stacks.test.sh
 #
 # The cases run against a fixture tree in a temporary directory with the
