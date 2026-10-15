@@ -120,7 +120,7 @@ variable "provider_id" {
 }
 
 variable "applier_impersonators" {
-  description = "Principals that may mint access tokens for the dfo-infra-applier service account, as full IAM member strings. Impersonating the applier reaches every role in applier_project_roles, so this list stays short and holds only people who already have project owner."
+  description = "Principals that may mint access tokens for the dfo-infra-applier service account, as full IAM member strings. Impersonating the applier reaches every role in applier_project_roles, so this list stays short and holds only people, directly or through a group, who already have project owner."
   type        = list(string)
 }
 
