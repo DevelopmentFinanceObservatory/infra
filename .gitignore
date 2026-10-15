@@ -17,9 +17,6 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 
-# Local working notes — not tracked. Remove this line to put docs/ under version control.
-docs/
-
 # OS / editor cruft
 .DS_Store
 /.idea
