@@ -18,7 +18,8 @@ github_repositories = {
 website_deployer_account_id    = "dfo-website-staging-deployer"
 website_artifact_repository_id = "dfo-website-staging"
 state_bucket                   = "tf-state-dfo-dev-dev-fin-observatory"
-applier_impersonators          = ["user:jorge.rivera@one.org"]
+# Members of this group may impersonate the applier. It holds only dev project owners.
+applier_impersonators = ["group:dfo-dev-appliers@one.org"]
 # Dev's ingestion operators hold their roles by hand or through owner.
 ingestion_operators = []
 # Dev's plan.yml runs on pull_request, whose ref is refs/pull/<n>/merge, so the
