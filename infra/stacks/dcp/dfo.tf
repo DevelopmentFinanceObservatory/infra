@@ -36,39 +36,3 @@ resource "null_resource" "dc_key_guard" {
     }
   }
 }
-
-# Wire GEMINI_API_KEY onto the datacommons service so the ONE/DFO Search API
-# boots. Without it, custom_dc/api_server/start.sh deliberately skips launching
-# the FastAPI engine (it warm-loads Gemini at startup and would restart-loop),
-# so nginx returns 502 on every /api/search/* call while the DC site is fine.
-#
-# The key lives in Secret Manager as "${namespace}-gemini-api-key", which the
-# serving SA can already read through its project-level secretmanager.secretAccessor.
-#
-# The pinned stack module takes no input for adding secret env vars, so the key
-# goes on after the module deploys the service. The script header explains why it
-# calls the Cloud Run Admin API instead of gcloud.
-#
-# The module stamps FORCE_RESTART=timestamp() and publishes a fresh revision
-# without GEMINI_API_KEY on every apply, so this has to re-run every apply, hence
-# the timestamp() trigger. That leaves a window on each apply, between the
-# module's revision and this script landing, where the service runs without the
-# key and /api/search/* returns 502. If this step fails the service is LEFT that
-# way. Rerun the script by hand with the same arguments to recover.
-resource "null_resource" "search_api_gemini_key" {
-  triggers = {
-    always_run = timestamp()
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      "${path.root}/../../../scripts/set-search-api-gemini-key.sh" \
-        ${var.project_id} \
-        ${var.region} \
-        ${module.stack.datacommons_service_name} \
-        ${var.namespace}-gemini-api-key
-    EOT
-  }
-
-  depends_on = [module.stack]
-}
