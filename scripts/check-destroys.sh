@@ -4,8 +4,8 @@
 # Fails when a saved Terraform plan would DELETE or REPLACE a data-bearing
 # ("protected") resource — the ones whose loss is destructive and hard to
 # recover: Spanner instances/databases, Cloud SQL instances/databases, GCS
-# buckets, BigQuery datasets and reservations, and Secret Manager secrets. A
-# replace shows up as a "delete" action too, so this catches
+# buckets, BigQuery datasets and reservations, log buckets, and Secret Manager
+# secrets. A replace shows up as a "delete" action too, so this catches
 # destroy-and-recreate, not just plain destroy.
 #
 # VPC networks, subnets, reserved internal addresses, and the DNS managed
@@ -28,7 +28,7 @@
 set -euo pipefail
 
 plan="${1:?usage: check-destroys.sh <planfile>}"
-protected='^google_(spanner_instance|spanner_database|sql_database_instance|sql_database|storage_bucket|bigquery_dataset|bigquery_reservation|secret_manager_secret|compute_network|compute_subnetwork|compute_address|dns_managed_zone|dns_record_set)$'
+protected='^google_(spanner_instance|spanner_database|sql_database_instance|sql_database|storage_bucket|bigquery_dataset|bigquery_reservation|logging_project_bucket_config|secret_manager_secret|compute_network|compute_subnetwork|compute_address|dns_managed_zone|dns_record_set)$'
 
 # Write the JSON to a file first rather than piping: the setup-terraform wrapper
 # can interleave its own lines into a piped stdout and break jq parsing.
