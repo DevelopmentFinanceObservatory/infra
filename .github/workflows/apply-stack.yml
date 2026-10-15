@@ -26,10 +26,11 @@ jobs:
   apply:
     name: apply
     runs-on: ubuntu-latest
-    # Prod applies run in the `production` GitHub environment, which is
-    # limited to main. Dev's apply declares none; an empty name means no
-    # environment.
-    environment: ${{ inputs.environment == 'dfo-prod' && 'production' || '' }}
+    # dfo-dev applies run in the `dev` GitHub environment, limited to dev, and
+    # dfo-prod applies in `production`, limited to main. Each holds its own
+    # applier's WIF values. Any other input yields no environment, and a job
+    # with none finds no WIF values and fails at authentication.
+    environment: ${{ inputs.environment == 'dfo-prod' && 'production' || inputs.environment == 'dfo-dev' && 'dev' || '' }}
     concurrency:
       # Same group name plan.yml's per-stack job uses, so a plan and an apply
       # for the same stack can never run concurrently and race on state.

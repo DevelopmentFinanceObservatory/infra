@@ -1,23 +1,31 @@
-# Terraform plan on pull requests (issue #9).
+# Terraform plan on pull requests into dev (issue #9).
 #
 # What this does
 # ---------------
-# On any PR touching `infra/**`, this workflow:
-#   1. Runs a global `terraform fmt -check -recursive` gate over the whole
-#      `infra/` tree (blocks the workflow on unformatted files).
-#   2. Detects which of this repo's environment stacks changed, and runs
+# On every pull request, this workflow runs a global
+# `terraform fmt -check -recursive` gate over the whole `infra/` tree. On a
+# pull request into `dev` it also:
+#   1. Detects which stacks under `infra/dfo-dev` changed, and runs
 #      `terraform init/validate/plan` for each changed stack in a matrix.
-#   3. Upserts one PR comment per stack with the plan output.
-#   4. Fails `Changed stacks planned` unless every changed stack planned.
+#   2. Upserts one PR comment per stack with the plan output.
+#   3. Fails `Changed stacks planned` unless every changed stack planned.
 #
 # Environment
 # -----------
-# The same file runs in two GitHub orgs, and plans only in ONEcampaign, where
-# `scripts/terraform-stacks.sh` maps the owner to `infra/dfo-dev`. In
-# DevelopmentFinanceObservatory every job but `terraform fmt check` skips,
-# and `.github/workflows/plan-prod.yml` plans `infra/dfo-prod` instead. A
-# `pull_request` run executes the PR's Terraform, so prod plans only after
-# plan-prod.yml has checked the PR is an exact sync or a release App pin.
+# `scripts/terraform-stacks.sh environment` maps the PR's base branch to its
+# environment directory, and only `dev`, which maps to `infra/dfo-dev`, plans
+# here. A pull request into `main` is a release to prod, which
+# `.github/workflows/plan-prod.yml` plans on `pull_request_target`.
+#
+# The plan job declares the `dev-plan` GitHub environment, which holds dev's
+# `WIF_PROVIDER` and `WIF_PLAN_SA` and has no branch policy, since a
+# `pull_request` run carries `refs/pull/<n>/merge` and a branch-limited
+# environment would refuse it. The repo holds no WIF values of its own. The
+# dev planner's WIF binding is repo-scoped, with no ref or environment.
+#
+# A fork's pull request gets no OIDC token, so `Detect changed stacks` skips
+# on one and `Changed stacks planned` fails. Push the branch to this repo to
+# plan it.
 #
 # A stack is any directory under `infra/<env>`. It changes when a file
 # changes under `infra/stacks/<stack>/`, `infra/<env>/<stack>/`, or a module
@@ -54,13 +62,14 @@
 # dataset or reservation, Secret Manager secret) or a consumer-psc-network resource (VPC
 # network, subnet, reserved address, DNS managed zone, DNS record set).
 # Ephemeral churn (e.g. dcp's per-run null_resource replace) is ignored. Add
-# the `allow-destroy` PR label to override for an intentional teardown. Mark
-# this job a required status check so a red guard blocks the merge.
+# the `allow-destroy` PR label to override for an intentional teardown. A red
+# guard fails the plan job, and with it `Changed stacks planned`, which blocks
+# the merge.
 #
 # Removed stacks
 # --------------
-# A PR that deletes or renames a directory under `infra/dfo-dev` fails
-# `Detect changed stacks`, since its resources would stay in state with
+# A PR into `dev` that deletes or renames a directory under `infra/dfo-dev`
+# fails `Detect changed stacks`, since its resources would stay in state with
 # nothing to manage them. Destroy them first, then add the `allow-destroy`
 # label, which lets detection pass with a warning.
 #
@@ -70,13 +79,14 @@
 # required check. `Changed stacks planned` always runs and fails unless
 # detection succeeded and every changed stack planned and cleared the destroy
 # guard. A PR that changes no stack in this environment passes it. Make it a
-# required status check on main.
+# required status check on dev. It skips on a pull request into any other
+# branch, so it must not be required there.
 name: Terraform Plan
 
-# `terraform fmt check`, `Detect changed stacks`, and `Changed stacks planned`
-# are required status checks on main, and a required check that never runs leaves a pull request
-# unmergeable indefinitely rather than failing it. A `paths` filter here is
-# therefore a deadlock for every pull request it excludes — docs, scripts,
+# `terraform fmt check` is a required status check on dev and main, and
+# `Changed stacks planned` on dev. A required check that never runs leaves a
+# pull request unmergeable indefinitely rather than failing it. A `paths`
+# filter here is therefore a deadlock for every pull request it excludes — docs, scripts,
 # justfile — so there is none. A pull request that changes no stack still gets
 # every required check and an empty plan matrix, for a few seconds of runner
 # time.
@@ -122,9 +132,12 @@ jobs:
 
   detect:
     name: Detect changed stacks
-    # Runs the PR's Terraform with the planner, so dev-only. plan-prod.yml
-    # plans the new org.
-    if: github.repository_owner == 'ONEcampaign' && github.event.pull_request.draft != true
+    # Dev only: plan-prod.yml plans pull requests into main. A fork's pull
+    # request cannot authenticate, so it skips and fails the required check.
+    if: >-
+      github.base_ref == 'dev' &&
+      github.event.pull_request.draft != true &&
+      github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     outputs:
       env: ${{ steps.env.outputs.env }}
@@ -136,8 +149,8 @@ jobs:
       - name: Resolve environment
         id: env
         env:
-          OWNER: ${{ github.repository_owner }}
-        run: echo "env=$(scripts/terraform-stacks.sh environment "$OWNER")" >> "$GITHUB_OUTPUT"
+          BASE_REF: ${{ github.base_ref }}
+        run: echo "env=$(scripts/terraform-stacks.sh environment "$BASE_REF")" >> "$GITHUB_OUTPUT"
 
       - name: List changed infra files
         id: filter
@@ -166,6 +179,8 @@ jobs:
     needs: detect
     if: needs.detect.outputs.stacks != '[]' && needs.detect.outputs.stacks != ''
     runs-on: ubuntu-latest
+    # Holds dev's planner WIF values and admits any ref; see "Environment".
+    environment: dev-plan
     concurrency:
       group: terraform-${{ needs.detect.outputs.env }}-${{ matrix.stack }}
       cancel-in-progress: false
@@ -257,7 +272,7 @@ jobs:
   planned:
     name: Changed stacks planned
     needs: [detect, plan]
-    if: always() && github.repository_owner == 'ONEcampaign' && github.event.pull_request.draft != true
+    if: always() && github.base_ref == 'dev' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - name: Check every changed stack planned

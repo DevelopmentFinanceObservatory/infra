@@ -76,10 +76,11 @@ expect_failure() {
 }
 
 PATHS=""
-expect dfo-dev "ONEcampaign owner" environment ONEcampaign
-expect dfo-prod "new-org owner" environment DevelopmentFinanceObservatory
-expect_failure "fork owner" environment someone-else
-expect_failure "empty owner" environment ""
+expect dfo-dev "dev branch" environment dev
+expect dfo-prod "main branch" environment main
+expect_failure "feature branch" environment feature/x
+expect_failure "full ref" environment refs/heads/main
+expect_failure "empty branch" environment ""
 
 PATHS="infra/stacks/apis/main.tf"
 expect '["apis"]' "shared stack code, dev" changed dfo-dev
@@ -138,7 +139,7 @@ expect '["foundation"]' "deleted module called through another module" changed d
 
 PATHS=""
 expect '[]' "no paths" changed dfo-dev
-expect_failure "missing environment directory" changed dfo-staging
+expect_failure "missing environment directory" changed dfo-missing
 
 if [ "$failures" -eq 0 ]; then
     echo "All scenarios passed."
