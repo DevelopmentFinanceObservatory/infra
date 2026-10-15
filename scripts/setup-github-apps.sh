@@ -19,10 +19,9 @@
 # mis-restricted one, since a value written to a missing environment would
 # create it unrestricted.
 #
-# Pass the pairs to set; an App left out is left alone, so one App's key can
+# Pass the pairs to set. An App left out is left alone, so one App's key can
 # be rotated alone. Every input is checked, and every target environment,
-# before any value is written. A key is sent to gh on stdin and never
-# printed.
+# before any value is written. A key is sent to gh on stdin and not printed.
 #
 # Usage: scripts/setup-github-apps.sh [options]
 #   scripts/setup-github-apps.sh --pin-key ~/keys/dfo-pin.pem --pin-client-id Iv23liAbc

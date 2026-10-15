@@ -5,9 +5,8 @@
 #
 # load_deploy_target maps an environment (dfo-dev or dfo-prod) and a stack to
 # the service repo, GitHub Environment, and deploy branch. The cases below
-# pin every row, and that an unknown environment or stack fails closed
-# rather than falling back to a default. handoff_targets adds infra's two
-# environments on top. deploy_values is pinned in full by handoff.test.sh,
+# pin every row, and that an unknown environment or stack fails closed.
+# handoff_targets adds infra's two environments on top. deploy_values is pinned in full by handoff.test.sh,
 # which checks what handoff.sh writes from it.
 set -euo pipefail
 

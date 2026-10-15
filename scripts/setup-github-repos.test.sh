@@ -2,10 +2,9 @@
 # End-to-end tests for setup-github-repos.sh against a stub `gh` that keeps
 # GitHub's state in files, so --apply's writes land and its read-back reads
 # them. Nothing reaches GitHub. It takes about 30 seconds: each case runs
-# the script over ten repos, and every stub call starts jq. Not wired
-# into CI or pre-commit. Run by
-# hand after touching the script, github-environment.sh or
-# deploy-targets.sh:
+# the script over ten repos, and every stub call starts jq. Not wired into CI
+# or pre-commit. Run by hand after touching the script, github-environment.sh
+# or deploy-targets.sh:
 #   scripts/setup-github-repos.test.sh
 set -euo pipefail
 
@@ -133,11 +132,11 @@ all="infra dcp apis ai website pipelines docs ontology spec-kit skills"
 # put <path> <json>: writes one stub state file.
 put() { printf '%s\n' "$2" >"$STATE/$(printf '%s' "$1" | tr '/' '_').json"; }
 
-# seed: the org as it stands before cutover. Every repo defaults to main
-# and has a `dev` branch, release holds write, and a `main` ruleset targets
-# ~DEFAULT_BRANCH. Every repo has sync-guard; infra also sync, plan and
-# production, the service repos production, all admitting main without
-# reviewers. infra holds its WIF values at repo level.
+# seed: the starting state the script converges from. Every repo defaults to
+# main and has a `dev` branch, release holds write, and a `main` ruleset
+# targets ~DEFAULT_BRANCH. Every repo has sync-guard, infra also has sync,
+# plan and production, and the service repos have production, all admitting
+# main without reviewers. infra holds its WIF values at repo level.
 seed() {
     local name slug id=100 env envs
     rm -rf "$STATE"

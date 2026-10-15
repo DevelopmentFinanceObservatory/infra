@@ -6,7 +6,7 @@ The service is defined via the reusable `../../modules/cloud-run-service` module
 
 ## Model credentials
 
-The service reads `GOOGLE_API_KEY` from the process environment (google-adk's underlying `google-genai` client bypasses `ai`'s own settings classes for this). This stack wires that env var to the existing `dfo-dev-gemini-api-key` Secret Manager secret — the same secret the `dcp` stack's Search API already uses (`infra/dfo-dev/dcp/dfo.tf`). That secret is **not terraform-managed**; it's referenced here via a `data "google_secret_manager_secret"` source, not created. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
+The service reads `GOOGLE_API_KEY` from the process environment (google-adk's underlying `google-genai` client bypasses `ai`'s own settings classes for this). This stack wires that env var to the existing `dfo-dev-gemini-api-key` Secret Manager secret, the same secret the `dcp` stack's Search API already uses (`infra/dfo-dev/dcp/dfo.tf`). Terraform does not manage that secret. This stack references it through a `data "google_secret_manager_secret"` source. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
 
 ## data-mcp environment
 
@@ -30,7 +30,7 @@ The stack sets `STUDIO_ENGINE` to `orchestrator`. The value `orchestrator` makes
 
 ## Ownership split with the `ai` repo
 
-This stack owns the service _definition_; the `ai` repo's CI owns the _image_, updating it with image-only `gcloud run services update` calls. The module's `lifecycle.ignore_changes` on the container image is what makes that work without every `apply` reverting to the bootstrap placeholder image (`gcr.io/cloudrun/hello`) — see the module README for details.
+This stack owns the service _definition_. The `ai` repo's CI owns the _image_, updating it with image-only `gcloud run services update` calls. The module's `lifecycle.ignore_changes` on the container image is what makes that work without every `apply` reverting to the bootstrap placeholder image (`gcr.io/cloudrun/hello`). The module README has details.
 
 ## APIs
 

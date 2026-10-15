@@ -21,7 +21,7 @@
 # repo (`DevelopmentFinanceObservatory/<stack>`), the GitHub Environment
 # (`dev` or `production`) and the one branch the environment admits. The
 # environment must already exist with exactly that branch policy, which
-# scripts/setup-github-repos.sh sets; this script checks it and refuses
+# scripts/setup-github-repos.sh sets. This script checks it, refuses
 # otherwise, and changes no environment's protection itself. An unknown
 # environment or stack fails before anything is read or written.
 #

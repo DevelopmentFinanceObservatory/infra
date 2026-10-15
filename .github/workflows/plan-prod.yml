@@ -18,17 +18,17 @@
 #   4. `Prod changed stacks planned` fails unless every step above passed.
 #      It is the required plan check on main.
 #
-# Why the merge commit: prod's dcp image pin lands on main straight from
-# the dcp repo's release build, and dev never edits that file
+# The plan covers the merge commit because prod's dcp image pin lands on main
+# straight from the dcp repo's release build, and dev never edits that file
 # (prod-pin-placeholder.yml), so the merge keeps main's pin. The PR head
-# still holds dev's older pin, so planning the head would show a rollback of
+# holds dev's older pin, so planning the head would show a rollback of
 # prod's image that the merge never applies. Planning the merge shows what
 # the apply on main will do. The merge commit is planned by its SHA, so a push
 # while this runs cannot change what the plan job reads.
 #
-# A release PR's head must be a branch cut from dev, not dev itself. Updating
-# a release head from main pushes to it, which dev's ruleset refuses, and a
-# head of dev would re-run this plan on every merge to dev.
+# A release PR's head is a branch cut from dev. Updating a release head from
+# main pushes to it, which dev's ruleset refuses on dev itself, and a head of
+# dev would re-run this plan on every merge to dev.
 #
 # The plan job runs the merge commit's Terraform, and that Terraform can run
 # code, with the prod planner's identity, so it declares the `plan`

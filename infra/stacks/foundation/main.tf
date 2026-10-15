@@ -222,9 +222,9 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # bare.
   # This mapping is evaluated for every token the pool exchanges, including
   # jobs that declare no `environment:` and so carry no `environment` claim,
-  # such as the apis repository's search eval jobs; an unguarded
+  # such as the apis repository's search eval jobs. An unguarded
   # concatenation would fail those exchanges. The guard uses `in` and a
-  # ternary — both documented for the restricted CEL subset attribute
+  # ternary, both documented for the restricted CEL subset attribute
   # mappings accept, unlike the `has()` macro. repo_env_ref nests two of
   # those guards rather than joining them with `&&`, which is documented for
   # attribute conditions but not for mappings, and every construct here has
@@ -581,7 +581,7 @@ moved {
 # no Terraform-managed resource grant: it reaches Drive, Docs, and Sheets
 # only as a member of the ONE Data shared drive, a membership granted outside
 # Terraform. Its WIF binding is pinned to the docs entry's deploy_branch and,
-# when set, its deploy_environment: dev pins docsync.yml's runs from dev in
+# when set, its deploy_environment. Dev pins docsync.yml's runs from dev in
 # the docsync environment.
 module "docs_sync" {
   source = "../../modules/github-deployer"

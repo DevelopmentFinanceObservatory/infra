@@ -126,7 +126,7 @@ check "dry run makes no write" "$(is "$(count '^gh (variable set|secret set)')" 
 check "dry run prints the key file" "$(says "DRY-RUN: gh secret set PIN_APP_PRIVATE_KEY --env dev --repo DevelopmentFinanceObservatory/dcp < $WORK/keys/pin.pem")"
 check "dry run prints no key" "$(no_key_in_output)"
 
-# 4. A missing environment stops a real run before any write; a dry run
+# 4. A missing environment stops a real run before any write. A dry run
 # reports it and goes on.
 export STUB_MISSING_ENV=repos/DevelopmentFinanceObservatory/docs/environments/docsync
 run "${pin_args[@]}" "${docsync_args[@]}"

@@ -7,9 +7,8 @@
 # Per repo, in this order across all repos:
 #   1. The `release` team holds write, since a PR approval counts only from
 #      someone with write, and environment reviewers need read.
-#   2. The `main` ruleset targets refs/heads/main by name. It targeted
-#      ~DEFAULT_BRANCH, so it is retargeted here, before step 6 moves any
-#      default branch; otherwise the prod ruleset would move onto `dev`.
+#   2. The `main` ruleset targets refs/heads/main by name, so step 6 moving
+#      a default branch to `dev` leaves it on `main`.
 #      It needs one approval, dismisses approvals on a new push, needs the
 #      last push approved by someone else, allows merge commits only, and
 #      lets MAIN_BYPASS_USER bypass it through a pull request. infra's also
@@ -19,21 +18,20 @@
 #      and requires `Changed stacks planned`, `terraform fmt check` and
 #      `Prod pin placeholder unchanged`, so dcp's dev pin PRs auto-merge
 #      once planned. dcp's needs a pull request, no approval, and its
-#      `checks / prototypes` check. The other repos mirror the protection
-#      ONEcampaign put on their integration branches.
+#      `checks / prototypes` check. dev_ruleset sets the other repos' rules.
 #   4. Every environment in REPO_ENVIRONMENTS, with exactly its branch
 #      policy and reviewers (scripts/github-environment.sh,
 #      converge_environment).
-#   5. The retired `sync`, `sync-guard` and `staging` environments are
-#      deleted. sync and sync-guard held the dfo-release and dfo-reader keys
+#   5. The `sync`, `sync-guard` and `staging` environments are deleted where
+#      present. sync and sync-guard held the dfo-release and dfo-reader keys
 #      and admitted `main` with no reviewers.
 #   6. The default branch, from default_branch in scripts/deploy-targets.sh.
 #      A repo whose default would be `dev` must have a `dev` branch first.
 #      infra also allows auto-merge, which dcp's dev pin PRs arm.
 #   7. infra's repo-level WIF_PROVIDER, WIF_PLAN_SA and WIF_APPLY_SA are
 #      deleted once every infra environment holds its own (scripts/handoff.sh
-#      <env> infra writes them). Until then they stay, and the run says so:
-#      a job still reading them would lose its credentials.
+#      <env> infra writes them). Until then they stay and the run says so,
+#      because a job reading them would lose its credentials.
 #
 # Every repo, and the `dev` branch of each repo defaulting to `dev`, must
 # exist before --apply writes anything. A dry run reports what is missing
@@ -44,8 +42,8 @@
 # not stop a workflow the PR's own head adds from posting a check run of the
 # same name, since that run also comes from GitHub Actions. On infra `main`,
 # the boundary is the `production` environment's `release` approval before
-# any apply: a reviewer approves only after the PR's `Terraform Plan (prod)`
-# run itself succeeded for the merged head.
+# any apply. A reviewer approves only after the PR's `Terraform Plan (prod)`
+# run succeeded for the merged head.
 #
 # Usage: scripts/setup-github-repos.sh [--apply]
 #   scripts/setup-github-repos.sh            # dry run
@@ -150,13 +148,11 @@ main_ruleset() {
 }
 
 # dev_ruleset <name> prints the repo's `dev` ruleset, or nothing for a repo
-# with no `dev` branch. The service repos copy what ONEcampaign enforced on
-# their integration branches: dfo-apis and dfo-ai `dev` and dfo-website
-# `staging` through classic protection with admins exempt, dfo-pipelines
-# `develop` through its protect-develop ruleset with an admin bypass. dcp
+# with no `dev` branch. apis, ai, website and pipelines require pull requests
+# and their CI checks, with an admin bypass. dcp
 # needs a pull request with no approval and `checks / prototypes`, the one
 # job of checks.yml that ci.yml runs on pull requests into dev. ontology,
-# docs, spec-kit and skills had no protection there and get only the
+# docs, spec-kit and skills get only the
 # deletion and force-push blocks every ruleset carries.
 dev_ruleset() {
     case "$1" in

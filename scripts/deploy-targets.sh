@@ -22,8 +22,8 @@
 # front of it, and the two disagreeing fails the next deploy at the auth
 # step.
 #
-# Sourced; targets bash 3.2 (macOS's shipped bash), hence case statements
-# and string tables instead of associative arrays.
+# Sourced by other scripts. It targets bash 3.2 (macOS's shipped bash), hence
+# case statements and string tables instead of associative arrays.
 
 GITHUB_OWNER=DevelopmentFinanceObservatory
 
@@ -45,7 +45,7 @@ GITHUB_OWNER=DevelopmentFinanceObservatory
 #   production  prod WIF_PROVIDER, WIF_APPLY_SA and CLOUDFLARE_API_TOKEN,
 #               for apply.yml on main.
 # Each service repo deploys through `dev` and `production`. dcp's `dev`
-# also holds the dfo-pin App key and its `production` the dfo-release key;
+# also holds the dfo-pin App key and its `production` the dfo-release key.
 # docs' `docsync` holds the dfo-docsync App key.
 REPO_ENVIRONMENTS="
 infra    dev-plan    -     -
@@ -79,8 +79,8 @@ org_repo() {
 
 # default_branch <name> prints the repo's default branch: `main` for infra,
 # whose plan-prod.yml runs on pull_request_target and so always loads from
-# the default branch; `dev` everywhere else, so workflow_run and scheduled
-# workflows run the code dfo-dev runs.
+# the default branch, and `dev` everywhere else, so workflow_run and
+# scheduled workflows run the code dfo-dev runs.
 default_branch() {
     org_repo "${1:-}" >/dev/null || return 1
     case "$1" in
@@ -91,7 +91,7 @@ default_branch() {
 
 # repo_environments <name> prints the repo's rows of REPO_ENVIRONMENTS as
 # `<environment> <branch> <reviewers>` lines. A repo with no environment
-# prints nothing; an unknown repo returns 1.
+# prints nothing. An unknown repo returns 1.
 repo_environments() {
     org_repo "${1:-}" >/dev/null || return 1
     printf '%s\n' "$REPO_ENVIRONMENTS" | awk -v r="$1" '$1 == r { print $2, $3, $4 }'
