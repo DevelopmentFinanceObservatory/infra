@@ -28,3 +28,11 @@ presentation_migrator_db_user       = "dfo-dev-presentation-migrator"
 
 # Off so destroys and replaces stay unblocked.
 stateless_deletion_protection = false
+
+# True keeps the run.app URL open to anonymous callers. It turns false once
+# the apis request logs show every caller sending an ID token; see "Caller
+# authentication" in infra/dfo-dev/apis/README.md.
+allow_unauthenticated = true
+# Principals no stack owns, such as a developers' group. The website and ai
+# stacks grant their own runtime accounts invoker on this service.
+invoker_members = []

@@ -158,7 +158,7 @@ secret WIF_SA foundation $1_deployer_service_account"
     dcp) printf '%s\n' \
         "var AR_REPO foundation artifact_registry_datacommons_repository_id" \
         "var AR_CACHE_REPO foundation artifact_registry_dcp_build_cache_repository_id" \
-        "var DFO_APIS_BASE_URL apis service_url" ;;
+        "var DFO_SITE_ORIGIN website website_url" ;;
     website) printf '%s\n' \
         "var AR_REPO foundation artifact_registry_website_repository_id" \
         "var SERVICE_WEBSITE website service_name" \

@@ -18,6 +18,7 @@ platform_psc_service_attachment_uri = "projects/ic74f9d0cb948e2dap-tp/regions/eu
 platform_dns_name                   = "b588fda303da.1b8f7kohjv63q.europe-west1.sql.goog"                                                                              # platform output dns_name
 studio_api_base                     = "https://dfo-prod-ai-533754688761.europe-west1.run.app"                                                                         # ai service, deterministic Cloud Run URL
 search_api_base                     = "https://dfo-prod-apis-533754688761.europe-west1.run.app"                                                                       # apis service, deterministic Cloud Run URL
+apis_service_name                   = "dfo-prod-apis"                                                                                                                 # apis output service_name
 # The service's own public origin, which the edge stack serves through
 # Cloudflare and the load balancer. Sign-in and OAuth callbacks work on this
 # origin only, so each provider's OAuth client lists

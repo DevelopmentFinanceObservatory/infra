@@ -29,6 +29,11 @@ variable "dfo_apis_url" {
   type        = string
 }
 
+variable "apis_service_name" {
+  description = "Name of the apis stack's Cloud Run service, in this stack's project and region, on which this stack grants the ai runtime service account roles/run.invoker. Copied from the `apis` stack's `service_name` output. The apis stack applies before this one, so the service exists when this grant applies."
+  type        = string
+}
+
 variable "datasets_first_party_principal_secret_id" {
   description = "Secret Manager id of the shared datasets first-party principal secret. Copied from the `apis` stack's `google_secret_manager_secret.datasets_first_party_principal.secret_id` output as a plain value rather than through a `data` source: a `data \"google_secret_manager_secret\"` lookup resolves against live state at plan time, which this stack's plan must not depend on since the `apis` stack creates the secret in this same change."
   type        = string
@@ -42,6 +47,16 @@ variable "live_refresh_principal_secret_id" {
 variable "presentation_public_url" {
   description = "Public URL prefix under which presentation-mcp is reachable from a browser. It is the website's /mcp/presentation route, which forwards to this service's per-server mount. The app views resolve their theme stylesheet against it. Copied from the `website` stack's `website_url` value plus the path, a plain value so this plan never depends on that stack having applied. The service fails to start without it."
   type        = string
+}
+
+variable "site_origin" {
+  description = "Public origin of the website, with no path, such as https://developmentfinance.org. data-mcp builds the artifact links it hands to models from it, and the website proxies those links to the apis service. Copied from the `website` stack's `website_url` value, a plain value so this plan never depends on that stack having applied. The service fails to start without it."
+  type        = string
+
+  validation {
+    condition     = can(regex("^https://[^/]+$", var.site_origin))
+    error_message = "site_origin must start with https:// and carry no path or trailing slash."
+  }
 }
 
 variable "studio_token_readers" {

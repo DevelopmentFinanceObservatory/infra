@@ -264,7 +264,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # This is pool-level config shared by every deployer identity below
   # (planner, applier, ai_deployer, apis_deployer, dcp_deployer,
   # website_deployer, docs_sync, and site_qa_deployer where the environment
-  # lists dfo-site-qa). Get it wrong and every
+  # lists the site QA repository). Get it wrong and every
   # GitHub Actions run loses GCP access, including the applier that would
   # normally fix it forward — recovery then means a human running Terraform
   # locally with owner credentials.
@@ -602,11 +602,11 @@ module "docs_sync" {
   depends_on = [google_project_service.apis]
 }
 
-# dfo-site-qa's Firebase deploy: the dfo-site-qa Hosting site and the rules
+# The site QA repository's Firebase deploy: its Hosting site and the rules
 # and indexes of the site-qa Firestore database, on every push to main. The
 # tracker exists only in dev, so the account exists only in an environment
-# whose github_repositories lists site_qa, which stays in ONEcampaign. Its
-# WIF binding is pinned to refs/heads/main.
+# whose github_repositories lists site_qa, which stays private under its
+# original owner. Its WIF binding is pinned to refs/heads/main.
 module "site_qa_deployer" {
   count  = contains(keys(var.github_repositories), "site_qa") ? 1 : 0
   source = "../../modules/github-deployer"

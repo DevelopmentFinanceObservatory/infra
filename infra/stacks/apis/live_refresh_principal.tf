@@ -13,11 +13,10 @@
 # The refresh routes rebuild frames and render cards on a caller's behalf and
 # publish or pin nothing, a narrower grant than either door, and the
 # allowlists have to be free to rotate independently.
-# This carries the same interim caveat as the other principals: the `apis`
-# service has `allUsers` as an invoker with no proxy validating the caller, so
-# an internet caller who learns this value reaches the refresh routes. A
-# generated secret keeps the value hard to guess on the first try and leaves
-# the exposure in place.
+# While var.allow_unauthenticated is true, any caller reaches the apis
+# service, so a caller who learns this value reaches the refresh routes. With
+# it false, only identities holding an invoker grant reach the service and
+# this value is a second check behind Cloud Run IAM.
 # This stack applies before `ai` and `website`, which `apply.yml` does by
 # listing it as a producer stack. Both read the secret by id, and a revision
 # that mounts a secret that does not exist yet fails to start.

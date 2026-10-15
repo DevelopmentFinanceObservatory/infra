@@ -16,7 +16,7 @@ It sits in `dev-fin-observatory`. That is not the staging environment stand-up t
 
 The service's env vars carry the host, database name, runtime user and instance connection name for its own database. No password. The runtime user authenticates as the service's own identity over IAM auth. The service carries direct VPC egress onto `module.psc_network`'s subnet, the private path to the tenant database below.
 
-The service has no domain mapping, so it is reachable only at its generated `run.app` URL, and `allow_unauthenticated` stays true until an auth model exists.
+The service has no domain mapping, so it is reachable only at its generated `run.app` URL. `allow_unauthenticated` is true because the service is the public website. `google_cloud_run_v2_service_iam_member.website_apis_invoker` in `main.tf` grants its runtime account `roles/run.invoker` on the apis service, named by `var.apis_service_name`, a plain value copied from the `apis` stack's `service_name` output. The app sends an ID token as that account on its calls to the apis service; see "Caller authentication" in the `apis` stack's README.
 
 ## Studio proxy and auth env
 
@@ -75,7 +75,7 @@ The secret is created and rotated in the `apis` stack, as `dfo-dev-datasets-pin-
 
 The mount reads `latest` rather than a pinned version: this stack holds no version resource of its own to pin against, and the `apis` stack owns rotation. A `terraform apply` here is a no-op after a rotation in `apis` — this stack's own configuration hasn't changed — so the value only reaches a running instance on a new revision: a `dfo-website` deploy of the `staging` branch, or `gcloud run services update dfo-dev-website-staging --region northamerica-northeast1 --update-labels=pin-principal-rotated=<n>` to force one without a new image.
 
-Any visitor can reach this call: `allow_unauthenticated = true` above means nobody has to sign in to create a search share, and a snapshot share's capture step mints and pins on that visitor's behalf. The value is a shared bearer, the same interim exposure the `apis` stack's README records for the publish door — anyone who learns it can pin the same as this service can, and pinning has no reverse route. That value's retirement into service-to-service ID tokens is tracked in [ONEcampaign/dfo-ai#41](https://github.com/ONEcampaign/dfo-ai/issues/41).
+Any visitor can reach this call: `allow_unauthenticated = true` above means nobody has to sign in to create a search share, and a snapshot share's capture step mints and pins on that visitor's behalf. The value is a shared bearer, the same exposure the `apis` stack's README records for the publish door: while the apis service admits anonymous callers, anyone who learns it can pin the same as this service can, and pinning has no reverse route. Once the apis service drops `allow_unauthenticated`, only identities holding `roles/run.invoker` on it reach the pin door at all, and this value becomes a second check.
 
 ## Live-refresh principal
 

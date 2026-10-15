@@ -178,3 +178,15 @@ module "website_service" {
     subnetwork = module.psc_network.subnetwork_id
   }
 }
+
+# The website's server-side proxies call the apis service with an ID token
+# minted as this runtime account. The grant lives here, beside the account,
+# because the apis stack applies first and so cannot name an account this
+# stack creates.
+resource "google_cloud_run_v2_service_iam_member" "website_apis_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = var.apis_service_name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${module.website_service.runtime_service_account_email}"
+}
