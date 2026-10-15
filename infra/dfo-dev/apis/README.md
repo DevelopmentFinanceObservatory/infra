@@ -94,16 +94,16 @@ The Skills surface reads the same graph the Search surface reads, through Search
 
 Cloud Run IAM is the service's only identity boundary. Each `roles/run.invoker` grant on the service sits in the stack that owns the identity it names:
 
-- `allow_unauthenticated`, set in this stack's `env.auto.tfvars`, grants it to `allUsers`. It is `false` in dfo-dev, which refuses anonymous callers, and `true` in dfo-prod, whose service accepts anonymous requests, including dataset creation and registration.
+- `allow_unauthenticated`, set in this stack's `env.auto.tfvars`, grants it to `allUsers`. It is `false` in dfo-dev and dfo-prod, so the service refuses anonymous callers.
 - `invoker_members`, set in the same file, grants it to each listed identity. It holds principals no stack owns. In dfo-dev it lists `group:dfo-dev-apis-invokers@one.org` for developers, and in dfo-prod it is empty.
 - The `website` and `ai` stacks grant it to their own runtime service accounts, as `google_cloud_run_v2_service_iam_member.website_apis_invoker` in `infra/stacks/website/main.tf` and `google_cloud_run_v2_service_iam_member.ai_apis_invoker` in `infra/stacks/ai/main.tf`. Each names this service through its `apis_service_name` variable, copied from this stack's `service_name` output. `apply.yml` applies this stack first, so the service exists before either grant, and this stack names no account another stack creates.
 - In dfo-dev, `eval_reader.tf` grants it to `dfo-dev-apis-eval-reader` by resource reference.
 
-A caller authenticates with a Google ID token minted as one of those identities, with the service URL it calls as the audience (origin only, no path), sent as `X-Serverless-Authorization: Bearer <token>`. Cloud Run checks that header in preference to `Authorization` and strips the signature before the container sees it, so it never collides with the `Authorization` header the website proxy passes through or the ai bearer. In dfo-prod, where `allow_unauthenticated` is `true`, a request with a token in either header, valid or not, still gets a 200.
+A caller authenticates with a Google ID token minted as one of those identities, with the service URL it calls as the audience (origin only, no path), sent as `X-Serverless-Authorization: Bearer <token>`. Cloud Run checks that header in preference to `Authorization` and strips the signature before the container sees it, so it never collides with the `Authorization` header the website proxy passes through or the ai bearer. Cloud Run refuses a request without a valid token from a granted identity.
 
 Publish, pin and the refresh routes also compare an `x-dfo-principal` value (the three principal sections below), so a direct caller needs that value as well. Public users keep anonymous dataset creation through the website's `/api/v1/datasets` proxy, which the edge rate-limits in prod. `DFO_CORS_ORIGINS` applies platform-wide, so an origin allowlisted for Search also reaches the write doors.
 
-dfo-prod keeps `allow_unauthenticated = true` until every caller sends a token there. The website and ai services mint tokens from the metadata server as their runtime accounts, and the apis repository's eval jobs mint them as `dfo-dev-apis-eval-reader` from the workflow's WIF credentials. The Data Commons prototype calls the website's proxy, not this service, and holds no grant. The apis service logs each request as `dfo_platform.request` with `caller_token_present`, the unverified `email` and `aud` of the token, and the user agent. Before dfo-prod flips, 48 hours of its logs must show no request from the website, ai or CI user agents that carries no token or an `email` that holds no invoker grant.
+To add a caller, grant `roles/run.invoker` on this service in the caller's own stack, or add a principal no stack owns to `invoker_members`. The apis service logs each request as `dfo_platform.request` with `caller_token_present`, the unverified `email` and `aud` of the token, and the user agent, which shows who calls and which callers lack a token or a grant.
 
 A developer in the dfo-dev invokers group reaches the service through a local proxy that attaches their own token, and points local base URLs at `http://localhost:8083`:
 
@@ -127,7 +127,7 @@ Prod uses `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-obser
 
 `datasets_first_party_principal.tf` generates the shared bearer value the Datasets publish door compares the `x-dfo-principal` header against (`datasets_api.doors.publish`), stores it as `dfo-dev-datasets-first-party-principal`, and mounts it on this service as `DATASETS_FIRST_PARTY_PRINCIPAL`. Unset, the door reads an empty allowlist and refuses every caller regardless of header, so this mount is what lets presentation-mcp's publish call succeed instead of drawing a `403 publish_not_permitted`. The pin door reads a separate value — see "Datasets pin principal" below.
 
-This value is a second check behind Cloud Run IAM. In dfo-prod, while `allow_unauthenticated` is true, an internet caller who learns it can send it on the same header and reach publish; in dfo-dev only a caller holding an invoker grant can. See "Caller authentication" above.
+This value is a second check behind Cloud Run IAM: only a caller holding an invoker grant can send it to publish. See "Caller authentication" above.
 
 Humans who need to read the value directly are granted read on this one secret through `var.datasets_first_party_principal_readers`; empty by default, since the `apis` and `ai` services carry it between themselves through their own `secret_env_vars` grants and no human needs it yet. Rotation is bumping `datasets_first_party_principal_version` in `datasets_first_party_principal.tf`: the replacement version is created before the old one is destroyed, and this stack's own mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new value here. The `ai` stack's mount reads `latest` instead (see that stack's README), so rotating here deletes the old version once the new one exists, but does not by itself reach that stack's running instances — they keep whatever value they read at startup until that stack's own next apply and rollout rolls a new revision.
 
@@ -137,7 +137,7 @@ Humans who need to read the value directly are granted read on this one secret t
 
 Its only consumer is `dfo-dev-website-staging` (the `website` stack), which sends this value server-side on its own pin call when a visitor creates a share; see that stack's README for how `DFO_PRINCIPAL` reaches it and the exposure that follows from the website's own `allow_unauthenticated` setting.
 
-This value carries the same caveat as the publish principal above: in dfo-prod, while `allow_unauthenticated` is true, an internet caller who learns it reaches pin.
+This value is a second check behind Cloud Run IAM, as the publish principal above is: only a caller holding an invoker grant can send it to pin.
 
 Humans who need to read the value directly are granted read on this one secret through `var.datasets_pin_principal_readers`; empty by default. Rotation is bumping `datasets_pin_principal_version` in `datasets_pin_principal.tf`: the replacement version is created before the old one is destroyed, and this stack's own mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new value here. The `website` stack's mount reads `latest` instead, since it does not own the version resource; see that stack's README for what rolling a new website revision after a rotation requires.
 
@@ -147,7 +147,7 @@ Humans who need to read the value directly are granted read on this one secret t
 
 Its consumers are `dfo-dev-ai` (the `ai` stack, where it gates `POST /api/studio/refresh`) and `dfo-dev-website-staging` (the `website` stack, which sends it server-side on the refresh and render calls); see those stacks' READMEs. Apply this stack first. The other two read the secret by id, and a revision that mounts a missing secret fails to start.
 
-This value carries the same caveat as the principals above: in dfo-prod, while `allow_unauthenticated` is true, an internet caller who learns it reaches the refresh routes.
+This value is a second check behind Cloud Run IAM, as the principals above are: only a caller holding an invoker grant can send it to the refresh routes.
 
 Humans who need to read the value directly are granted read on this one secret through `var.live_refresh_principal_readers`; empty by default. Rotation is a bump of `live_refresh_principal_version` in `live_refresh_principal.tf`. The replacement version is created before the old one is destroyed, and this stack's own mount pins the version number, so the same apply rolls a revision onto the new value here. The `ai` and `website` stacks' mounts read `latest`, since they do not own the version resource. Their READMEs say what rolling a new revision after a rotation requires.
 
