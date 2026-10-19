@@ -186,6 +186,12 @@ Two alert policies watch the job. The first has two conditions. The job logs `or
 
 `ORIGIN_CATALOGUE_URI` is set on the apis service (`main.tf`) and the datasets worker (`datasets_worker.tf`), and both runtime accounts hold `roles/storage.objectViewer` on the bucket. Both raise at startup when no published catalogue loads.
 
+## Graph release
+
+`graph_release.tf` declares the builder's own bucket (`dfo-dev-graph-release-<project>`), a Cloud Run Job (`dfo-dev-graph-release`) running `python -m graph_release.job` from the dfo-apis image, a Cloud Scheduler trigger (`dfo-dev-graph-release-tick`) every 2 minutes, and two alert policies. The job reads the Data Commons Spanner database, gates the result, and publishes an immutable release of the platform tables and DFO parts to the bucket, moving one pointer last. The job account holds `roles/spanner.databaseReader` on the database, `roles/run.viewer` on the Data Commons service, `roles/storage.objectUser` on the bucket and `roles/storage.objectViewer` on the coverage and origin catalogue buckets. The apis runtime and datasets worker accounts hold `roles/storage.objectViewer` on the bucket.
+
+`graph_release_enabled` defaults to false, which creates the Scheduler trigger paused and the alert policies disabled. Apply the stack with it off, deploy the dfo-apis image that carries `graph_release.job`, then set it true. The task timeout is 1800 seconds, equal to the job's lease ttl, and the Job has 2 CPU, 8 GiB and no retries. `graph_release_notification_channels` names the channels to notify.
+
 ## Search catalogue
 
 `search_catalogue.tf` declares the catalogue's own bucket (`dfo-dev-search-catalogue-<project>`), a Cloud Run Job (`dfo-dev-search-catalogue`) running `python -m search.catalogue.job` from the dfo-apis image, a Cloud Scheduler trigger (`dfo-dev-search-catalogue-tick`) every 15 minutes, and alert policies for a failed execution, a dropped example, and a job that stopped running. The job runs each example sentence in dfo-apis's `search/catalogue/examples.toml` through the search engine in-process, keeps the ones that answer with data, counts publishers, countries and aid, publishes each build under `format-<n>/versions/<build id>/`, and moves `format-<n>/current.json` to point at it last. The apis service serves the published build at `GET /api/search/catalogue`.
@@ -253,7 +259,7 @@ Every plan after that is an ordinary read. This applies to any new stack, not ju
 
 ## Handoff after `apply`
 
-`dfo-apis`'s deploy workflow reads `REGION`, `PROJECT_ID`, `AR_REPO`, `SERVICE_APIS`, `SERVICE_WORKER`, `JOB_DATASETS_MIGRATE`, `JOB_DATASETS_MAINTENANCE`, `JOB_PRESENTATION_MIGRATE`, `JOB_COVERAGE`, `JOB_ORIGIN_CATALOGUE` and `JOB_SEARCH_CATALOGUE` as variables and `WIF_PROVIDER` and `WIF_SA` as secrets from its `dev` GitHub Environment. Each is an output of this stack or `foundation`, and `deploy_values` in `scripts/deploy-targets.sh` maps each name to its output.
+`dfo-apis`'s deploy workflow reads `REGION`, `PROJECT_ID`, `AR_REPO`, `SERVICE_APIS`, `SERVICE_WORKER`, `JOB_DATASETS_MIGRATE`, `JOB_DATASETS_MAINTENANCE`, `JOB_PRESENTATION_MIGRATE`, `JOB_COVERAGE`, `JOB_ORIGIN_CATALOGUE`, `JOB_GRAPH_RELEASE` and `JOB_SEARCH_CATALOGUE` as variables and `WIF_PROVIDER` and `WIF_SA` as secrets from its `dev` GitHub Environment. Each is an output of this stack or `foundation`, and `deploy_values` in `scripts/deploy-targets.sh` maps each name to its output.
 
 Run **`just handoff apis`** (`scripts/handoff.sh dfo-dev apis`) after applying the `foundation` and `apis` stacks, and again after either renames a resource it hands over. It reads those outputs and sets them on `dfo-apis`'s `dev` GitHub Environment with `gh`, using your GitHub login. Nothing else sets them.
 

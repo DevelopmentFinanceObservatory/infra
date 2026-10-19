@@ -154,6 +154,7 @@ secret WIF_SA foundation $1_deployer_service_account"
         "var JOB_PRESENTATION_MIGRATE apis presentation_migrate_job_name" \
         "var JOB_COVERAGE apis coverage_job_name" \
         "var JOB_ORIGIN_CATALOGUE apis origin_catalogue_job_name" \
+        "var JOB_GRAPH_RELEASE apis graph_release_job_name" \
         "var JOB_SEARCH_CATALOGUE apis search_catalogue_job_name" ;;
     dcp) printf '%s\n' \
         "var AR_REPO foundation artifact_registry_datacommons_repository_id" \
