@@ -300,15 +300,18 @@ resource "google_cloud_scheduler_job" "graph_release" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Alerting: a stale import, a failed gate, a dependency down, or no tick completing
+# Alerting: a stale import, a failed gate, a dependency down, a failed execution, or no tick completing
 # ─────────────────────────────────────────────────────────────────────────────
 
 # dfo-apis's graph_release.job logs `graph_release_stale` while the newest
 # import has waited over 30 minutes without a release, `graph_release_gate_failed`
 # when the gate finds a deterministic fault and keeps the previous release
 # serving, and `graph_release_unavailable` when a dependency (the mixer,
-# SDMX, the bucket or the Admin API) could not answer. An unavailable run
-# exits non-zero. Ticks in the next 10 minutes with the same inputs skip without
+# SDMX, the bucket or the Admin API) could not answer. A gate finding and an
+# unavailable dependency both exit 0, so these log metrics are their only
+# alert. The job exits non-zero for an exception it does not classify, a task
+# timeout or an out-of-memory kill, and the failed-execution condition below
+# covers those. Ticks in the next 10 minutes with the same inputs skip without
 # rebuilding, exit 0 and log the recorded `graph_release_unavailable` line again,
 # marked as a backoff repeat. The first tick after that retries.
 resource "google_logging_metric" "graph_release_stale" {
@@ -364,10 +367,17 @@ resource "google_logging_metric" "graph_release_unavailable" {
 
 # Every tick logs `graph_release_heartbeat`. A Scheduler that stops starting
 # the job produces no stale line and no failed execution. Only the heartbeat's
-# absence shows it. A tick that raises an exception it does not classify logs
-# the heartbeat with outcome `error` and no stale, gate or unavailable line.
-# The metric leaves those ticks out, so a job that crashes on every run leaves
-# the heartbeat absent and the absence alert below covers it.
+# absence shows it. The metric counts every tick that exits by a path the job
+# classifies: published, skipped, gate failed or dependency unavailable. It
+# leaves out two outcomes. A tick that raises an exception it does not
+# classify logs `error` and no stale, gate or unavailable line. A build killed
+# by the task timeout or out of memory logs nothing and leaves its lease, and
+# every tick the lease blocks logs `lease_held`. Counting either would keep
+# the heartbeat present while no build completes. The absence alert below
+# covers a Scheduler that stopped and a build killed on every run. An absence
+# condition arms only after its series has existed, so a builder that has
+# never logged a heartbeat is covered by the failed-execution condition on
+# the stale policy, which needs no earlier sample.
 resource "google_logging_metric" "graph_release_heartbeat" {
   name    = "${var.namespace}-graph-release-heartbeat"
   project = var.project_id
@@ -377,6 +387,7 @@ resource "google_logging_metric" "graph_release_heartbeat" {
     resource.labels.location="${var.region}"
     jsonPayload.event="graph_release_heartbeat"
     NOT jsonPayload.outcome="error"
+    NOT jsonPayload.outcome="lease_held"
   EOT
 
   metric_descriptor {
@@ -387,7 +398,7 @@ resource "google_logging_metric" "graph_release_heartbeat" {
 }
 
 variable "graph_release_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for a stale or gate-failed graph release, an unavailable dependency or a builder that stopped running."
+  description = "Existing Cloud Monitoring notification channel resource names to notify for a stale or gate-failed graph release, an unavailable dependency, a failed builder execution or a builder that stopped running."
   type        = list(string)
   default     = []
 }
@@ -406,7 +417,7 @@ resource "time_sleep" "graph_release_metric_propagation" {
 
 resource "google_monitoring_alert_policy" "graph_release_stale" {
   project      = var.project_id
-  display_name = "Graph release stale, gate failed or dependency unavailable"
+  display_name = "Graph release stale, gate failed, dependency unavailable or execution failed"
   combiner     = "OR"
   enabled      = var.graph_release_enabled
 
@@ -466,6 +477,27 @@ resource "google_monitoring_alert_policy" "graph_release_stale" {
     }
   }
 
+  # The job exits non-zero only for an unclassified exception, a task timeout
+  # or an out-of-memory kill. It sits in this policy, not the heartbeat one,
+  # because a failed execution is a discrete event and the 7-day auto-close
+  # there would keep its incident open for a week after the job recovers. The
+  # 120s period matches the 2-minute schedule.
+  conditions {
+    display_name = "graph release Job execution failed"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${google_cloud_run_v2_job.graph_release.name}\" AND resource.labels.location=\"${var.region}\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"failed\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "120s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
   notification_channels = var.graph_release_notification_channels
 
   alert_strategy {
@@ -476,8 +508,10 @@ resource "google_monitoring_alert_policy" "graph_release_stale" {
 # Its own policy, so its incident closes on its own timer. The conditions
 # above auto-close after an hour, which would close an absence incident
 # while the heartbeat is missing. 2100 seconds exceeds the 1800-second task
-# timeout plus one 2-minute tick, so one hung or timed-out build cannot open
-# the alert on its own.
+# timeout plus one 2-minute tick, so a healthy build, which logs its own
+# heartbeat when it finishes, lands it inside the window. A build killed at the
+# timeout logs none, and the `lease_held` ticks after it are not counted, so
+# the alert opens once the window passes.
 resource "google_monitoring_alert_policy" "graph_release_heartbeat" {
   project      = var.project_id
   display_name = "Graph release job not running"
