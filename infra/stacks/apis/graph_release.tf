@@ -459,8 +459,9 @@ resource "google_monitoring_alert_policy" "graph_release_stale" {
 
   # A dependency that is down for one tick is retried on the next, so this
   # condition fires only when it has answered nothing for 15 minutes. The ticks
-  # that back off for 600 s after an unavailable result log the line again, so
-  # it recurs every 2-minute tick for as long as the outage lasts.
+  # that back off for 600 s after an unavailable result log the line again, and
+  # so do the ticks that find the retry build holding the lease, so it recurs
+  # every 2-minute tick for as long as the outage lasts.
   conditions {
     display_name = "graph_release_unavailable logged for 15 minutes"
 
