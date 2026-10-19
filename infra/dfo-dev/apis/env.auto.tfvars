@@ -40,3 +40,7 @@ invoker_members = []
 # Unpauses the graph release builder's Scheduler trigger and enables its
 # alert policies. The deployed dfo-apis image carries graph_release.job.
 graph_release_enabled = true
+
+# The builder has published in dev, so the apis service and datasets worker
+# load the release.
+graph_release_serving = true

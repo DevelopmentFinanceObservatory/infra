@@ -9,6 +9,12 @@
 # origin_catalogue.tf's alerting conventions, and has its own identities and
 # bucket.
 
+variable "graph_release_serving" {
+  description = "Whether the apis service and datasets worker load the graph release (GRAPH_RELEASE_URI). They refuse to start when no release is published, so set it true only once the builder has published in this environment."
+  type        = bool
+  default     = false
+}
+
 variable "graph_release_enabled" {
   description = "Whether the graph release builder runs. False (the default) creates the Scheduler trigger paused and the alert policies disabled, so the stack applies before the dfo-apis image that carries graph_release.job is deployed. Set true once that image is live."
   type        = bool

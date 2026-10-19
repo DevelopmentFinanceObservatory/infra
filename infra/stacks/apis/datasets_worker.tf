@@ -393,6 +393,15 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
         value = "gs://${google_storage_bucket.origin_catalogue.name}/"
       }
 
+      # The graph release main.tf mounts, under the same switch.
+      dynamic "env" {
+        for_each = var.graph_release_serving ? [1] : []
+        content {
+          name  = "GRAPH_RELEASE_URI"
+          value = "gs://${google_storage_bucket.graph_release.name}/"
+        }
+      }
+
       # The same website origin main.tf mounts: the worker builds a bundle's
       # links on it and refuses to start without it.
       env {
