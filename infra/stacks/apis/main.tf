@@ -94,7 +94,7 @@ module "apis_service" {
     }
   }
 
-  env_vars = {
+  env_vars = merge({
     # The project Cloud Logging's trace field names. dfo-apis writes JSON log
     # lines carrying logging.googleapis.com/trace, which needs it, and Cloud
     # Run does not set it.
@@ -213,7 +213,13 @@ module "apis_service" {
     # The backlog dfo-apis admits, which sets the queue wait inside the
     # operation deadline above.
     DATASETS_OPERATION_BACKLOG_MAX = tostring(local.datasets_operation_backlog_max)
-  }
+    },
+    # graph_release.tf's bucket, once var.graph_release_serving is true. The
+    # service loads the release the pointer names at startup and refuses to
+    # start when none is published, so it stays unset until the builder has
+    # published in this environment.
+    var.graph_release_serving ? { GRAPH_RELEASE_URI = "gs://${google_storage_bucket.graph_release.name}/" } : {}
+  )
 
   deployer_members = ["serviceAccount:${data.google_service_account.apis_deployer.email}"]
 
