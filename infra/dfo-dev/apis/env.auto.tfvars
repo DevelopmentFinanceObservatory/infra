@@ -36,3 +36,7 @@ allow_unauthenticated = true
 # Principals no stack owns, such as a developers' group. The website and ai
 # stacks grant their own runtime accounts invoker on this service.
 invoker_members = []
+
+# Unpauses the graph release builder's Scheduler trigger and enables its
+# alert policies. The deployed dfo-apis image carries graph_release.job.
+graph_release_enabled = true
