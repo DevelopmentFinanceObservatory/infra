@@ -119,8 +119,11 @@ module "website_service" {
     },
     # Set only behind a proxy chain. Omitted when null, so the app keeps its default of 0. See var.trusted_proxy_hops.
     var.trusted_proxy_hops == null ? {} : { TRUSTED_PROXY_HOPS = tostring(var.trusted_proxy_hops) },
+    # Email sign-in settings (AUTH_EMAIL_FROM, SES pair, Turnstile site key) come from email_sign_in.tf.
+    local.email_sign_in_env_vars,
   )
   # Sign-in provider pairs (GOOGLE_*, GITHUB_*, MICROSOFT_*) come from sign_in_providers.tf.
+  # TURNSTILE_SECRET_KEY comes from email_sign_in.tf.
   secret_env_vars = merge({
     BETTER_AUTH_SECRET = {
       secret_id = google_secret_manager_secret.website_better_auth_secret.secret_id
@@ -152,7 +155,7 @@ module "website_service" {
     # website offers no Live Data option. The apis stack owns and pins the secret.
     # This mount reads latest, as for DFO_PRINCIPAL above. See README.
     LIVE_REFRESH_PRINCIPAL = { secret_id = var.live_refresh_principal_secret_id }
-  }, local.sign_in_secret_env_vars)
+  }, local.sign_in_secret_env_vars, local.email_sign_in_secret_env_vars)
 
   deployer_members = ["serviceAccount:${data.google_service_account.website_deployer.email}"]
 
@@ -177,6 +180,9 @@ module "website_service" {
     network    = module.psc_network.network_id
     subnetwork = module.psc_network.subnetwork_id
   }
+
+  # The first revision that mounts TURNSTILE_SECRET_KEY must wait for the placeholder version (email_sign_in.tf), or it cannot resolve `latest`. See the module README's "Ordering a revision on out-of-module resources" section.
+  readiness_dependencies = [google_secret_manager_secret_version.website_turnstile_secret_key_placeholder.id]
 }
 
 # The website's server-side proxies call the apis service with an ID token
