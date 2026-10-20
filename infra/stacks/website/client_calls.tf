@@ -1,5 +1,6 @@
-# Counts website requests to the data API paths, by DFO client library and
-# HTTP status. Cloud Run's request log records the user agent, URL and status
+# Counts website requests to the data API paths (/api/search, /api/datasets
+# and /api/graph, with or without the /api/v1 prefix), by DFO client library
+# and HTTP status. Cloud Run's request log records the user agent, URL and status
 # of every request, so the website needs no logging of its own. The DFO
 # client libraries send `User-Agent: dfo-<language>/<version>`. The label
 # takes only dfo-python, dfo-r and dfo-ts, so callers cannot add label values;
@@ -12,13 +13,13 @@
 resource "google_logging_metric" "client_calls" {
   name        = "${local.website_name}-client-calls"
   project     = var.project_id
-  description = "Requests to the data API paths (/api/v1/ and the unversioned /api/search, /api/datasets and /api/graph) on the ${local.website_name} service, by DFO client library and HTTP status."
+  description = "Requests to the data API paths (/api/search, /api/datasets and /api/graph, with or without the /api/v1 prefix) on the ${local.website_name} service, by DFO client library and HTTP status."
   filter      = <<-EOT
     resource.type="cloud_run_revision"
     resource.labels.service_name="${module.website_service.service_name}"
     resource.labels.location="${var.region}"
     logName="projects/${var.project_id}/logs/run.googleapis.com%2Frequests"
-    httpRequest.requestUrl=~"^https?://[^/]+/api/(v1/|(search|datasets|graph)(/|\\?|$))"
+    httpRequest.requestUrl=~"^https?://[^/]+/api/(v1/)?(search|datasets|graph)(/|[?]|$)"
   EOT
 
   metric_descriptor {

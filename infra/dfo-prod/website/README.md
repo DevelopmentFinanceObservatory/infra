@@ -33,3 +33,7 @@ gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref m
 ```
 
 `infra/dfo-dev/website/README.md` explains the placeholder and rotation in full.
+
+## Client-call metric
+
+`client_calls.tf` declares `dfo-prod-website-client-calls`, the same log-based metric as dev's: requests to the data API paths on the service, labelled by `status` and by DFO client library (`client`). `infra/dfo-dev/website/README.md` describes it in full.
