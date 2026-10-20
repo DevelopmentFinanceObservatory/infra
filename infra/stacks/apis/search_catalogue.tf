@@ -4,9 +4,11 @@
 # GET /api/search/catalogue on the apis service. It publishes each build
 # under "format-<n>/versions/<build id>/" and moves "format-<n>/current.json"
 # to point at it last, as origin_catalogue.tf describes. Its build key is the
-# origin catalogue build, the coverage index build, the image's commit and
-# the examples file, so it rebuilds after a publish of either artifact or a
-# deploy, and exits in seconds otherwise. It shares coverage.tf's
+# origin catalogue build, the coverage index build (the graph release id
+# while graph_release_coverage is true), the image's commit and the examples
+# file, so it rebuilds after a publish of either artifact or a deploy, and
+# exits in seconds otherwise. The graph release builder starts it after each
+# publish. It shares coverage.tf's
 # google_project_service.cloudscheduler and has its own identities and
 # bucket.
 
@@ -149,9 +151,30 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
           value = "gs://${google_storage_bucket.origin_catalogue.name}/"
         }
 
+        # The job refuses to start without this, also while
+        # graph_release_coverage has it read the release instead.
         env {
           name  = "COVERAGE_ARTIFACT_URI"
           value = "gs://${google_storage_bucket.coverage.name}/"
+        }
+
+        # The release graph_release.tf's builder publishes: the job keys its
+        # build on the release id and reads the code index and coverage from
+        # the release in place of the coverage artifact.
+        dynamic "env" {
+          for_each = var.graph_release_coverage ? [1] : []
+          content {
+            name  = "GRAPH_RELEASE_URI"
+            value = "gs://${google_storage_bucket.graph_release.name}/"
+          }
+        }
+
+        dynamic "env" {
+          for_each = var.graph_release_coverage ? [1] : []
+          content {
+            name  = "GRAPH_RELEASE_COVERAGE"
+            value = "1"
+          }
         }
 
         # The engine settings main.tf gives the apis service, so a build
