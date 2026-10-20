@@ -177,6 +177,16 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
           }
         }
 
+        # The job builds from held_family and member walks, so it reads the
+        # origin catalogue from the same release the service does.
+        dynamic "env" {
+          for_each = var.graph_release_origin ? [1] : []
+          content {
+            name  = "GRAPH_RELEASE_ORIGIN"
+            value = "1"
+          }
+        }
+
         # The engine settings main.tf gives the apis service, so a build
         # checks each example against the engine users' requests reach.
         # SEARCH_GRAPH_TOKEN stays unset, as README.md explains for the

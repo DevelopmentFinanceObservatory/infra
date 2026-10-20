@@ -26,6 +26,23 @@ variable "graph_release_coverage" {
   }
 }
 
+variable "graph_release_origin" {
+  description = "Whether the apis service, the datasets worker and the search catalogue job read the origin catalogue from the graph release (GRAPH_RELEASE_ORIGIN=1) in place of the origin catalogue artifact. Requires graph_release_coverage, since dfo-apis refuses GRAPH_RELEASE_ORIGIN without GRAPH_RELEASE_COVERAGE at startup."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.graph_release_origin || var.graph_release_coverage
+    error_message = "graph_release_origin reads the release that graph_release_coverage binds, so it requires graph_release_coverage."
+  }
+}
+
+variable "graph_release_shadow" {
+  description = "Whether the builder diffs each release against the coverage index and origin catalogue builds (GRAPH_RELEASE_SHADOW=1) before it publishes. False leaves the variable unset, so a release publishes without those builds."
+  type        = bool
+  default     = true
+}
+
 variable "graph_release_enabled" {
   description = "Whether the graph release builder runs. False (the default) creates the Scheduler trigger paused and the alert policies disabled, so the stack applies before the dfo-apis image that carries graph_release.job is deployed. Set true once that image is live."
   type        = bool
@@ -223,10 +240,15 @@ resource "google_cloud_run_v2_job" "graph_release" {
           value = var.datasets_sdmx_base_url
         }
 
-        # The shadow diff compares each release with these two artifacts.
-        env {
-          name  = "GRAPH_RELEASE_SHADOW"
-          value = "1"
+        # The shadow diff compares each release with the coverage and origin
+        # catalogue builds named below. Turning it off lets a release publish
+        # without them.
+        dynamic "env" {
+          for_each = var.graph_release_shadow ? [1] : []
+          content {
+            name  = "GRAPH_RELEASE_SHADOW"
+            value = "1"
+          }
         }
 
         env {
