@@ -48,3 +48,10 @@ graph_release_serving = true
 # The apis service, datasets worker and search catalogue job serve the code
 # index and coverage from the release in place of the coverage artifact.
 graph_release_coverage = true
+
+# The origin catalogue is read from the release as well.
+graph_release_origin = true
+
+# The builder publishes without diffing each release against the coverage and
+# origin catalogue builds.
+graph_release_shadow = false
