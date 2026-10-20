@@ -3,8 +3,8 @@
 # and HTTP status. Cloud Run's request log records the user agent, URL and status
 # of every request, so the website needs no logging of its own. The DFO
 # client libraries send `User-Agent: dfo-<language>/<version>`. The label
-# takes only dfo-python, dfo-r and dfo-ts, so callers cannot add label values;
-# raw REST callers, browsers and any other user agent get an empty `client`.
+# takes only dfo-python, dfo-r and dfo-ts, so callers cannot add label values.
+# Raw REST callers, browsers and any other user agent get an empty `client`.
 #
 # Nothing in this stack reads the metric, so the propagation wait that
 # apis/coverage.tf puts between a metric and its alert policy has no use here.
