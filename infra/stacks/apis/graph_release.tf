@@ -480,6 +480,17 @@ resource "time_sleep" "graph_release_metric_propagation" {
     google_logging_metric.graph_release_catalogue_trigger_failed,
     google_logging_metric.graph_release_heartbeat,
   ]
+  # A new metric replaces the sleep, so the policies wait for it as they did
+  # for the first ones. depends_on alone leaves an existing sleep in place.
+  triggers = {
+    metrics = join(",", [
+      google_logging_metric.graph_release_stale.name,
+      google_logging_metric.graph_release_gate_failed.name,
+      google_logging_metric.graph_release_unavailable.name,
+      google_logging_metric.graph_release_catalogue_trigger_failed.name,
+      google_logging_metric.graph_release_heartbeat.name,
+    ])
+  }
   create_duration = "120s"
 }
 
