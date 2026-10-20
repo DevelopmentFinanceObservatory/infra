@@ -402,6 +402,14 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
         }
       }
 
+      dynamic "env" {
+        for_each = var.graph_release_coverage ? [1] : []
+        content {
+          name  = "GRAPH_RELEASE_COVERAGE"
+          value = "1"
+        }
+      }
+
       # The same website origin main.tf mounts: the worker builds a bundle's
       # links on it and refuses to start without it.
       env {

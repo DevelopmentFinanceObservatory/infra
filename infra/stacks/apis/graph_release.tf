@@ -15,6 +15,17 @@ variable "graph_release_serving" {
   default     = false
 }
 
+variable "graph_release_coverage" {
+  description = "Whether the apis service, the datasets worker and the search catalogue job serve the code index and coverage from the graph release (GRAPH_RELEASE_COVERAGE=1) in place of the coverage artifact. Requires graph_release_serving. The release must already carry its serving views, which the builder publishes whenever it runs."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.graph_release_coverage || var.graph_release_serving
+    error_message = "graph_release_coverage reads the release that graph_release_serving mounts, so it requires graph_release_serving."
+  }
+}
+
 variable "graph_release_enabled" {
   description = "Whether the graph release builder runs. False (the default) creates the Scheduler trigger paused and the alert policies disabled, so the stack applies before the dfo-apis image that carries graph_release.job is deployed. Set true once that image is live."
   type        = bool
@@ -112,6 +123,16 @@ resource "google_storage_bucket_iam_member" "graph_release_datasets_worker_viewe
   bucket = google_storage_bucket.graph_release.name
   role   = "roles/storage.objectViewer"
   member = google_service_account.datasets_worker.member
+}
+
+# The search catalogue job loads the release it builds the catalogue from,
+# once var.graph_release_coverage is true.
+resource "google_storage_bucket_iam_member" "graph_release_search_catalogue_viewer" {
+  count = var.graph_release_coverage ? 1 : 0
+
+  bucket = google_storage_bucket.graph_release.name
+  role   = "roles/storage.objectViewer"
+  member = google_service_account.search_catalogue_job.member
 }
 
 resource "google_service_account_iam_member" "graph_release_job_deployer_act_as" {
@@ -218,6 +239,15 @@ resource "google_cloud_run_v2_job" "graph_release" {
           value = "gs://${google_storage_bucket.origin_catalogue.name}/"
         }
 
+        # The builder starts one search catalogue execution after each
+        # publish, through the Cloud Run Admin API. It does so whenever the
+        # variable is set, whatever graph_release_coverage says: without the
+        # flag the execution finds an unchanged build key and exits.
+        env {
+          name  = "SEARCH_CATALOGUE_JOB_NAME"
+          value = "projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.search_catalogue.name}"
+        }
+
         env {
           name  = "SPANNER_DISABLE_BUILTIN_METRICS"
           value = "true"
@@ -256,6 +286,16 @@ resource "google_cloud_run_v2_job_iam_member" "graph_release_deployer_run_develo
   name     = google_cloud_run_v2_job.graph_release.name
   role     = "roles/run.developer"
   member   = "serviceAccount:${data.google_service_account.apis_deployer.email}"
+}
+
+# run.jobs.run against the search catalogue job alone, for the call the
+# builder makes after each publish.
+resource "google_cloud_run_v2_job_iam_member" "graph_release_job_catalogue_invoker" {
+  project  = google_cloud_run_v2_job.search_catalogue.project
+  location = google_cloud_run_v2_job.search_catalogue.location
+  name     = google_cloud_run_v2_job.search_catalogue.name
+  role     = "roles/run.invoker"
+  member   = google_service_account.graph_release_job.member
 }
 
 output "graph_release_job_name" {
@@ -306,7 +346,7 @@ resource "google_cloud_scheduler_job" "graph_release" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Alerting: a stale import, a failed gate, a dependency down, a failed execution, or no tick completing
+# Alerting: a stale import, a failed gate, a dependency down, a catalogue trigger that failed, a failed execution, or no tick completing
 # ─────────────────────────────────────────────────────────────────────────────
 
 # dfo-apis's graph_release.job logs `graph_release_stale` while the newest
@@ -315,7 +355,11 @@ resource "google_cloud_scheduler_job" "graph_release" {
 # serving, and `graph_release_unavailable` when a dependency (the mixer,
 # SDMX, the bucket or the Admin API) could not answer. A gate finding and an
 # unavailable dependency both exit 0, so these log metrics are their only
-# alert. The job exits non-zero for an exception it does not classify, a task
+# alert. `graph_release_catalogue_trigger_failed` is logged at WARNING when
+# the call that starts the search catalogue job after a publish fails. The
+# job still reports the release as published and exits 0, so this metric is
+# the only alert, and the catalogue stays on the previous release until the
+# next publish or deploy starts the job. The job exits non-zero for an exception it does not classify, a task
 # timeout or an out-of-memory kill, and the failed-execution condition below
 # covers those. Ticks in the next 10 minutes with the same inputs skip without
 # rebuilding, exit 0 and log the recorded `graph_release_unavailable` line again,
@@ -345,6 +389,23 @@ resource "google_logging_metric" "graph_release_gate_failed" {
     resource.labels.job_name="${google_cloud_run_v2_job.graph_release.name}"
     resource.labels.location="${var.region}"
     jsonPayload.event="graph_release_gate_failed"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+resource "google_logging_metric" "graph_release_catalogue_trigger_failed" {
+  name    = "${var.namespace}-graph-release-catalogue-trigger-failed"
+  project = var.project_id
+  filter  = <<-EOT
+    resource.type="cloud_run_job"
+    resource.labels.job_name="${google_cloud_run_v2_job.graph_release.name}"
+    resource.labels.location="${var.region}"
+    jsonPayload.event="graph_release_catalogue_trigger_failed"
   EOT
 
   metric_descriptor {
@@ -404,7 +465,7 @@ resource "google_logging_metric" "graph_release_heartbeat" {
 }
 
 variable "graph_release_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for a stale or gate-failed graph release, an unavailable dependency, a failed builder execution or a builder that stopped running."
+  description = "Existing Cloud Monitoring notification channel resource names to notify for a stale or gate-failed graph release, an unavailable dependency, a failed catalogue trigger, a failed builder execution or a builder that stopped running."
   type        = list(string)
   default     = []
 }
@@ -416,6 +477,7 @@ resource "time_sleep" "graph_release_metric_propagation" {
     google_logging_metric.graph_release_stale,
     google_logging_metric.graph_release_gate_failed,
     google_logging_metric.graph_release_unavailable,
+    google_logging_metric.graph_release_catalogue_trigger_failed,
     google_logging_metric.graph_release_heartbeat,
   ]
   create_duration = "120s"
@@ -423,7 +485,7 @@ resource "time_sleep" "graph_release_metric_propagation" {
 
 resource "google_monitoring_alert_policy" "graph_release_stale" {
   project      = var.project_id
-  display_name = "Graph release stale, gate failed, dependency unavailable or execution failed"
+  display_name = "Graph release stale, gate failed, dependency unavailable, catalogue trigger failed or execution failed"
   combiner     = "OR"
   enabled      = var.graph_release_enabled
 
@@ -476,6 +538,22 @@ resource "google_monitoring_alert_policy" "graph_release_stale" {
       comparison      = "COMPARISON_GT"
       threshold_value = 0
       duration        = "900s"
+
+      aggregations {
+        alignment_period   = "120s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  conditions {
+    display_name = "graph_release_catalogue_trigger_failed logged"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.graph_release_catalogue_trigger_failed.name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
 
       aggregations {
         alignment_period   = "120s"

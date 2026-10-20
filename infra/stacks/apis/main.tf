@@ -218,7 +218,10 @@ module "apis_service" {
     # service loads the release the pointer names at startup and refuses to
     # start when none is published, so it stays unset until the builder has
     # published in this environment.
-    var.graph_release_serving ? { GRAPH_RELEASE_URI = "gs://${google_storage_bucket.graph_release.name}/" } : {}
+    var.graph_release_serving ? { GRAPH_RELEASE_URI = "gs://${google_storage_bucket.graph_release.name}/" } : {},
+    # Serve the code index and coverage from that release, once
+    # var.graph_release_coverage is true.
+    var.graph_release_coverage ? { GRAPH_RELEASE_COVERAGE = "1" } : {}
   )
 
   deployer_members = ["serviceAccount:${data.google_service_account.apis_deployer.email}"]

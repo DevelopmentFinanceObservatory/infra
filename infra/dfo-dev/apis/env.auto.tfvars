@@ -44,3 +44,7 @@ graph_release_enabled = true
 # The builder has published in dev, so the apis service and datasets worker
 # load the release.
 graph_release_serving = true
+
+# The apis service, datasets worker and search catalogue job serve the code
+# index and coverage from the release in place of the coverage artifact.
+graph_release_coverage = true
