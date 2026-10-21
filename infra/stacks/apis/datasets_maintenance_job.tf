@@ -81,6 +81,18 @@ resource "google_cloud_run_v2_job" "datasets_maintenance" {
           name  = "DATASETS_OPERATION_DEADLINE_SECONDS"
           value = tostring(local.datasets_operation_deadline_seconds)
         }
+
+        # The graph release main.tf mounts, under the same switch:
+        # backfill-descriptions opens it, as the service does at startup. The
+        # apis runtime identity reads the bucket through
+        # graph_release_apis_runtime_viewer.
+        dynamic "env" {
+          for_each = var.graph_release_serving ? [1] : []
+          content {
+            name  = "GRAPH_RELEASE_URI"
+            value = "gs://${google_storage_bucket.graph_release.name}/"
+          }
+        }
       }
 
       # The same PSC subnet and egress as the service and the other Jobs.

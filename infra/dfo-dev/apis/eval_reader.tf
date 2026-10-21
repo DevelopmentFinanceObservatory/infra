@@ -1,6 +1,7 @@
 # The apis repository's search eval job identity. The job stages the coverage index
-# and the origin catalogue onto a GitHub runner and starts two local apps
-# against them, so it reads both buckets and writes nothing. It also calls the
+# and the origin catalogue onto a GitHub runner, loads the graph release, and
+# starts two local apps against them, so it reads those three buckets and
+# writes nothing. It also calls the
 # dev apis service, so it holds run.invoker there.
 #
 # The account lives here, beside the buckets, and not in ../foundation with
@@ -30,7 +31,7 @@ resource "google_service_account" "eval_reader" {
   project      = var.project_id
   account_id   = "dfo-dev-apis-eval-reader"
   display_name = "dfo-apis search eval reader (CI)"
-  description  = "Reads the coverage and origin catalogue buckets for dfo-apis's search eval workflows; holds no project roles"
+  description  = "Reads the coverage, origin catalogue and graph release buckets for dfo-apis's search eval workflows; holds no project roles"
 }
 
 # Any workflow run in the apis repository may impersonate the account: pull requests,
@@ -61,6 +62,14 @@ resource "google_storage_bucket_iam_member" "eval_reader_coverage_viewer" {
 
 resource "google_storage_bucket_iam_member" "eval_reader_origin_catalogue_viewer" {
   bucket = google_storage_bucket.origin_catalogue.name
+  role   = "roles/storage.objectViewer"
+  member = google_service_account.eval_reader.member
+}
+
+# The eval jobs also load the graph release the services serve, so they read
+# its bucket as well.
+resource "google_storage_bucket_iam_member" "eval_reader_graph_release_viewer" {
+  bucket = google_storage_bucket.graph_release.name
   role   = "roles/storage.objectViewer"
   member = google_service_account.eval_reader.member
 }
