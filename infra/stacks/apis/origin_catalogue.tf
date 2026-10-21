@@ -5,9 +5,9 @@
 # artifact at startup. The job publishes each build under
 # "format-<n>/versions/<build id>/" and moves "format-<n>/current.json" to
 # point at it last, the same publication order coverage.tf describes for the
-# coverage index. It shares that file's Spanner connection, its
-# google_project_service.cloudscheduler and its notification channel
-# conventions, and has its own identities and bucket.
+# coverage index. It shares variables.tf's Spanner connection, main.tf's
+# google_project_service.cloudscheduler and coverage.tf's notification
+# channel conventions, and has its own identities and bucket.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bucket

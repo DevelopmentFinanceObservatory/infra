@@ -1,8 +1,7 @@
-# The apis repository's search eval job identity. The job stages the coverage index
-# and the origin catalogue onto a GitHub runner, loads the graph release, and
-# starts two local apps against them, so it reads those three buckets and
-# writes nothing. It also calls the
-# dev apis service, so it holds run.invoker there.
+# The apis repository's search eval job identity. The job stages the origin
+# catalogue onto a GitHub runner, loads the graph release, and starts two
+# local apps against them, so it reads those two buckets and writes nothing.
+# It also calls the dev apis service, so it holds run.invoker there.
 #
 # The account lives here, beside the buckets, and not in ../foundation with
 # the deployers: both stacks apply in parallel on merge, so a foundation
@@ -31,7 +30,7 @@ resource "google_service_account" "eval_reader" {
   project      = var.project_id
   account_id   = "dfo-dev-apis-eval-reader"
   display_name = "dfo-apis search eval reader (CI)"
-  description  = "Reads the coverage, origin catalogue and graph release buckets for dfo-apis's search eval workflows; holds no project roles"
+  description  = "Reads the origin catalogue and graph release buckets for dfo-apis's search eval workflows; holds no project roles"
 }
 
 # Any workflow run in the apis repository may impersonate the account: pull requests,
@@ -52,12 +51,6 @@ resource "google_service_account_iam_member" "eval_reader_wif" {
     # through the swap.
     create_before_destroy = true
   }
-}
-
-resource "google_storage_bucket_iam_member" "eval_reader_coverage_viewer" {
-  bucket = google_storage_bucket.coverage.name
-  role   = "roles/storage.objectViewer"
-  member = google_service_account.eval_reader.member
 }
 
 resource "google_storage_bucket_iam_member" "eval_reader_origin_catalogue_viewer" {

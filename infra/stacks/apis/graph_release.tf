@@ -4,8 +4,8 @@
 # coverage and origin catalogue artifacts. The apis service and the datasets
 # worker load the published release. The job writes each release's parts and
 # manifest create-only and moves one pointer last, the same publication order
-# coverage.tf describes for the coverage index. It reuses that file's
-# Spanner ids and google_project_service.cloudscheduler, follows
+# coverage.tf describes for the coverage index. It reuses variables.tf's
+# Spanner ids and main.tf's google_project_service.cloudscheduler, follows
 # origin_catalogue.tf's alerting conventions, and has its own identities and
 # bucket.
 
@@ -38,7 +38,7 @@ variable "graph_release_origin" {
 }
 
 variable "graph_release_shadow" {
-  description = "Whether the builder diffs each release against the coverage index and origin catalogue builds (GRAPH_RELEASE_SHADOW=1) before it publishes. False leaves the variable unset, so a release publishes without those builds."
+  description = "Whether the builder diffs each release against the coverage index and origin catalogue builds (GRAPH_RELEASE_SHADOW=1) before it publishes. False leaves the variable unset and drops the builder's COVERAGE_ARTIFACT_URI, ORIGIN_CATALOGUE_URI and read access to those two buckets, so a release publishes without those builds."
   type        = bool
   default     = true
 }
@@ -116,14 +116,19 @@ resource "google_storage_bucket_iam_member" "graph_release_job_object_user" {
   member = google_service_account.graph_release_job.member
 }
 
-# Read-only on the artifacts the shadow diff compares against.
+# Read-only on the artifacts the shadow diff compares against, while
+# var.graph_release_shadow is true.
 resource "google_storage_bucket_iam_member" "graph_release_job_coverage_viewer" {
+  count = var.graph_release_shadow ? 1 : 0
+
   bucket = google_storage_bucket.coverage.name
   role   = "roles/storage.objectViewer"
   member = google_service_account.graph_release_job.member
 }
 
 resource "google_storage_bucket_iam_member" "graph_release_job_origin_catalogue_viewer" {
+  count = var.graph_release_shadow ? 1 : 0
+
   bucket = google_storage_bucket.origin_catalogue.name
   role   = "roles/storage.objectViewer"
   member = google_service_account.graph_release_job.member
@@ -241,8 +246,9 @@ resource "google_cloud_run_v2_job" "graph_release" {
         }
 
         # The shadow diff compares each release with the coverage and origin
-        # catalogue builds named below. Turning it off lets a release publish
-        # without them.
+        # catalogue builds named below, and the builder reads those builds
+        # for nothing else. Turning it off lets a release publish without
+        # them.
         dynamic "env" {
           for_each = var.graph_release_shadow ? [1] : []
           content {
@@ -251,14 +257,20 @@ resource "google_cloud_run_v2_job" "graph_release" {
           }
         }
 
-        env {
-          name  = "COVERAGE_ARTIFACT_URI"
-          value = "gs://${google_storage_bucket.coverage.name}/"
+        dynamic "env" {
+          for_each = var.graph_release_shadow ? [1] : []
+          content {
+            name  = "COVERAGE_ARTIFACT_URI"
+            value = "gs://${google_storage_bucket.coverage.name}/"
+          }
         }
 
-        env {
-          name  = "ORIGIN_CATALOGUE_URI"
-          value = "gs://${google_storage_bucket.origin_catalogue.name}/"
+        dynamic "env" {
+          for_each = var.graph_release_shadow ? [1] : []
+          content {
+            name  = "ORIGIN_CATALOGUE_URI"
+            value = "gs://${google_storage_bucket.origin_catalogue.name}/"
+          }
         }
 
         # The builder starts one search catalogue execution after each

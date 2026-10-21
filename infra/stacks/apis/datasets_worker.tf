@@ -137,11 +137,13 @@ resource "google_storage_bucket_iam_member" "datasets_worker_pinned_viewer" {
 }
 
 # Read-only on the coverage bucket, mirroring coverage.tf's
-# coverage_apis_runtime_viewer grant: worker_app.py builds DefinitionDeps
-# including series_coverage.shared.get_coverage_service(), so the worker
-# reads the published coverage artifact the same way the synchronous door
-# does, and never writes to this bucket.
+# coverage_apis_runtime_viewer grant and gated with it: worker_app.py builds
+# DefinitionDeps including series_coverage.shared.get_coverage_service(), so
+# the worker reads the published coverage artifact the same way the
+# synchronous door does, and never writes to this bucket.
 resource "google_storage_bucket_iam_member" "datasets_worker_coverage_viewer" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   bucket = google_storage_bucket.coverage.name
   role   = "roles/storage.objectViewer"
   member = google_service_account.datasets_worker.member
@@ -383,9 +385,12 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
         value = google_sql_user.datasets_worker_runtime.name
       }
 
-      env {
-        name  = "COVERAGE_ARTIFACT_URI"
-        value = "gs://${google_storage_bucket.coverage.name}/"
+      dynamic "env" {
+        for_each = var.legacy_coverage_pipeline ? [1] : []
+        content {
+          name  = "COVERAGE_ARTIFACT_URI"
+          value = "gs://${google_storage_bucket.coverage.name}/"
+        }
       }
 
       env {
