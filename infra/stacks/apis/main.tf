@@ -39,6 +39,13 @@ data "google_secret_manager_secret" "gemini" {
   secret_id = "${var.namespace}-gemini-api-key"
 }
 
+# TypeSafe's API key for the Jev binder, created by hand like the Gemini key.
+# Read only when search_binder sends calls to Jev.
+data "google_secret_manager_secret" "typesafe" {
+  count     = var.search_binder == "gemini" ? 0 : 1
+  secret_id = "${var.namespace}-typesafe-api-key"
+}
+
 # The dfo-apis CI image-deployer (provisioned in ../foundation) needs actAs on
 # the runtime SA to push image-only revision updates; it's granted that
 # per-SA below.
@@ -56,7 +63,7 @@ module "apis_service" {
   bootstrap_image     = "gcr.io/cloudrun/hello"
   container_port      = 8080
 
-  secret_env_vars = {
+  secret_env_vars = merge({
     # The engine warm-loads its Gemini client at startup, so a missing or
     # invalid key fails the revision immediately rather than on first request.
     GEMINI_API_KEY = { secret_id = data.google_secret_manager_secret.gemini.secret_id }
@@ -92,7 +99,12 @@ module "apis_service" {
       # same apply.
       version = google_secret_manager_secret_version.live_refresh_principal.version
     }
-  }
+    }, {
+    # Mounted only when search_binder sends calls to Jev, so a gemini
+    # environment needs no TypeSafe secret.
+    for name, secret_id in { TYPESAFE_API_KEY = one(data.google_secret_manager_secret.typesafe[*].secret_id) } :
+    name => { secret_id = secret_id } if var.search_binder != "gemini"
+  })
 
   env_vars = merge({
     # The project Cloud Logging's trace field names. dfo-apis writes JSON log
@@ -103,6 +115,10 @@ module "apis_service" {
     SEARCH_GRAPH_BASE   = var.search_graph_base
     SEARCH_ENGINE_MODEL = var.search_engine_model
     DFO_CORS_ORIGINS    = var.dfo_cors_origins
+
+    # TYPESAFE_API_KEY above is mounted whenever SEARCH_BINDER is not gemini.
+    SEARCH_BINDER          = var.search_binder
+    SEARCH_JEV_TRAFFIC_PCT = tostring(var.search_jev_traffic_pct)
 
     DATASETS_GRAPH_BASE_URL = var.datasets_graph_base_url
     DATASETS_SDMX_BASE_URL  = var.datasets_sdmx_base_url

@@ -55,3 +55,8 @@ graph_release_origin = true
 # The builder publishes without diffing each release against the coverage and
 # origin catalogue builds.
 graph_release_shadow = false
+
+# Jev binds 85 percent of queries, with Gemini as its fallback and on the rest.
+# The key is the hand-made dfo-dev-typesafe-api-key secret.
+search_binder          = "jev"
+search_jev_traffic_pct = 85
