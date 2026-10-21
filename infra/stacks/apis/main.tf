@@ -32,6 +32,15 @@ provider "google" {
   region  = var.region
 }
 
+# Every Cloud Scheduler trigger in this stack depends on it: the graph
+# release, origin catalogue, search catalogue, coverage and datasets
+# maintenance ticks.
+resource "google_project_service" "cloudscheduler" {
+  project            = var.project_id
+  service            = "cloudscheduler.googleapis.com"
+  disable_on_destroy = false
+}
+
 # Reuse the existing Gemini API key secret (not terraform-managed — see
 # infra/stacks/dcp/dfo.tf and infra/stacks/ai/main.tf for its other
 # consumers) rather than creating a dedicated one for this service.
@@ -182,13 +191,8 @@ module "apis_service" {
     PRESENTATION_STORE_INSTANCE_CONNECTION_NAME = var.platform_postgres_connection_name
     PRESENTATION_STORE_RUNTIME_DB_USER          = google_sql_user.datasets_runtime.name
 
-    # coverage.tf's bucket. Search and the mint door raise at startup when
-    # this artifact can't be loaded, so a missing or unreadable value fails
-    # the revision the same way a bad GEMINI_API_KEY does.
-    COVERAGE_ARTIFACT_URI = "gs://${google_storage_bucket.coverage.name}/"
-
     # origin_catalogue.tf's bucket. The service raises at startup when no
-    # published catalogue can be loaded, as it does for the coverage artifact.
+    # published catalogue can be loaded.
     ORIGIN_CATALOGUE_URI = "gs://${google_storage_bucket.origin_catalogue.name}/"
 
     # search_catalogue.tf's bucket, which GET /api/search/catalogue serves.
@@ -230,6 +234,11 @@ module "apis_service" {
     # operation deadline above.
     DATASETS_OPERATION_BACKLOG_MAX = tostring(local.datasets_operation_backlog_max)
     },
+    # coverage.tf's bucket, while var.legacy_coverage_pipeline is true. An
+    # image without graph_release_coverage raises at startup when this
+    # artifact can't be loaded, so a missing or unreadable value fails the
+    # revision the same way a bad GEMINI_API_KEY does.
+    var.legacy_coverage_pipeline ? { COVERAGE_ARTIFACT_URI = "gs://${google_storage_bucket.coverage.name}/" } : {},
     # graph_release.tf's bucket, once var.graph_release_serving is true. The
     # service loads the release the pointer names at startup and refuses to
     # start when none is published, so it stays unset until the builder has

@@ -60,3 +60,13 @@ graph_release_shadow = false
 # The key is the hand-made dfo-dev-typesafe-api-key secret.
 search_binder          = "jev"
 search_jev_traffic_pct = 85
+
+# The coverage job, its tick, identities, grants and alerting are gone, and
+# no surface gets COVERAGE_ARTIFACT_URI. The services serve coverage from the
+# graph release; the coverage bucket stays.
+legacy_coverage_pipeline = false
+
+# The graph release builder starts the search catalogue job after each
+# publish and the deploy after each deploy, so no Scheduler tick or
+# heartbeat alert runs.
+search_catalogue_tick = false

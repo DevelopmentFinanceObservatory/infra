@@ -132,6 +132,34 @@ variable "datacommons_service_name" {
   type        = string
 }
 
+# Produced by dcp's vendored upstream module
+# (git::https://github.com/datacommonsorg/datacommons.git//infra/dcp/modules/stack),
+# not declared in this repo, so it is referenced by id rather than through a
+# Terraform resource or data source this stack owns. The name is
+# "${namespace}_dc_${connection_name}" with "-" replaced by "_"; with
+# namespace "dfo-dev" and the default connection name "spanner_connection"
+# that evaluates to "dfo_dev_dc_spanner_connection".
+variable "dc_spanner_connection_id" {
+  description = "Short id of the BigQuery connection dcp's vendored module creates for Spanner federation (google_bigquery_connection.spanner_connection in that module). The origin catalogue job's EXTERNAL_QUERY reads through it, and the coverage job's while legacy_coverage_pipeline is true."
+  type        = string
+}
+
+# Names dcp's vendored module derives its Spanner instance/database ids from
+# (infra/stacks/dcp/variables.tf's spanner_instance_id/spanner_database_id,
+# both empty by default there, which the module expands to
+# "<instance_name>-dc-instance"/"-dc-db" with instance_name = namespace,
+# "dfo-dev" in dev). Confirmed against the live instance with `gcloud spanner
+# instances list` and `gcloud spanner databases list`.
+variable "dc_spanner_instance_id" {
+  description = "Spanner instance dcp's vendored module creates for Data Commons."
+  type        = string
+}
+
+variable "dc_spanner_database_id" {
+  description = "Spanner database dcp's vendored module creates for Data Commons."
+  type        = string
+}
+
 variable "datasets_working_bucket_name" {
   description = "Name of the GCS bucket the Datasets API writes to while a dataset build is in progress. Copied from the `dcp` stack's `datasets_working_bucket_name` output."
   type        = string

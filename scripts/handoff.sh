@@ -102,12 +102,17 @@ gh auth status >/dev/null 2>&1 || { echo "Not logged in to GitHub. Run 'gh auth 
 # Read one infra-derived value from a stack's Terraform state, failing loudly
 # if the stack hasn't been applied (or init'd) yet. `output -json NAME` exits 1
 # with nothing on stdout for a state with no outputs, where `output -raw` exits
-# 0 and prints a "No outputs found" warning to stdout.
+# 0 and prints a "No outputs found" warning to stdout. With a third argument
+# `optional`, an output that exists and is null prints nothing and returns 0;
+# a missing output still fails.
 read_output() {
-    local dir="$1" name="$2" val
+    local dir="$1" name="$2" optional="${3:-}" json val
     # stdin is closed so terraform cannot consume the table the caller's loop reads.
-    val="$(cd "$dir" && terraform output -json "$name" 2>/dev/null </dev/null |
-        jq -r 'select(. != null) | tostring')" || true
+    json="$(cd "$dir" && terraform output -json "$name" 2>/dev/null </dev/null)" || json=""
+    if [ "$json" = null ] && [ "$optional" = optional ]; then
+        return 0
+    fi
+    val="$(printf '%s' "$json" | jq -r 'select(. != null) | tostring')" || true
     if [ -z "$val" ]; then
         echo "Could not read output '$name' from $dir." >&2
         echo "Has the stack been applied? Try: (cd $dir && terraform init && terraform output $name)" >&2
@@ -132,15 +137,25 @@ while read -r repo env branch values_key; do
     echo "   -> $repo  (environment: $env; terraform env: $dfo_env)"
     while read -r kind name root output; do
         [ -z "$kind" ] && continue
+        optional=""
         case "$kind" in
         var | secret) ;;
+        optvar)
+            kind=var
+            optional=optional
+            ;;
         *)
             echo "ERROR: unknown kind '$kind' for $name in deploy_values." >&2
             exit 1
             ;;
         esac
         # A plain assignment, so a failed read stops the script under errexit.
-        val="$(read_output "$repo_root/$(deploy_tf_dir "$dfo_env" "$root")" "$output")"
+        val="$(read_output "$repo_root/$(deploy_tf_dir "$dfo_env" "$root")" "$output" "$optional")"
+        if [ -z "$val" ]; then
+            # Only an optvar whose output is null gets here.
+            printf '      %-24s skipped  (%s output %s is null)\n' "$name" "$root" "$output"
+            continue
+        fi
         repos+=("$repo")
         envs+=("$env")
         kinds+=("$kind")

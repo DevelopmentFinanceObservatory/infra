@@ -62,13 +62,15 @@ STUB
 # naming the Terraform root it ran in, so an assertion on a written value also
 # pins which environment and stack it was read from. NAME equal to
 # $STUB_MISSING_OUTPUT exits 1 with nothing on stdout, as Terraform does on an
-# unapplied stack. Any other form exits 2, since `output -raw` on an unapplied
+# unapplied stack. NAME equal to $STUB_NULL_OUTPUT prints `null`, as Terraform
+# does for an output whose value is null. Any other form exits 2, since `output -raw` on an unapplied
 # stack exits 0 with a warning on stdout.
 cat >"$WORK/bin/terraform" <<'STUB'
 #!/usr/bin/env bash
 echo "terraform $PWD $*" >>"$STUB_LOG"
 [ "$2" = -json ] || { echo "stub: unexpected terraform $*" >&2; exit 2; }
 [ "$3" = "${STUB_MISSING_OUTPUT:-}" ] && exit 1
+[ "$3" = "${STUB_NULL_OUTPUT:-}" ] && { echo null; exit 0; }
 printf '"value-of-%s/%s"\n' "${PWD#*/infra/}" "$3"
 STUB
 chmod +x "$WORK/bin/gh" "$WORK/bin/terraform"
@@ -152,7 +154,7 @@ secret WIF_SA foundation $1_deployer_service_account"
         "var JOB_DATASETS_MIGRATE apis datasets_migrate_job_name" \
         "var JOB_DATASETS_MAINTENANCE apis datasets_maintenance_job_name" \
         "var JOB_PRESENTATION_MIGRATE apis presentation_migrate_job_name" \
-        "var JOB_COVERAGE apis coverage_job_name" \
+        "optvar JOB_COVERAGE apis coverage_job_name" \
         "var JOB_ORIGIN_CATALOGUE apis origin_catalogue_job_name" \
         "var JOB_GRAPH_RELEASE apis graph_release_job_name" \
         "var JOB_SEARCH_CATALOGUE apis search_catalogue_job_name" ;;
@@ -175,7 +177,7 @@ expect_writes() {
     while read -r kind name root output; do
         [ -z "$kind" ] && continue
         want=$((want + 1))
-        [ "$kind" = var ] && kind=variable
+        case "$kind" in var | optvar) kind=variable ;; esac
         check "$dfo_env $stack sets $kind $name in $gh_env from $root output $output" \
             "$(has "gh $kind set $name --env $gh_env --repo $repo --body value-of-$dfo_env/$root/$output")"
     done <<<"$(expected_values "$5")"
@@ -248,6 +250,29 @@ unset STUB_MISSING_OUTPUT
 check "missing output exits 1" "$(is "$status" 1)"
 check "missing output names the output" "$(says "Could not read output 'migrate_job_name'")"
 check "missing output writes nothing" "$(lacks ' set ')"
+
+# 3a. A null optvar output is skipped and every other value is written; a
+# null required output, or a missing optvar output, still stops the run.
+export STUB_NULL_OUTPUT=coverage_job_name
+run handoff.sh dfo-dev apis
+check "null optional output exits 0" "$(is "$status" 0)"
+check "null optional output says it skipped JOB_COVERAGE" "$(says "JOB_COVERAGE             skipped  (apis output coverage_job_name is null)")"
+check "null optional output writes no JOB_COVERAGE" "$(lacks 'JOB_COVERAGE --env')"
+writes="$(grep -cE '^gh (variable|secret) set ' "$STUB_LOG" || true)"
+check "null optional output writes the other $(($(expected_values apis | wc -l) - 1)) values (wrote $writes)" \
+    "$(is "$writes" "$(($(expected_values apis | wc -l) - 1))")"
+check "null optional output still writes JOB_SEARCH_CATALOGUE" "$(has 'gh variable set JOB_SEARCH_CATALOGUE --env dev')"
+export STUB_NULL_OUTPUT=service_name
+run handoff.sh dfo-dev apis
+unset STUB_NULL_OUTPUT
+check "null required output exits 1" "$(is "$status" 1)"
+check "null required output names the output" "$(says "Could not read output 'service_name'")"
+check "null required output writes nothing" "$(lacks ' set ')"
+export STUB_MISSING_OUTPUT=coverage_job_name
+run handoff.sh dfo-dev apis
+unset STUB_MISSING_OUTPUT
+check "missing optional output exits 1" "$(is "$status" 1)"
+check "missing optional output writes nothing" "$(lacks ' set ')"
 
 # 4. A missing or mis-restricted environment stops the run before any write,
 # and handoff never creates or fixes one.

@@ -217,9 +217,12 @@ handoff_targets() {
 
 # deploy_values <values> prints, one per line, every GitHub variable and
 # secret one environment's workflows read, as
-#   <var|secret> <NAME> <root> <output>
+#   <var|optvar|secret> <NAME> <root> <output>
 # where <root> is the stack whose Terraform root holds <output> in the same
-# Terraform environment. <values> is a service stack, infra-plan or
+# Terraform environment. An optvar is a variable whose output is null in an
+# environment that turned its resource off, which handoff.sh then skips;
+# coverage_job_name is null while the apis stack's legacy_coverage_pipeline
+# is false. <values> is a service stack, infra-plan or
 # infra-apply for infra's planner and applier environments, or docs-sync for
 # docs' docsync environment. Names and
 # outputs are the same in dfo-dev and dfo-prod, so the table takes no
@@ -265,7 +268,7 @@ secret WIF_SA foundation ${1:-}_deployer_service_account"
             "var JOB_DATASETS_MIGRATE apis datasets_migrate_job_name" \
             "var JOB_DATASETS_MAINTENANCE apis datasets_maintenance_job_name" \
             "var JOB_PRESENTATION_MIGRATE apis presentation_migrate_job_name" \
-            "var JOB_COVERAGE apis coverage_job_name" \
+            "optvar JOB_COVERAGE apis coverage_job_name" \
             "var JOB_ORIGIN_CATALOGUE apis origin_catalogue_job_name" \
             "var JOB_GRAPH_RELEASE apis graph_release_job_name" \
             "var JOB_SEARCH_CATALOGUE apis search_catalogue_job_name"
