@@ -121,7 +121,7 @@ resource "google_storage_bucket_iam_member" "graph_release_job_object_user" {
 resource "google_storage_bucket_iam_member" "graph_release_job_coverage_viewer" {
   count = var.graph_release_shadow ? 1 : 0
 
-  bucket = google_storage_bucket.coverage.name
+  bucket = google_storage_bucket.coverage[0].name
   role   = "roles/storage.objectViewer"
   member = google_service_account.graph_release_job.member
 }
@@ -261,7 +261,7 @@ resource "google_cloud_run_v2_job" "graph_release" {
           for_each = var.graph_release_shadow ? [1] : []
           content {
             name  = "COVERAGE_ARTIFACT_URI"
-            value = "gs://${google_storage_bucket.coverage.name}/"
+            value = "gs://${google_storage_bucket.coverage[0].name}/"
           }
         }
 

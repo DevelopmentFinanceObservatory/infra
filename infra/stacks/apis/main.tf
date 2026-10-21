@@ -238,7 +238,7 @@ module "apis_service" {
     # image without graph_release_coverage raises at startup when this
     # artifact can't be loaded, so a missing or unreadable value fails the
     # revision the same way a bad GEMINI_API_KEY does.
-    var.legacy_coverage_pipeline ? { COVERAGE_ARTIFACT_URI = "gs://${google_storage_bucket.coverage.name}/" } : {},
+    var.legacy_coverage_pipeline ? { COVERAGE_ARTIFACT_URI = "gs://${google_storage_bucket.coverage[0].name}/" } : {},
     # graph_release.tf's bucket, once var.graph_release_serving is true. The
     # service loads the release the pointer names at startup and refuses to
     # start when none is published, so it stays unset until the builder has

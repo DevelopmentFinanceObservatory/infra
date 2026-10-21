@@ -81,7 +81,7 @@ resource "google_storage_bucket_iam_member" "search_catalogue_job_origin_catalog
 resource "google_storage_bucket_iam_member" "search_catalogue_job_coverage_viewer" {
   count = var.legacy_coverage_pipeline ? 1 : 0
 
-  bucket = google_storage_bucket.coverage.name
+  bucket = google_storage_bucket.coverage[0].name
   role   = "roles/storage.objectViewer"
   member = google_service_account.search_catalogue_job.member
 }
@@ -175,7 +175,7 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
           for_each = var.legacy_coverage_pipeline ? [1] : []
           content {
             name  = "COVERAGE_ARTIFACT_URI"
-            value = "gs://${google_storage_bucket.coverage.name}/"
+            value = "gs://${google_storage_bucket.coverage[0].name}/"
           }
         }
 
