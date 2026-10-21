@@ -99,6 +99,10 @@ printf '%s' 'https://hooks.slack.com/services/…' | gcloud secrets versions add
 
 `printf` rather than `echo` keeps a trailing newline out of the stored value, and passing the URL via stdin keeps it out of shell history less than an argument would, but not out of this machine's history entirely; run it from a shell with history off if that matters. Running website instances keep the value they started with, so after adding a version roll the service onto a new revision by re-running dfo-website's `deploy.yml` for the `staging` branch, the same gap and fix the `STUDIO_TOKEN` paragraph above describes.
 
+## Client-call metric
+
+`client_calls.tf` declares a log-based metric, `dfo-dev-website-staging-client-calls`, over the service's Cloud Run request log. It counts requests to `/api/search`, `/api/datasets` and `/api/graph`, with or without the `/api/v1` prefix, labelled by `status` and by `client`: `dfo-python`, `dfo-r` or `dfo-ts`, read from the start of the User-Agent, and empty for any other caller. No alert or dashboard reads it yet. One added in the same apply needs the propagation wait `apis/coverage.tf` uses.
+
 ## Tenant databases
 
 `database.tf` holds the website's database on the shared Cloud SQL instance from the `platform` stack: accounts, saved views, share links. ADK agent sessions live in the ai stack's own tenant database instead (#155), because ADK creates its schema over whatever connection it gets and the website runtime should hold DML only.
