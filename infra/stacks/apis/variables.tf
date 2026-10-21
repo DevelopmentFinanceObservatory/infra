@@ -35,6 +35,34 @@ variable "search_engine_model" {
   default     = "gemini-3.5-flash-lite"
 }
 
+# "jev" asks TypeSafe's Jev model to bind on search_jev_traffic_pct of queries,
+# with Gemini as its fallback, and "shadow" serves Gemini while sampling calls
+# to Jev. Either mounts the ${namespace}-typesafe-api-key secret, which no
+# stack manages, and the service refuses to start without it.
+variable "search_binder" {
+  description = "Binder the search engine elects each part's shape with: gemini, jev or shadow."
+  type        = string
+  default     = "gemini"
+
+  validation {
+    condition     = contains(["gemini", "jev", "shadow"], var.search_binder)
+    error_message = "search_binder must be gemini, jev or shadow."
+  }
+}
+
+# Picked by a hash of the normalised query, so a repeated query keeps its
+# binder. Read only when search_binder is "jev".
+variable "search_jev_traffic_pct" {
+  description = "Percent of queries, 0 to 100, the jev binder sends to Jev; the rest go to Gemini."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.search_jev_traffic_pct >= 0 && var.search_jev_traffic_pct <= 100 && floor(var.search_jev_traffic_pct) == var.search_jev_traffic_pct
+    error_message = "search_jev_traffic_pct must be a whole number from 0 to 100."
+  }
+}
+
 # Comma-separated browser-origin allowlist for CORS, applied platform-wide
 # across every surface this service mounts. Empty means no CORS headers
 # are added at all — a wildcard is never used. This stays empty until the
