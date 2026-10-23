@@ -37,13 +37,24 @@ resource "null_resource" "dc_key_guard" {
   }
 }
 
+# The serving SA reads the Gemini key from Secret Manager as
+# "${namespace}-gemini-api-key" through this per-secret grant, so the access
+# holds whether or not the stack module grants secretmanager.secretAccessor
+# project-wide.
+resource "google_secret_manager_secret_iam_member" "serving_sa_gemini_key" {
+  project   = var.project_id
+  secret_id = "${var.namespace}-gemini-api-key"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${module.stack.datacommons_service_service_account_email}"
+}
+
 # Wire GEMINI_API_KEY onto the datacommons service so the ONE/DFO Search API
 # boots. Without it, custom_dc/api_server/start.sh deliberately skips launching
 # the FastAPI engine (it warm-loads Gemini at startup and would restart-loop),
 # so nginx returns 502 on every /api/search/* call while the DC site is fine.
 #
-# The key lives in Secret Manager as "${namespace}-gemini-api-key", which the
-# serving SA can already read through its project-level secretmanager.secretAccessor.
+# The key lives in Secret Manager as "${namespace}-gemini-api-key", and the
+# serving SA reads it through the per-secret secretAccessor grant above.
 #
 # The pinned stack module takes no input for adding secret env vars, so the key
 # goes on after the module deploys the service. The script header explains why it
@@ -70,5 +81,8 @@ resource "null_resource" "search_api_gemini_key" {
     EOT
   }
 
-  depends_on = [module.stack]
+  depends_on = [
+    module.stack,
+    google_secret_manager_secret_iam_member.serving_sa_gemini_key,
+  ]
 }
