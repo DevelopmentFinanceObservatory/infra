@@ -3,21 +3,23 @@
 # <project>'s logs_daily.backfill_entries, the table the logs_daily.entries
 # view reads before its cut-off.
 #
-# It refuses to run when <bucket> holds no .json object, when no
-# CopyLogEntries operation into <bucket> is on record, and when any of them
-# has not succeeded, since a running, failed or cancelled copy leaves days
-# part-written. Several copies into <bucket> are fine, since the load drops
-# entries copied twice. --ignore-operation=<id> leaves out one operation,
-# by the last segment of its name, for a cancelled copy whose range a later
-# succeeded copy repeats. It can be given more than once. --skip-copy-check
-# skips the operation check, for copies whose records have expired.
+# It refuses to run when none of the three folders it loads, named below,
+# holds a .json object, when no CopyLogEntries operation into <bucket> is on
+# record, and when any of them has not succeeded, since a running, failed or
+# cancelled copy leaves days part-written. Several copies into <bucket> are
+# fine, since the load drops entries copied twice. --ignore-operation=<id>
+# leaves out one operation, by the last segment of its name, for a cancelled
+# copy whose range a later succeeded copy repeats. It can be given more than
+# once. --skip-copy-check skips the operation check, for copies whose records
+# have expired.
 #
-# The copied files are LogEntry JSON, one entry per line. The script loads
-# them into logs_daily.backfill_staging, keeping only the fields
-# infra/stacks/telemetry/sql/backfill_entries.sql reads, then replaces every
-# row of backfill_entries with that query's output in one MERGE, so a rerun
-# replaces the previous load. Of jsonPayload, staging keeps logger and
-# message, and so no other payload field, such as the website usage events'
+# The copied files are LogEntry JSON, one entry per line, under a folder per
+# log id. The script loads <bucket>/run.googleapis.com/{requests,stdout,stderr}
+# into logs_daily.backfill_staging and leaves the other folders alone. It keeps
+# only the fields infra/stacks/telemetry/sql/backfill_entries.sql reads, then
+# replaces every row of backfill_entries with that query's output in one MERGE,
+# so a rerun replaces the previous load. Of jsonPayload, staging keeps logger
+# and message, and so no other payload field, such as the website usage events'
 # props, reaches BigQuery. Staging holds message text, so it expires after a
 # day and the script deletes it on exit. It prints the entries kept per UTC day.
 #
@@ -75,13 +77,24 @@ target="$project.logs_daily.backfill_entries"
 staging="$project.logs_daily.backfill_staging"
 staging_ref="$project:logs_daily.backfill_staging"
 
+# The load reads only these folders. The copy writes others, and a log id
+# holding a path, such as /var/log/nginx/access.log, makes object names with
+# "//" that a load URI cannot name. A wildcard matching nothing fails the
+# whole load, so the URIs name only the folders that hold a .json object.
 listing="$(gcloud storage ls -r "$bucket")"
-objects="$(grep -c '\.json$' <<<"$listing" || true)"
-if [ "$objects" -eq 0 ]; then
-    echo "load-logs-backfill.sh: $bucket holds no .json object; run gcloud logging copy first." >&2
+uris=""
+for log in requests stdout stderr; do
+    folder="$bucket/run.googleapis.com/$log"
+    objects="$(grep -F "$folder/" <<<"$listing" | grep -c '\.json$' || true)"
+    echo ">> $folder holds $objects .json objects"
+    if [ "$objects" -gt 0 ]; then
+        uris="${uris:+$uris,}$folder/*"
+    fi
+done
+if [ -z "$uris" ]; then
+    echo "load-logs-backfill.sh: $bucket/run.googleapis.com/{requests,stdout,stderr} hold no .json object; run gcloud logging copy first." >&2
     exit 1
 fi
-echo ">> $bucket holds $objects .json objects"
 
 if [ -z "$skip_copy_check" ]; then
     operations="$(gcloud logging operations list --project="$project" --location=global \
@@ -137,13 +150,13 @@ JSON
 
 bq_flags=(--project_id="$project" --location=EU)
 
-echo ">> Loading $bucket into $staging"
+echo ">> Loading $uris into $staging"
 bq "${bq_flags[@]}" rm -f -t "$staging_ref"
 bq "${bq_flags[@]}" mk --table --expiration=86400 \
     --description="Staging for scripts/load-logs-backfill.sh. Deleted when the script exits." \
     "$staging_ref" "$work/schema.json"
 bq "${bq_flags[@]}" load --source_format=NEWLINE_DELIMITED_JSON --ignore_unknown_values \
-    "$staging_ref" "$bucket/*"
+    "$staging_ref" "$uris"
 
 select="$(cat "$select_sql")"
 # shellcheck disable=SC2016 # the patterns are the template's literal placeholders
