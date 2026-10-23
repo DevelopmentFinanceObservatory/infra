@@ -43,3 +43,11 @@ ingestion_workflow_service_account_email = "dfo-prod-dc-ing-wf-sa@prod-fin-obser
 ingestion_artifacts_bucket_name          = "dfo-prod-dc-artifacts-prod-fin-observatory"
 ingestion_spanner_instance_id            = "dfo-prod-dc-instance"
 ingestion_spanner_database_id            = "dfo-prod-dc-db"
+
+# Keeps the website's request and event lines and the apis resolve lines
+# for SQL (log_analytics.tf). Prod keeps 400 days, about 13 months.
+usage_logs = {
+  retention_days  = 400
+  website_service = "dfo-prod-website"
+  apis_service    = "dfo-prod-apis"
+}

@@ -8,11 +8,13 @@ locals {
   billing_export_enabled = var.billing_export_dataset_id != ""
 }
 
-resource "google_project_service" "billing_export_bigquery" {
-  count = local.billing_export_enabled ? 1 : 0
-
-  service            = "bigquery.googleapis.com"
-  disable_on_destroy = false
+# The BigQuery API is enabled in main.tf with the other project APIs. The
+# moved block carries prod's existing state entry for the API over to that
+# instance, so apply does not destroy and recreate it. In an environment
+# without the entry the block does nothing.
+moved {
+  from = google_project_service.billing_export_bigquery[0]
+  to   = google_project_service.apis["bigquery.googleapis.com"]
 }
 
 resource "google_bigquery_dataset" "billing_export" {
@@ -31,5 +33,5 @@ resource "google_bigquery_dataset" "billing_export" {
   # and access blocks here would remove it on the next apply. An expiration
   # would delete billing history.
 
-  depends_on = [google_project_service.billing_export_bigquery]
+  depends_on = [google_project_service.apis]
 }
