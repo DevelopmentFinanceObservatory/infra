@@ -402,9 +402,10 @@ resource "google_secret_manager_secret_iam_member" "dc_key_planner" {
 }
 
 # The same grant on each stack's hand-made principals secret, which holds the
-# addresses that stack grants or notifies (the telemetry stack reads
-# <namespace>-telemetry-principals in its main.tf). The planner reads it to
-# plan that stack. scripts/bootstrap-principals.sh makes the same grant when
+# addresses that stack grants or notifies. Each listed stack, this one
+# included, reads its <namespace>-<stack>-principals secret through
+# infra/modules/principals-secret, and the planner reads it to plan that
+# stack. scripts/bootstrap-principals.sh makes the same grant when
 # it creates the secret, since the stack's first plan can run before this
 # one applies.
 locals {

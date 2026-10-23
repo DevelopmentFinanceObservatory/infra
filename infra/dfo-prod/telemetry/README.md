@@ -57,7 +57,7 @@ The principals secret's `readers` object lists the readers of `dfo_reporting` as
 
 ## Principals secret
 
-The readers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`, which `main.tf` reads, so no address sits in this repository or in a plan log. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. The secret holds one JSON object:
+The readers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. `readers` holds IAM members and `alerts` at least one bare address:
 
 ```json
 {
@@ -66,19 +66,13 @@ The readers and alert recipients live in the Secret Manager secret `dfo-prod-tel
 }
 ```
 
-A reader is `group:`, `user:` or `serviceAccount:` followed by an address, or `domain:` followed by a domain, and `alerts` holds at least one bare address, with no prefix, all in lower-case ASCII. No value appears under two labels of one object. The labels key the grants and channels, so they appear in resource addresses and plan output, and hold only lower-case letters, digits, hyphens and underscores. Lower case makes the duplicate check exact, since IAM compares addresses without regard to case. `infra/modules/principals-secret` checks these rules at plan, and also that the secret holds the compact, key-sorted JSON the script below writes, so plan fails on a secret of any other shape or one written any other way.
-
 To create the secret or change its members, write the JSON to a file outside the repository and run
 
 ```sh
 scripts/bootstrap-principals.sh prod-fin-observatory dfo-prod-telemetry-principals principals.json
 ```
 
-The script checks the file's shape, creates the secret if it is absent, adds the file's compact, key-sorted form as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. `foundation` makes the same grant through `principals_secret_stacks`, but this stack's first plan can run before that apply. The next telemetry apply moves the grants and channels to the new members.
-
-A relabel with the same member needs a `moved` block for each resource the label keys: the three reader resources in `reporting.tf` for a reader, the channel in `alerts.tf` for an alert recipient. Without one, the plan destroys one instance and creates the other on the same binding in no fixed order, and a delete that runs last revokes the member. Labels are not addresses, so the block is safe to commit. No value appears under two labels of one object, since removing either label would revoke both, and plan fails on a secret that repeats one.
-
-The stack reads the secret's latest version at every plan, so the new version and the `moved` blocks must land with no apply of this stack between them. Open the PR with the `moved` blocks, write the new version with the script, re-run the PR's plan, which should show only moves, and merge, so that the PR's own apply is the next apply of this stack. An apply that runs after the new version but before the merge sees the new labels without the `moved` blocks and replaces each grant in no fixed order, which can revoke the member; if one does, the next apply re-creates the grant. Merging the `moved` blocks before the new version exists moves state to labels the secret lacks and races the same way. The duplicate rule rules out a gentler path of adding the new label before removing the old one.
+[`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states the rules the secret must meet, what the script does, and the relabel order.
 
 ## Apply order
 

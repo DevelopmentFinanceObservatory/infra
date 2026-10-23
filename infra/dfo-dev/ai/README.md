@@ -70,7 +70,7 @@ Humans who call the MCP mounts directly, and whoever configures the e2e test dae
 
 ## Principals secret
 
-The studio and MCP token readers live in the Secret Manager secret `<namespace>-ai-principals` (`dfo-dev-ai-principals` here, `dfo-prod-ai-principals` in prod), which `main.tf` reads, so no address sits in this repository or in a plan log. Every value from the secret prints in plan output as `(sensitive value)`. Each environment needs the secret, and plan fails while it does not exist. An environment with no readers of a kind holds an empty object for it. The secret holds one JSON object:
+The studio and MCP token readers live in the Secret Manager secret `<namespace>-ai-principals` (`dfo-dev-ai-principals` here, `dfo-prod-ai-principals` in prod). Each environment needs it, and an environment with no readers of a kind holds an empty object for it. Both objects hold IAM members:
 
 ```json
 {
@@ -79,21 +79,13 @@ The studio and MCP token readers live in the Secret Manager secret `<namespace>-
 }
 ```
 
-Each member is `group:`, `user:` or `serviceAccount:` followed by an address, or `domain:` followed by a domain, in lower-case ASCII, and no member appears under two labels of one object. The labels key the grants, so they appear in resource addresses and plan output, and hold only lower-case letters, digits, hyphens and underscores. Lower case makes the duplicate check exact, since IAM compares addresses without regard to case. `infra/modules/principals-secret` checks these rules at plan, and also that the secret holds the compact, key-sorted JSON the script below writes, so plan fails on a secret of any other shape or one written any other way.
-
 To create the secret or change its members, write the JSON to a file outside the repository and run
 
 ```sh
 scripts/bootstrap-principals.sh dev-fin-observatory dfo-dev-ai-principals principals.json
 ```
 
-The script checks the file against the same rules, creates the secret if it is absent, adds the file's compact, key-sorted form as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. `foundation` makes the same grant through `principals_secret_stacks`, but this stack's plan can run before that apply. The next apply moves the grants to the new members.
-
-A relabel with the same member needs a `moved` block for the grant, for example `moved { from = google_secret_manager_secret_iam_member.studio_api_token_reader["old"] to = google_secret_manager_secret_iam_member.studio_api_token_reader["new"] }`. Without one, the plan destroys one instance and creates the other on the same binding in no fixed order, and a delete that runs last revokes the member. Labels are not addresses, so the block is safe to commit.
-
-The stack reads the secret's latest version at every plan, so the new version and the `moved` blocks must land with no apply of this stack between them. Open the PR with the `moved` blocks, write the new version with the script, re-run the PR's plan, which should show only moves, and merge, so that the PR's own apply is the next apply of this stack. An apply that runs after the new version but before the merge sees the new labels without the `moved` blocks and replaces each grant in no fixed order, which can revoke the member; if one does, the next apply re-creates the grant. Merging the `moved` blocks before the new version exists moves state to labels the secret lacks and races the same way. The duplicate rule rules out a gentler path of adding the new label before removing the old one.
-
-The studio grant was once keyed by member string. The `removed` block in `studio_token.tf` makes Terraform forget those state entries without destroying the live bindings, and the label-keyed resource creates the same bindings again, which IAM accepts as no change.
+[`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states the rules the secret must meet, what the script does, the relabel order, and the `removed` block that moved the studio grant off member-keyed state.
 
 ## Datasets first-party principal
 

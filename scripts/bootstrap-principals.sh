@@ -12,28 +12,18 @@
 #   {"readers": {"team": "group:readers@example.org"},
 #    "alerts": {"team": "alerts@example.org"}}
 #
-# The stack in the secret name picks a schema from
-# infra/modules/principals-secret/schemas.json, and the file must meet these
-# rules, the same ones that module checks at plan:
-#   - the file is exactly one JSON object, with no key repeated at any level;
-#   - its keys are exactly the schema's keys, and each holds an object;
-#   - every label matches \A[a-z0-9_-]+\z, so an address cannot be one;
-#   - every value matches its form in lower-case ASCII: a member is group:,
-#     user: or serviceAccount: before an address, or domain: before a domain,
-#     and an email is a bare address;
-#   - each object holds at least its schema's min entries;
-#   - no value appears under two labels of one object, since removing either
-#     label would revoke both.
-# Lower case keeps the duplicate check exact, since IAM compares addresses
-# without regard to case, and keeps CI's masking of each value exact. The
-# script writes jq's canonical form of the one object it checked, so the stack
-# reads exactly what passed.
+# The stack in the secret name picks its schema from
+# infra/modules/principals-secret/schemas.json, which also holds the label
+# and value patterns. infra/modules/principals-secret/README.md states the
+# rules; the script refuses a file that breaks one before any gcloud call,
+# then writes jq's compact, key-sorted form of the one object it checked, so
+# the stack reads exactly what passed.
 #
 # This creates the secret when it is absent, adds that canonical form as a new
 # version, and grants the dfo-infra-planner service account secretAccessor on
 # it. The foundation stack makes the same grant (principals_planner), but the
-# stack's first plan can run before foundation applies. Safe to rerun; each run adds
-# a version, and the stack reads the latest.
+# stack's first plan can run before foundation applies. Safe to rerun; each
+# run adds a version, and the stack reads the latest.
 #
 # Usage: bootstrap-principals.sh PROJECT SECRET_NAME JSON_FILE
 #   e.g. bootstrap-principals.sh prod-fin-observatory dfo-prod-telemetry-principals principals.json
@@ -59,13 +49,13 @@ done
 [[ "$project" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || { echo "error: $project is not a GCP project id" >&2; exit 1; }
 [[ "$secret_name" =~ ^[A-Za-z0-9_-]{1,255}$ ]] || { echo "error: $secret_name is not a Secret Manager secret name" >&2; exit 1; }
 
-# The stack's schema comes from the file infra/modules/principals-secret
-# reads at plan: each top-level key with the form of its values and the
-# fewest entries it holds. The secret is <namespace>-<stack>-principals.
+# The stack's schema, the label pattern and each form's pattern come from the
+# file infra/modules/principals-secret reads at plan, so both sides apply the
+# same patterns. The secret is <namespace>-<stack>-principals.
 schemas="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/modules/principals-secret/schemas.json"
 stack=$(sed -nE 's/^.+-([a-z0-9]+)-principals$/\1/p' <<<"$secret_name")
-schema=$(jq -ce --arg stack "$stack" '.[$stack] // empty' "$schemas") || {
-  echo "error: $secret_name names no stack in $schemas ($(jq -r 'keys | join(", ")' "$schemas")), so it has no schema" >&2
+schema=$(jq -ce --arg stack "$stack" '.stacks[$stack] // empty' "$schemas") || {
+  echo "error: $secret_name names no stack in $schemas ($(jq -r '.stacks | keys | join(", ")' "$schemas")), so it has no schema" >&2
   exit 1
 }
 
@@ -87,20 +77,20 @@ jq -cjS '.[0]' <<<"$docs" >"$canonical"
 # Validate before anything is written, so a malformed file never becomes the
 # latest version the stack reads. The messages name keys only, never a value
 # or a label, since a bad label may be an address.
-problems=$(jq -r --argjson schema "$schema" '
+problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c '{label, forms}' "$schemas")" '
   {
-    member: {re: "\\A((group|user|serviceAccount):[a-z0-9._%+-]+@|domain:)[a-z0-9.-]+\\z", says: "group:, user: or serviceAccount: before an address, or domain: before a domain, in lower-case ASCII"},
-    email: {re: "\\A[a-z0-9._%+-]+@[a-z0-9.-]+\\z", says: "a bare email address in lower-case ASCII"}
-  } as $forms
+    member: "group:, user: or serviceAccount: before an address, or domain: before a domain, in lower-case ASCII",
+    email: "a bare email address in lower-case ASCII"
+  } as $says
   | . as $doc
   | (keys[] as $key | select($schema | has($key) | not) | "unexpected top-level key \($key)"),
-    ($schema | to_entries[] | .key as $k | .value as $rule | $forms[$rule.form] as $form
+    ($schema | to_entries[] | .key as $k | .value as $rule | $patterns.forms[$rule.form] as $form
       | if ($doc | has($k) | not) then "missing top-level key \($k)"
         elif ($doc[$k] | type) != "object" then "\($k) must be an object"
         else $doc[$k] as $obj
           | (if ($obj | length) < $rule.min then "\($k) must hold at least \($rule.min) entry" else empty end),
-            (if any($obj | keys[]; test("\\A[a-z0-9_-]+\\z") | not) then "\($k) has a label outside lower-case letters, digits, hyphens and underscores" else empty end),
-            (if any($obj[]; (type != "string") or (test($form.re) | not)) then "each \($k) value must be \($form.says)" else empty end),
+            (if any($obj | keys[]; test($patterns.label) | not) then "\($k) has a label outside lower-case letters, digits, hyphens and underscores" else empty end),
+            (if any($obj[]; (type != "string") or (test($form) | not)) then "each \($k) value must be \($says[$rule.form])" else empty end),
             (if ([$obj[]] | length) != ([$obj[]] | unique | length) then "\($k) holds the same value under two labels" else empty end)
         end)
 ' "$canonical")

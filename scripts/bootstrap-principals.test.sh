@@ -167,7 +167,7 @@ check "bad project id makes no gcloud call" "$(is "$calls" "")"
 # read the stack's schema from the module's schemas.json.
 if command -v terraform >/dev/null; then
     [ "$parity_cases" -gt 0 ] || { echo "FAIL no parity cases kept"; exit 1; }
-    for stack in $(jq -r 'keys[]' "$SCRIPT_DIR/../infra/modules/principals-secret/schemas.json"); do
+    for stack in $(jq -r '.stacks | keys[]' "$SCRIPT_DIR/../infra/modules/principals-secret/schemas.json"); do
         check "parity covers an accepted $stack case" "$(grep -qx "accept dfo-test-$stack-principals" "$WORK"/parity/*.case && echo true || echo false)"
     done
     mod="$WORK/module"
