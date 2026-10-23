@@ -101,7 +101,7 @@ printf '%s' 'https://hooks.slack.com/services/…' | gcloud secrets versions add
 
 ## Email sign-in
 
-`/login` also offers sign-in by emailed code, but only when the app has all five settings: a mail transport (`SES_ROLE_ARN` with `SES_REGION`), `AUTH_EMAIL_FROM`, `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`. `email_sign_in.tf` sets `AUTH_EMAIL_FROM` to `DFO Studio <studio@developmentfinance.org>`, the one address the SES role's policy lets the service send as, compared case-sensitively. The other four come from `turnstile_site_key`, `ses_role_arn` and `ses_region` in `env.auto.tfvars`, which default to null, and from a secret. The app trims every value and treats a blank one as unset, and a transport with only one of `SES_ROLE_ARN` and `SES_REGION` counts as no transport, so email sign-in stays off until every value exists. A validation on `ses_region` refuses to plan with only one of the pair set.
+`/login` also offers sign-in by emailed code, but only when the app has all four settings: a mail transport (`SES_ROLE_ARN`, `SES_REGION` and `SES_TOKEN_AUDIENCE`), `AUTH_EMAIL_FROM`, `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`. `email_sign_in.tf` sets `AUTH_EMAIL_FROM` to `DFO Studio <studio@developmentfinance.org>`, the one address the SES role's policy lets the service send as, compared case-sensitively. The SES values come from the `ses` object in `env.auto.tfvars`, the Turnstile site key from `turnstile_site_key`, which defaults to null, and the Turnstile secret key from a secret. The app trims every value and treats a blank one as unset, and a transport missing any of the three SES values counts as no transport, so email sign-in stays off until every value exists.
 
 Turnstile guards the form. Create a widget in Cloudflare for this service's hostname and put its site key in `env.auto.tfvars` as `turnstile_site_key`. The site key is public, since the login page renders it. The secret key is mounted from `dfo-dev-website-staging-turnstile-secret-key`, whose container the stack creates with a placeholder first version holding a single space. Cloud Run refuses a revision whose secret env var can't be read, and the mount tracks `latest`, so the secret must always have a version. A single space reads as blank, so the placeholder keeps email sign-in off whatever else is set. Add the real key as a new version, which then becomes `latest`:
 
@@ -109,13 +109,13 @@ Turnstile guards the form. Create a widget in Cloudflare for this service's host
 read -rs KEY; printf '%s' "$KEY" | gcloud secrets versions add dfo-dev-website-staging-turnstile-secret-key --project dev-fin-observatory --data-file=-
 ```
 
-Mail goes out through the Amazon SES API. The service trades its runtime service account's Google ID token for AWS credentials, and ONE's IT team owns the AWS side. The role `dfo-website-dev-ses` in the SES account (`us-east-1`) trusts `dfo-dev-website-staging-run@dev-fin-observatory.iam.gserviceaccount.com` by its unique ID and requires the token audience `dfo-website-ses`. Once IT gives the role ARN, set `ses_role_arn` to it and `ses_region` to `us-east-1` in `env.auto.tfvars`. Recreating the runtime service account changes its unique ID, and sending then fails until the role's trust policy names the new one. Read the ID with:
+Mail goes out through the Amazon SES API in ONE's AWS account (`961128127831`, `us-east-1`), whose infrastructure team owns the AWS side. The service trades its runtime service account's Google ID token for temporary AWS credentials, so no AWS key is stored. The role `development-finance-observatory-ses-sender-staging` trusts only `dfo-dev-website-staging-run@dev-fin-observatory.iam.gserviceaccount.com`, and only with the token audience `development-finance-observatory-staging`, which `env.auto.tfvars` sets as `ses.token_audience`. Staging sends real mail from the production address, so sign in there with test inboxes only. Every ONE service shares the account's limit of 20 sends a second, and bounces count against ONE's whole sending reputation. Google ID tokens name a service account by its unique ID, so recreating the runtime service account breaks sending until ONE updates the role's trust policy. Read the ID with:
 
 ```
 gcloud iam service-accounts describe dfo-dev-website-staging-run@dev-fin-observatory.iam.gserviceaccount.com --project dev-fin-observatory --format='value(uniqueId)'
 ```
 
-Running instances keep the values they started with. A change to `turnstile_site_key`, `ses_role_arn` or `ses_region` reaches the service through `terraform apply`, which creates a new revision. A new secret version needs a manual roll onto a new revision:
+Running instances keep the values they started with. A change to `turnstile_site_key` or `ses` reaches the service through `terraform apply`, which creates a new revision. A new secret version needs a manual roll onto a new revision:
 
 ```
 gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev

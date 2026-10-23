@@ -20,3 +20,12 @@ posthog_key                         = "phc_nNtsVfPvZAKPJ5JagTFzvGsndUddT3PNXguGQ
 
 # Off so destroys and replaces stay unblocked.
 stateless_deletion_protection = false
+
+# The role in ONE's SES account that sends sign-in email. It trusts only
+# dfo-dev-website-staging-run, and only with this token audience. Staging
+# sends real mail from studio@developmentfinance.org, so use test recipients.
+ses = {
+  role_arn       = "arn:aws:iam::961128127831:role/development-finance-observatory-ses-sender-staging"
+  region         = "us-east-1"
+  token_audience = "development-finance-observatory-staging"
+}

@@ -36,10 +36,10 @@ gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref m
 
 ## Email sign-in
 
-The stack creates `dfo-prod-website-turnstile-secret-key` with a first version holding a single space, which the app reads as blank, so email sign-in stays off. Create a Cloudflare Turnstile widget for the production hostname, put its site key in `env.auto.tfvars` as `turnstile_site_key`, and add the secret key as a new version with `read -rs KEY; printf '%s' "$KEY" | gcloud secrets versions add dfo-prod-website-turnstile-secret-key --project prod-fin-observatory --data-file=-`. Mail needs the role `dfo-website-prod-ses` in ONE's SES account, which trusts `dfo-prod-website-run@prod-fin-observatory.iam.gserviceaccount.com`. Once IT gives the role ARN, set `ses_role_arn` and `ses_region` in `env.auto.tfvars`. The apply for any tfvars change creates a new revision. A new secret version needs a manual roll:
+The stack creates `dfo-prod-website-turnstile-secret-key` with a first version holding a single space, which the app reads as blank, so email sign-in stays off. Create a Cloudflare Turnstile widget for the production hostname, put its site key in `env.auto.tfvars` as `turnstile_site_key`, and add the secret key as a new version with `read -rs KEY; printf '%s' "$KEY" | gcloud secrets versions add dfo-prod-website-turnstile-secret-key --project prod-fin-observatory --data-file=-`. Mail goes through the role `development-finance-observatory-ses-sender-production` in ONE's SES account, which trusts only `dfo-prod-website-run@prod-fin-observatory.iam.gserviceaccount.com` with the token audience `development-finance-observatory-production`. `env.auto.tfvars` sets both in `ses`. The apply for any tfvars change creates a new revision. A new secret version needs a manual roll:
 
 ```
 gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main
 ```
 
-`infra/dfo-dev/website/README.md` describes all five settings and the role's trust in full.
+`infra/dfo-dev/website/README.md` describes all four settings and the role's trust in full.

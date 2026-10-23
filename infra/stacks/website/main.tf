@@ -119,7 +119,7 @@ module "website_service" {
     },
     # Set only behind a proxy chain. Omitted when null, so the app keeps its default of 0. See var.trusted_proxy_hops.
     var.trusted_proxy_hops == null ? {} : { TRUSTED_PROXY_HOPS = tostring(var.trusted_proxy_hops) },
-    # Email sign-in settings (AUTH_EMAIL_FROM, SES pair, Turnstile site key) come from email_sign_in.tf.
+    # Email sign-in settings (AUTH_EMAIL_FROM, the SES role, Turnstile site key) come from email_sign_in.tf.
     local.email_sign_in_env_vars,
   )
   # Sign-in provider pairs (GOOGLE_*, GITHUB_*, MICROSOFT_*) come from sign_in_providers.tf.

@@ -1,8 +1,8 @@
 # Settings for email sign-in by emailed code (dfo-website /login). The app
-# turns it on only when all of these are set: a mail transport (SES_ROLE_ARN
-# with SES_REGION), AUTH_EMAIL_FROM, TURNSTILE_SITE_KEY and
+# turns it on only when all of these are set: a mail transport (SES_ROLE_ARN,
+# SES_REGION and SES_TOKEN_AUDIENCE), AUTH_EMAIL_FROM, TURNSTILE_SITE_KEY and
 # TURNSTILE_SECRET_KEY. The plain values come from variables that stay null
-# until they exist (var.ses_role_arn, var.ses_region, var.turnstile_site_key).
+# until they exist (var.ses, var.turnstile_site_key).
 # Cloudflare issues the Turnstile secret key, so Terraform owns the secret
 # container and the mount, and the value is added out-of-band as a new
 # version (see README.md, "Email sign-in").
@@ -32,8 +32,11 @@ locals {
       # The SES role's policy allows sending only as this address, compared case-sensitively.
       AUTH_EMAIL_FROM = "DFO Studio <studio@developmentfinance.org>"
     },
-    # Both or neither, which var.ses_region's validation enforces.
-    var.ses_role_arn == null ? {} : { SES_ROLE_ARN = var.ses_role_arn, SES_REGION = var.ses_region },
+    var.ses == null ? {} : {
+      SES_ROLE_ARN       = var.ses.role_arn
+      SES_REGION         = var.ses.region
+      SES_TOKEN_AUDIENCE = var.ses.token_audience
+    },
     var.turnstile_site_key == null ? {} : { TURNSTILE_SITE_KEY = var.turnstile_site_key },
   )
 
