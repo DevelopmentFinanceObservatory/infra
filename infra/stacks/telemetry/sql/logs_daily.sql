@@ -1,17 +1,25 @@
 -- The logs_daily scheduled query, a Terraform template (logs_daily.tf). It
--- reads ${source}, the linked dataset's view of every routed Cloud Run entry,
--- and writes four tables in ${dataset}, creating them on the first run.
+-- reads ${source}, the view logs_daily.entries (sql/entries.sql), and writes
+-- four tables in ${dataset}, creating them on the first run. The view joins
+-- two sources at the cut-off ${cutoff}: ${live_source}, the linked dataset
+-- of the telemetry sink's bucket, from the cut-off on, and backfill_entries,
+-- the Cloud Run entries copied from _Default, before it.
 --
--- The source's oldest day is partial, since the sink started or retention
--- cut entries part way through it, so the oldest whole day is the one after.
+-- The source's oldest day is partial, since the copy or retention cut
+-- entries part way through it, so the oldest whole day is the one after.
 -- requests_daily, routes_daily and errors_daily replace the days from
 -- requests_daily's latest loaded day minus one through today, and from the
 -- oldest whole day when requests_daily is empty. The start never falls
--- before the oldest whole day, so every day a run deletes is a day it
--- reloads in full, even after an outage longer than the source's retention.
+-- before a floor. While ${live_source} reaches back to the cut-off, the
+-- view has no gap and the floor is the source's oldest whole day. Once
+-- retention has moved ${live_source}'s oldest entry past the cut-off, the
+-- view has a gap between the backfill and that entry, and the floor is
+-- ${live_source}'s oldest whole day. Either way every day a run deletes is
+-- a day it reloads in full, even after an outage longer than retention.
 -- errors_daily shares requests_daily's start, so a stretch with no warnings
--- cannot widen its window. A source with no entries loads and deletes
--- nothing, since the start is then NULL.
+-- cannot widen its window. A source with no entries, or an empty
+-- ${live_source} once requests_daily holds days, loads and deletes nothing,
+-- since the start is then NULL.
 --
 -- deploys gains a row for each revision it has not seen, timed at the
 -- revision's first request across the whole source, and never changes a row
@@ -27,6 +35,7 @@
 -- Days are UTC.
 
 DECLARE source_first_day, load_from DATE;
+DECLARE live_first TIMESTAMP;
 
 CREATE TABLE IF NOT EXISTS `${dataset}.requests_daily` (
   day DATE NOT NULL,
@@ -77,8 +86,20 @@ CREATE TABLE IF NOT EXISTS `${dataset}.deploys` (
 OPTIONS (description = 'Each Cloud Run revision that served a request, with the time of its first request. before_source is true for a revision already serving when the logs source began, whose first_request is not its deploy.');
 
 SET source_first_day = (SELECT DATE(MIN(timestamp)) FROM `${source}`);
+SET live_first = (SELECT MIN(timestamp) FROM `${live_source}`);
+-- GREATEST returns NULL when any argument is NULL, so each branch reaches it
+-- with both arguments set. An empty requests_daily loads the whole source,
+-- backfill included, since it has no day to lose. An empty ${live_source}
+-- with loaded days gives NULL, so the run deletes nothing it cannot reload.
 SET load_from = (
-  SELECT GREATEST(IFNULL(MAX(day) - 1, source_first_day + 1), source_first_day + 1)
+  SELECT
+    CASE
+      WHEN source_first_day IS NULL THEN NULL
+      WHEN MAX(day) IS NULL THEN source_first_day + 1
+      WHEN live_first IS NULL THEN NULL
+      WHEN live_first > TIMESTAMP '${cutoff}' THEN GREATEST(MAX(day) - 1, DATE(live_first) + 1)
+      ELSE GREATEST(MAX(day) - 1, source_first_day + 1)
+    END
   FROM `${dataset}.requests_daily`
 );
 
