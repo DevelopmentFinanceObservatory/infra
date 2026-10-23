@@ -6,7 +6,7 @@
 
 So all of our logic lives in a separate set of `dfo.*` files that the CLI never touches:
 
-- `dfo.tf` — the Gemini API key wiring (`null_resource.search_api_gemini_key`) plus the Data Commons API key data source and its guard.
+- `dfo.tf` — the Data Commons API key data source and its guard.
 - `dfo_datasets.tf` — the Datasets API's GCS buckets, the garbage-collection service account and its access to them, and its database, migrator user, and garbage-collection database user on the shared Cloud SQL instance from the `platform` stack, plus its own `variable`/`output` blocks (kept out of `variables.tf`/`outputs.tf` for the same regen-safety reason). The Datasets API's serving identity — the Cloud Run runtime service account the `apis` stack creates — is out of scope here: its bucket grants, its signed-URL signing setup, and its runtime database user are declared in that stack, next to the identity they empower. It also revokes PUBLIC's default CONNECT on the datasets database (`google_sql_provision_script.datasets_revoke_public_connect`), owned here rather than in `platform` because the revoke is per-tenant and this is the tenant's own stack. The script grants CONNECT back to the migrator and garbage-collection users. The `apis` stack grants the runtime user its CONNECT (`google_sql_provision_script.runtime_connect`), so this stack names no `apis` role and applies first. Schema and table grants for the garbage-collection user belong to a migration in the owning repo. The applier here holds only `cloudsqlsuperuser`, which cannot grant on objects the migrator owns.
 - `dfo_storage.tf` — the Data Commons artifacts bucket, taken out of the upstream storage module (via a `moved` block, `storage_create_artifacts_bucket = false` in `dfo.auto.tfvars`) so this stack can attach lifecycle rules the module has no input for. Deletes Dataflow's temp/staging objects under `ingestion/internal/temp/` after 7 days and per-run ingestion outputs under `ingestion/internal/datacommons/` after 30, and aborts incomplete multipart uploads after 7. Leaves `ingestion/input/` (uploaded source data) and `ingestion/internal/metadata/` (per-dataset version metadata the ingestion helper carries across runs) alone.
 - `dfo_override.tf` — a Terraform _override_ file (see below), also the home for provider version floors above the CLI's own — its `terraform { required_providers {} }` block merges into main.tf's the same way its `module "stack"` block does.
@@ -23,11 +23,9 @@ The Data Commons API key is **not** in `dfo.auto.tfvars` and **not** read from `
 
 This is how `main.tf` stays byte-identical to CLI output while still getting a Secret-Manager-sourced key: the override does the redirection, not `main.tf`.
 
-## dcp plans always show a diff
+## dcp plans and container restarts
 
-Two resources appear in every plan. `null_resource.search_api_gemini_key` carries a `timestamp()` trigger, so it is replaced on every run. The Cloud Run web service shows an in-place update, because `dfo.tf` puts `GEMINI_API_KEY` on the revision out of band and Terraform reconciles it away again each time. Both are expected. The CI PR comment will never say "No changes" for dcp.
-
-`skip_container_restarts` in `dfo.auto.tfvars` removes a third source of churn, the `FORCE_RESTART=timestamp()` the stack module otherwise stamps on its Cloud Run services on every apply.
+`skip_container_restarts` in `dfo.auto.tfvars` turns off the `FORCE_RESTART=timestamp()` the stack module otherwise stamps on its Cloud Run services on every apply, so a dcp plan with nothing to change says "No changes".
 
 ## Rotation and seeding
 

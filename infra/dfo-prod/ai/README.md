@@ -10,5 +10,5 @@ Ai applies after `foundation`, `platform`, `dcp`, and `apis`, and before `websit
 
 Three secrets, each with at least one version:
 
-- `dfo-prod-gemini-api-key`, the Gemini API key, shared with the `dcp` stack.
+- `dfo-prod-gemini-api-key`, the Gemini API key, shared with the `apis` stack.
 - `dfo-prod-langfuse-public-key` and `dfo-prod-langfuse-secret-key`, a Langfuse Cloud EU key pair.

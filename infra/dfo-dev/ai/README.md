@@ -6,7 +6,7 @@ The service is defined via the reusable `../../modules/cloud-run-service` module
 
 ## Model credentials
 
-The service reads `GOOGLE_API_KEY` from the process environment (google-adk's underlying `google-genai` client bypasses `ai`'s own settings classes for this). This stack wires that env var to the existing `dfo-dev-gemini-api-key` Secret Manager secret, the same secret the `dcp` stack's Search API already uses (`infra/dfo-dev/dcp/dfo.tf`). Terraform does not manage that secret. This stack references it through a `data "google_secret_manager_secret"` source. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
+The service reads `GOOGLE_API_KEY` from the process environment (google-adk's underlying `google-genai` client bypasses `ai`'s own settings classes for this). This stack wires that env var to the existing `dfo-dev-gemini-api-key` Secret Manager secret, the same secret the `apis` stack already uses (`infra/dfo-dev/apis/main.tf`). Terraform does not manage that secret. This stack references it through a `data "google_secret_manager_secret"` source. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
 
 ## data-mcp environment
 

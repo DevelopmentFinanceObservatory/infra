@@ -8,7 +8,7 @@ The service is defined via the reusable `../../modules/cloud-run-service` module
 
 ## Model credentials
 
-The service reads `GEMINI_API_KEY` from the process environment — it warm-loads its Gemini client at startup, so a missing or invalid key fails the revision immediately rather than on the first request. This stack wires that env var to the existing `dfo-dev-gemini-api-key` Secret Manager secret — the same secret the `ai` stack and the `dcp` stack's in-container engine already use (`infra/dfo-dev/ai/main.tf`, `infra/dfo-dev/dcp/dfo.tf`). That secret is **not terraform-managed**; it's referenced here via a `data "google_secret_manager_secret"` source, not created. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
+The service reads `GEMINI_API_KEY` from the process environment — it warm-loads its Gemini client at startup, so a missing or invalid key fails the revision immediately rather than on the first request. This stack wires that env var to the existing `dfo-dev-gemini-api-key` Secret Manager secret — the same secret the `ai` stack already uses (`infra/dfo-dev/ai/main.tf`). That secret is **not terraform-managed**; it's referenced here via a `data "google_secret_manager_secret"` source, not created. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
 
 ## Graph and engine configuration
 

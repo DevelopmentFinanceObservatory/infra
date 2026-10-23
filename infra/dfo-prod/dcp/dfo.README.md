@@ -9,6 +9,5 @@ Apply after `foundation` and `platform`, and before `apis`. The datasets and pre
 ## Hand-made prerequisites
 
 - Secret Manager secret `dc-api-key` with a non-empty version holding the Data Commons API key. `null_resource.dc_key_guard` in `dfo.tf` fails plan without it.
-- Secret Manager secret `dfo-prod-gemini-api-key`. `null_resource.search_api_gemini_key` mounts it on the Data Commons service after each apply.
 
 `image.auto.tfvars` starts at `datacommons_services_image = null`, which deploys upstream's `datacommons-services` image for `dcp_version`. The first run of dfo-dcp's `deploy-prod.yml` opens a pin PR from `deploy/dcp-prod` that replaces it.
