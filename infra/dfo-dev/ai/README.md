@@ -6,7 +6,7 @@ The service is defined via the reusable `../../modules/cloud-run-service` module
 
 ## Model credentials
 
-The service reads `GOOGLE_API_KEY` from the process environment (google-adk's underlying `google-genai` client bypasses `ai`'s own settings classes for this). This stack wires that env var to the existing `dfo-dev-gemini-api-key` Secret Manager secret, the secret the `dcp` stack also attaches to the Data Commons service as `GEMINI_API_KEY` for the DFO prototype app's Gemini-backed routes (`infra/stacks/dcp/dfo.tf`). Terraform does not manage that secret. This stack references it through a `data "google_secret_manager_secret"` source. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
+The service reads `GOOGLE_API_KEY` from the process environment (google-adk's underlying `google-genai` client bypasses `ai`'s own settings classes for this). This stack wires that env var to the Secret Manager secret `var.gemini_api_key_secret_id` names. Dev sets `dfo-dev-gemini-api-key`, the secret the `dcp` stack also attaches to the Data Commons service as `GEMINI_API_KEY` for the DFO prototype app's Gemini-backed routes (`infra/stacks/dcp/dfo.tf`). Prod sets `dfo-prod-ai-gemini-api-key`, a key from the ai service's own AI Studio project, so the billing export attributes its Gemini spend. Terraform does not manage that secret. This stack references it through a `data "google_secret_manager_secret"` source. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
 
 ## data-mcp environment
 

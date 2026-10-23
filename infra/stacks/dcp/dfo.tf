@@ -37,10 +37,18 @@ resource "null_resource" "dc_key_guard" {
   }
 }
 
+# Declared here, not in variables.tf, which keeps the upstream CLI's variables.
+# Prod gives each Gemini caller its own key from its own AI Studio project, so
+# the billing export attributes spend by project. Dev shares one key.
+variable "search_api_gemini_api_key_secret_id" {
+  description = "Secret Manager id of the Gemini API key set on the Data Commons service as GEMINI_API_KEY for the DFO prototype app, such as dfo-prod-dcp-gemini-api-key. Created outside Terraform, and it must hold a version, or the revision the script creates cannot start."
+  type        = string
+}
+
 # Fails the plan when the secret does not exist, before the grant and the
 # script point at it.
 data "google_secret_manager_secret" "search_api_gemini" {
-  secret_id = "${var.namespace}-gemini-api-key"
+  secret_id = var.search_api_gemini_api_key_secret_id
 }
 
 # The serving SA reads the Gemini key secret through this per-secret grant.
@@ -67,8 +75,8 @@ resource "google_secret_manager_secret_iam_member" "serving_sa_gemini_key" {
 # dfo-apis. The website and mixer do not read it either, since DataGemma only
 # loads when ENABLE_DATAGEMMA=true, which this stack does not set.
 #
-# The key lives in Secret Manager as "${namespace}-gemini-api-key", and the
-# serving SA reads it through the per-secret grant above.
+# The key lives in Secret Manager as var.search_api_gemini_api_key_secret_id,
+# and the serving SA reads it through the per-secret grant above.
 #
 # The pinned stack module takes no input for adding secret env vars, so the key
 # goes on after the module deploys the service. The script header explains why it

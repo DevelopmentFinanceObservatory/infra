@@ -36,11 +36,10 @@ locals {
   principals = module.principals.principals
 }
 
-# Reuse the existing, already-created Gemini API key secret (not
-# terraform-managed — see infra/stacks/dcp/dfo.tf for the same secret's
-# other consumer) rather than creating a dedicated one for this service.
+# The service's Gemini API key secret, created outside Terraform and only
+# referenced here. See var.gemini_api_key_secret_id.
 data "google_secret_manager_secret" "gemini" {
-  secret_id = "${var.namespace}-gemini-api-key"
+  secret_id = var.gemini_api_key_secret_id
 }
 
 # The Langfuse key pair the harness exports traces with. Like the Gemini key,

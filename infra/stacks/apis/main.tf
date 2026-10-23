@@ -41,11 +41,10 @@ resource "google_project_service" "cloudscheduler" {
   disable_on_destroy = false
 }
 
-# Reuse the existing Gemini API key secret (not terraform-managed — see
-# infra/stacks/dcp/dfo.tf and infra/stacks/ai/main.tf for its other
-# consumers) rather than creating a dedicated one for this service.
+# The service's Gemini API key secret, created outside Terraform and only
+# referenced here. See var.gemini_api_key_secret_id.
 data "google_secret_manager_secret" "gemini" {
-  secret_id = "${var.namespace}-gemini-api-key"
+  secret_id = var.gemini_api_key_secret_id
 }
 
 # TypeSafe's API key for the Jev binder, created by hand like the Gemini key.

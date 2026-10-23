@@ -42,3 +42,7 @@ allow_unauthenticated = true
 # Principals no stack owns, such as a developers' group. The website and ai
 # stacks grant their own runtime accounts invoker on this service.
 invoker_members = []
+
+# One Gemini key per caller, each from its own AI Studio project.
+gemini_api_key_secret_id                  = "dfo-prod-apis-gemini-api-key"
+search_catalogue_gemini_api_key_secret_id = "dfo-prod-search-catalogue-gemini-api-key"

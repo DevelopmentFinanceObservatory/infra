@@ -86,11 +86,21 @@ resource "google_storage_bucket_iam_member" "search_catalogue_job_coverage_viewe
   member = google_service_account.search_catalogue_job.member
 }
 
-# The engine's Gemini key, the secret main.tf mounts on the apis service,
-# scoped to that one secret as the module scopes the service's own grant.
+# The job's own Gemini key, so its spend bills to its own AI Studio project in
+# prod. Created outside Terraform, like the service's key in main.tf.
+variable "search_catalogue_gemini_api_key_secret_id" {
+  description = "Secret Manager id of the Gemini API key the search catalogue Job mounts as GEMINI_API_KEY, such as dfo-prod-search-catalogue-gemini-api-key. Dev names the service's shared key. The secret must hold a version before plan."
+  type        = string
+}
+
+data "google_secret_manager_secret" "search_catalogue_gemini" {
+  secret_id = var.search_catalogue_gemini_api_key_secret_id
+}
+
+# Scoped to that one secret, as the module scopes the service's own grant.
 resource "google_secret_manager_secret_iam_member" "search_catalogue_job_gemini_accessor" {
-  project   = data.google_secret_manager_secret.gemini.project
-  secret_id = data.google_secret_manager_secret.gemini.secret_id
+  project   = data.google_secret_manager_secret.search_catalogue_gemini.project
+  secret_id = data.google_secret_manager_secret.search_catalogue_gemini.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = google_service_account.search_catalogue_job.member
 }
@@ -232,7 +242,7 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
           name = "GEMINI_API_KEY"
           value_source {
             secret_key_ref {
-              secret  = data.google_secret_manager_secret.gemini.secret_id
+              secret  = data.google_secret_manager_secret.search_catalogue_gemini.secret_id
               version = "latest"
             }
           }
