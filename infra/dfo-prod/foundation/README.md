@@ -16,8 +16,10 @@ The planner binds to the infra repo's `plan` environment and the applier to its 
 
   ```sh
   gcloud storage buckets remove-iam-policy-binding gs://tf-state-dfo-prod-prod-fin-observatory \
-    --member=projectViewer:prod-fin-observatory --role=roles/storage.legacyObjectReader
+    --member=projectViewer:prod-fin-observatory --role=roles/storage.legacyObjectReader --condition=None
   ```
+
+  `--condition=None` names the unconditioned grant. The bucket also holds the planner's conditional `objectViewer` grant, so gcloud refuses the command without it.
 
   Dev's bucket has no such grant.
 
