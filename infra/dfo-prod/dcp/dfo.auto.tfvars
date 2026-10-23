@@ -47,6 +47,20 @@ datacommons_services_cpu                          = "4"
 datacommons_services_memory                       = "16G"
 
 # =============================================================================
+# Auth
+# =============================================================================
+# The Maps key DCP creates is embedded in every DCP page, so it only answers
+# requests from the service's own pages. The website's server-side Places
+# autocomplete (server/routes/shared_api/autocomplete) sends no referrer, so
+# Google rejects it with this key and the DCP search box shows no place
+# suggestions. Prod's DCP pages see a handful of browser visits a month; data
+# reaches users through the website and dfo-apis.
+auth_google_maps_allowed_referrers = [
+  "https://dfo-prod-dc-datacommons-service-533754688761.europe-west1.run.app/*",
+  "https://dfo-prod-dc-datacommons-service-2qrxytrsda-ew.a.run.app/*",
+]
+
+# =============================================================================
 # Ingestion
 # =============================================================================
 ingestion_input_path                = "ingestion/input"
