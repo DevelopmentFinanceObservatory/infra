@@ -6,8 +6,8 @@
 #   infra/stacks/telemetry/tests/mcp_daily.test.sh [project]
 #
 # The case runs mcp_line and the mcp_daily INSERT as one BigQuery script,
-# with ${source} replaced by literal entries from yesterday and mcp_daily by
-# a temp table, so the script reads no table and writes nothing.
+# with ${source} replaced by literal entries from yesterday, no gap, and
+# mcp_daily by a temp table, so the script reads no table and writes nothing.
 # load_from.test.sh tests the window. The project (default
 # prod-fin-observatory) only bills and runs the jobs, and the caller needs
 # bigquery.jobs.create on it.
@@ -62,6 +62,7 @@ SOURCE="(SELECT * FROM UNNEST(ARRAY<STRUCT<
     resource STRUCT<type STRING, labels JSON>, json_payload JSON>>[
   $ENTRIES]))"
 SCRIPT="DECLARE load_from DATE DEFAULT CURRENT_DATE() - 1;
+DECLARE gap_start, gap_end DATE DEFAULT CURRENT_DATE() - 30;
 $MCP_LINE
 CREATE TEMP TABLE mcp_daily (
   day DATE, caller_kind STRING, client STRING, request STRING, outcome STRING, calls INT64,

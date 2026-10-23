@@ -8,17 +8,23 @@
 -- The source's oldest day is partial, since the copy or retention cut
 -- entries part way through it, so the oldest whole day is the one after.
 -- The run's own day is partial too, so requests_daily, routes_daily,
--- errors_daily and mcp_daily read entries before the current UTC day only,
--- and every day they hold is whole. They replace the days from
--- requests_daily's latest loaded day minus one through yesterday, and from
--- the oldest whole day when requests_daily is empty. The start never falls
--- before a floor. While
--- ${live_source} reaches back to the cut-off, the view has no gap and the
--- floor is the source's oldest whole day. Once retention has moved
--- ${live_source}'s oldest entry past the cut-off, the view has a gap
--- between the backfill and that entry, and the floor is ${live_source}'s
--- oldest whole day. Either way every day a run deletes is
--- a day it reloads in full, even after an outage longer than retention.
+-- errors_daily and mcp_daily read entries before the current UTC day only.
+-- Once retention has moved ${live_source}'s oldest entry past the cut-off,
+-- the view has a gap between the backfill and that entry, and an empty
+-- ${live_source} leaves a gap from the cut-off on. The days from the cut-off
+-- day through the day of ${live_source}'s oldest entry are then partial or
+-- empty, so the reads skip the days from gap_start, the cut-off day, to
+-- before gap_end, the oldest whole day after the gap. The backfill's last
+-- whole day is the day before the cut-off day, for a midnight cut-off as for
+-- a mid-day one. Without a gap, gap_end is gap_start and the reads skip
+-- nothing. Every day the four tables hold is whole.
+--
+-- They replace the days from requests_daily's latest loaded day minus one
+-- through yesterday, and from the oldest whole day when requests_daily is
+-- empty. The start never falls before a floor. Without a gap the floor is
+-- the source's oldest whole day, and with one it is gap_end. Either way
+-- every day a run deletes is a day it reloads in full, even after an outage
+-- longer than retention.
 -- errors_daily and mcp_daily share requests_daily's start, so a stretch with
 -- no warnings or no MCP calls cannot widen their window. A source with no
 -- entries, or an empty ${live_source} once requests_daily holds days, loads
@@ -59,7 +65,8 @@
 -- as unparsed calls.
 -- Days are UTC.
 
-DECLARE source_first_day, load_from DATE;
+DECLARE source_first_day, load_from, gap_end DATE;
+DECLARE gap_start DATE DEFAULT DATE(TIMESTAMP '${cutoff}');
 DECLARE live_first TIMESTAMP;
 -- A combined MCP line, with the call's request in group 1, outcome in 2 and
 -- caller in 3, or initialize in 4, its outcome in 5 and caller in 6, and the
@@ -129,17 +136,23 @@ OPTIONS (description = 'Combined MCP server tool calls, resource reads, resource
 
 SET source_first_day = (SELECT DATE(MIN(timestamp)) FROM `${source}`);
 SET live_first = (SELECT MIN(timestamp) FROM `${live_source}`);
+SET gap_end = CASE
+  WHEN live_first IS NULL THEN CURRENT_DATE()
+  WHEN live_first > TIMESTAMP '${cutoff}' THEN DATE(live_first) + 1
+  ELSE gap_start
+END;
 -- GREATEST returns NULL when any argument is NULL, so each branch reaches it
--- with both arguments set. An empty requests_daily loads the whole source,
--- backfill included, since it has no day to lose. An empty ${live_source}
--- with loaded days gives NULL, so the run deletes nothing it cannot reload.
+-- with both arguments set. An empty requests_daily loads the whole source
+-- bar the gap, backfill included, since it has no day to lose. An empty
+-- ${live_source} with loaded days gives NULL, so the run deletes nothing it
+-- cannot reload.
 SET load_from = (
   SELECT
     CASE
       WHEN source_first_day IS NULL THEN NULL
       WHEN MAX(day) IS NULL THEN source_first_day + 1
       WHEN live_first IS NULL THEN NULL
-      WHEN live_first > TIMESTAMP '${cutoff}' THEN GREATEST(MAX(day) - 1, DATE(live_first) + 1)
+      WHEN live_first > TIMESTAMP '${cutoff}' THEN GREATEST(MAX(day) - 1, gap_end)
       ELSE GREATEST(MAX(day) - 1, source_first_day + 1)
     END
   FROM `${dataset}.requests_daily`
@@ -162,6 +175,7 @@ SELECT
 FROM `${source}`
 WHERE timestamp >= TIMESTAMP(load_from)
   AND timestamp < TIMESTAMP(CURRENT_DATE())
+  AND (timestamp < TIMESTAMP(gap_start) OR timestamp >= TIMESTAMP(gap_end))
   AND resource.type = 'cloud_run_revision'
   AND log_id = 'run.googleapis.com/requests';
 
@@ -211,6 +225,7 @@ SELECT
 FROM `${source}`
 WHERE timestamp >= TIMESTAMP(load_from)
   AND timestamp < TIMESTAMP(CURRENT_DATE())
+  AND (timestamp < TIMESTAMP(gap_start) OR timestamp >= TIMESTAMP(gap_end))
   AND log_id IN ('run.googleapis.com/stdout', 'run.googleapis.com/stderr')
   AND severity IN ('WARNING', 'ERROR', 'CRITICAL', 'ALERT', 'EMERGENCY')
 GROUP BY 1, 2, 3, 4, 5;
@@ -250,6 +265,7 @@ FROM (
       FROM `${source}`
       WHERE timestamp >= TIMESTAMP(load_from)
         AND timestamp < TIMESTAMP(CURRENT_DATE())
+        AND (timestamp < TIMESTAMP(gap_start) OR timestamp >= TIMESTAMP(gap_end))
         AND resource.type = 'cloud_run_revision'
         AND log_id IN ('run.googleapis.com/stdout', 'run.googleapis.com/stderr')
         AND JSON_VALUE(json_payload.logger) = 'harness.combined_mcp'
