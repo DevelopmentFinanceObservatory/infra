@@ -54,7 +54,6 @@ Telemetry applies after `foundation`, which lets the applier write this stack's 
 - A local backend init, `just ENV=dfo-prod STACK=telemetry bootstrap`, once `foundation` has applied.
 - The Google group `dfo-dashboard-readers@one.org`. The reader grants fail while it does not exist.
 - The BigQuery Data Transfer Service agent, `service-<project number>@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com`. The grant that lets it run `dfo-prod-logs-daily` fails while the agent does not exist, and the applier cannot create it. A project owner creates it once with `gcloud beta services identity create --service=bigquerydatatransfer.googleapis.com --project=prod-fin-observatory`.
-- The BigQuery MCP endpoint, which the dashboard's connector calls at `https://bigquery.googleapis.com/mcp`. The Google provider has no resource that enables it, so a project owner runs `gcloud beta services mcp enable bigquery.googleapis.com --project=prod-fin-observatory` once.
 
 ## After the first apply
 
