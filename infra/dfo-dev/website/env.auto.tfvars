@@ -29,3 +29,7 @@ ses = {
   region         = "us-east-1"
   token_audience = "development-finance-observatory-staging"
 }
+
+# Cloudflare Turnstile widget "DFO website staging" in the ONE Campaign
+# account, for this service's run.app host. Public: the login page renders it.
+turnstile_site_key = "0x4AAAAAAFiLWYsFJwHodJgu"

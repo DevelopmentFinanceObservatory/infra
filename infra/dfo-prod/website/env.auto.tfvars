@@ -49,3 +49,7 @@ ses = {
   region         = "us-east-1"
   token_audience = "development-finance-observatory-production"
 }
+
+# Cloudflare Turnstile widget "DFO website production" in the ONE Campaign
+# account, for developmentfinance.org. Public: the login page renders it.
+turnstile_site_key = "0x4AAAAAAFiLPXQeqPLKYQs9"
