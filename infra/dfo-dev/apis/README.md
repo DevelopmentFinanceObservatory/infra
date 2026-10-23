@@ -107,7 +107,7 @@ The flip to `allow_unauthenticated = false` runs in stages:
 
 1. The callers send tokens: the website and ai services mint them from the metadata server as their runtime accounts, and the apis repository's eval jobs mint them as `dfo-dev-apis-eval-reader` from the workflow's WIF credentials. The Data Commons prototype calls the website's proxy, not this service, and holds no grant.
 2. The apis service logs, per request, whether a Cloud Run token arrived and its unverified `email` and `aud`, with the user agent. Before each flip, 48 hours of that environment's logs must show no request from the website, ai or CI user agents that carries no token or an `email` that holds no invoker grant.
-3. dfo-dev sets `allow_unauthenticated = false` and adds `group:dfo-dev-apis-invokers@one.org` to `invoker_members` for developers. IAM rejects a member that does not exist, so the group is created first.
+3. dfo-dev sets `allow_unauthenticated = false`, and developers reach the service through a group added to `invoker_members`. IAM rejects a member that does not exist, so the group is created first.
 4. dfo-prod sets `allow_unauthenticated = false` once the callers run in prod and the prod logs pass the same check.
 
 With the flag off, a developer in the invokers group reaches the service through a local proxy that attaches their own token, and points local base URLs at `http://localhost:8083`:

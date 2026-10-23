@@ -20,8 +20,9 @@ infra/
 │   ├── pipelines/
 │   ├── platform/
 │   └── website/
-└── dfo-prod/       # prod environment: the same stacks except pipelines, plus the public edge
-    └── edge/
+└── dfo-prod/       # prod environment: the same stacks except pipelines, plus the public edge and telemetry
+    ├── edge/
+    └── telemetry/
 scripts/            # helpers for CI, GitHub setup and the dcp stack
 justfile            # task runner recipes (run `just` to list them)
 ```
@@ -35,13 +36,14 @@ A change to one stack appears only in that stack's plan. The stacks are:
 - [apis](infra/dfo-dev/apis): the Search and Datasets APIs on one Cloud Run service, with the storage, database and private-network access the Datasets API needs. The `apis` repository's CI deploys images onto it.
 - [pipelines](infra/dfo-dev/pipelines): storage for the data pipelines, which the `pipelines` repository reads and writes.
 - [platform](infra/dfo-dev/platform): the shared Cloud SQL Postgres instance, reached over Private Service Connect. Each tenant's database and users live in the tenant's own stack.
+- [telemetry](infra/dfo-prod/telemetry): prod only. Cloud Run logs routed to a Log Analytics bucket, the daily `logs_daily` aggregate, and the BigQuery datasets the team dashboard reads (`dfo_reporting`, `searchconsole`).
 - [website](infra/dfo-dev/website): the DFO website's Cloud Run service, plus its private network path to the shared Postgres instance. The `website` repository's CI deploys images onto it.
 
 Each stack's README says what belongs in it.
 
 ## Getting started
 
-Planning and applying need access to ONE's Google Cloud projects (`dev-fin-observatory` and `prod-fin-observatory`), which only the ONE Data team holds. Without it you can read the code and run the checks that need no credentials. You need [just](https://github.com/casey/just), [Terraform](https://developer.hashicorp.com/terraform/install) 1.5 or later, and [uv](https://docs.astral.sh/uv/).
+Planning and applying need access to ONE's Google Cloud projects (`dev-fin-observatory` and `prod-fin-observatory`), which only the ONE Data team holds. Without it you can read the code and run the checks that need no credentials. You need [just](https://github.com/casey/just), [Terraform](https://developer.hashicorp.com/terraform/install) 1.7 or later, and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 just install                # install the pre-commit hooks

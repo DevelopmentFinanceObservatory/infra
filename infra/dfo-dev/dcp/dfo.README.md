@@ -6,7 +6,7 @@
 
 So all of our logic lives in a separate set of `dfo.*` files that the CLI never touches:
 
-- `dfo.tf` — the Gemini API key wiring (`null_resource.search_api_gemini_key`) plus the Data Commons API key data source and its guard.
+- `dfo.tf` — the Gemini API key wiring for the DFO prototype app (`null_resource.search_api_gemini_key`, reading the secret `${namespace}-gemini-api-key`, and the serving account's grant on that one secret) plus the Data Commons API key data source and its guard.
 - `dfo_datasets.tf` — the Datasets API's GCS buckets, the garbage-collection service account and its access to them, and its database, migrator user, and garbage-collection database user on the shared Cloud SQL instance from the `platform` stack, plus its own `variable`/`output` blocks (kept out of `variables.tf`/`outputs.tf` for the same regen-safety reason). The Datasets API's serving identity — the Cloud Run runtime service account the `apis` stack creates — is out of scope here: its bucket grants, its signed-URL signing setup, and its runtime database user are declared in that stack, next to the identity they empower. It also revokes PUBLIC's default CONNECT on the datasets database (`google_sql_provision_script.datasets_revoke_public_connect`), owned here rather than in `platform` because the revoke is per-tenant and this is the tenant's own stack. The script grants CONNECT back to the migrator and garbage-collection users. The `apis` stack grants the runtime user its CONNECT (`google_sql_provision_script.runtime_connect`), so this stack names no `apis` role and applies first. Schema and table grants for the garbage-collection user belong to a migration in the owning repo. The applier here holds only `cloudsqlsuperuser`, which cannot grant on objects the migrator owns.
 - `dfo_storage.tf` — the Data Commons artifacts bucket, taken out of the upstream storage module (via a `moved` block, `storage_create_artifacts_bucket = false` in `dfo.auto.tfvars`) so this stack can attach lifecycle rules the module has no input for. Deletes Dataflow's temp/staging objects under `ingestion/internal/temp/` after 7 days and per-run ingestion outputs under `ingestion/internal/datacommons/` after 30, and aborts incomplete multipart uploads after 7. Leaves `ingestion/input/` (uploaded source data) and `ingestion/internal/metadata/` (per-dataset version metadata the ingestion helper carries across runs) alone.
 - `dfo_override.tf` — a Terraform _override_ file (see below), also the home for provider version floors above the CLI's own — its `terraform { required_providers {} }` block merges into main.tf's the same way its `module "stack"` block does.
@@ -36,36 +36,33 @@ Two resources appear in every plan. `null_resource.search_api_gemini_key` carrie
 
 ## The database commands
 
-Four `just` recipes touch the dcp database. Terraform grants none of the IAM they need, so grant it by hand before the first run.
+Three `just` recipes touch the dcp database. Terraform grants none of the IAM they need, so grant it by hand before the first run.
 
-| Recipe                  | What it does                                                                | Spanner role on your principal | Token creator on the workflow account |
-| ----------------------- | --------------------------------------------------------------------------- | ------------------------------ | ------------------------------------- |
-| `just init-db`          | Creates the schema on a brand-new database                                  | `roles/spanner.databaseReader` | yes                                   |
-| `just migrate-db`       | Applies pending Spanner schema migrations                                   | `roles/spanner.databaseAdmin`  | yes                                   |
-| `just seed-db`          | Re-applies Base DC's own geographic and schema seeds                        | none                           | yes                                   |
-| `just load data/<name>` | Stages one of this repo's datasets into the ingestion bucket and ingests it | none                           | yes                                   |
+| Recipe                  | What it does                                                                | Spanner roles on your principal                             | Token creator on the workflow account |
+| ----------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------- |
+| `just init-db`          | Creates the schema on a brand-new database                                  | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` | no                                    |
+| `just migrate-db`       | Applies pending Spanner schema migrations                                   | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` | no                                    |
+| `just load data/<name>` | Stages one of this repo's datasets into the ingestion bucket and ingests it | none                                                        | yes                                   |
 
 `just datasets` lists the values `load` accepts. `load` reaches the bucket named by the `storage_artifacts_bucket_name` output under your own credentials rather than the workflow account's, and it needs object write and object delete there.
 
+Terraform grants the workflow account `roles/workflows.viewer` (`ingestion_workflow_sa_viewer` in `dfo.tf`) on top of the stack module's `roles/workflows.invoker`. `load` needs it to read the workflow definition before it starts an execution.
+
 A permission error from any of these names the resource it denied rather than the principal it denied, which sends you to the wrong service account. Read the principal off the table first.
 
-### init-db is safe only on a fresh database
+### init-db on an existing database
 
-`init-db`'s already-initialised check fails open. Any exception from the Spanner client or the table lookup returns "not initialised", and a permissions error is the default case, since Terraform grants `roles/spanner.databaseReader` to no principal. On that path `database/initialize` still fires against the live database. It runs under the impersonated workflow service account, so a 403 on your own principal does nothing to stop it. Nothing outside the ingestion-helper image documents what that call does to a populated database.
-
-The recipe passes `--init-only` and puts a `[confirm]` prompt in front of it. Answer that prompt only for a database you know is empty.
+`init-db` skips a database whose `Node` table exists. If that check errors, the CLI treats the database as empty and applies the baseline schema under your own credentials. The schema's first statement, `CREATE TABLE Node`, then fails against an existing database before any DDL applies.
 
 ### Before running migrate-db
 
 Take a Spanner backup. Migrations are forward-only, the framework has no `downgrade()`, and Spanner has no transactional DDL rollback. The CLI asks whether you have taken a backup and does not take one for you.
 
-Then wait for a `terraform apply` on this stack to finish. `apply.yml` runs asynchronously, so a merged PR leaves the apply still in flight. The ingestion-helper has to reach the matching image before the lock endpoints exist, and these commands read their targets from `terraform output -json`, which stays empty until the apply populates state.
+Then wait for a `terraform apply` on this stack to finish. `apply.yml` runs asynchronously, so a merged PR leaves the apply still in flight. These commands read their targets from `terraform output -json`, which stays empty until the apply populates state. `migrate-db` takes the ingestion lock in Spanner and fails while an ingestion holds it.
 
 ### load replaces the whole input prefix
 
 Ingestion reads every file under `gs://<bucket>/ingestion/input/` against a single `config.json`, so `load` clears that prefix before uploading. The clear runs under your own credentials and discards its own errors. Without object delete on the bucket it does nothing, the new dataset lands on top of the old files, and ingestion reads both.
-
-`seed-db` and `load` both add data. `seed-db` re-applies Data Commons' own base seeds. `load` imports the datasets under `data/`. `seed-db` has no already-seeded check and no confirmation prompt, so it reseeds the moment you run it.
 
 ## Migrator password rotation and recovery
 

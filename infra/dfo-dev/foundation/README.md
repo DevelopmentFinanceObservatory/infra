@@ -34,19 +34,40 @@ Infrastructure that more than one stack (or more than one repo's CI) depends on.
 
 - **Artifact Registry repo `dfo-website-staging`** — dfo-website's image repo (`var.website_artifact_repository_id`), separate from `datacommons` so its writer grant can be scoped to `dfo-website-staging-deployer` alone. Each image keeps its ten most recent tagged versions and drops any other tagged version older than thirty days.
 
-- **Ingestion operator grants** — for each principal in `var.ingestion_operators`: token creator on the dcp ingestion workflow's service account, `roles/storage.objectUser` on the artifacts bucket, `roles/workflows.invoker` on the project (the provider has no per-workflow IAM resource), `roles/spanner.databaseReader` on the Data Commons database, and `roles/workflows.viewer`, `roles/storage.bucketViewer`, `roles/logging.viewer`, `roles/run.viewer`, `roles/spanner.viewer`, `roles/dataflow.viewer`, and `roles/monitoring.viewer` on the project, so an operator can follow a run in the console, plus `roles/serviceusage.serviceUsageConsumer` so their API calls can bill to the project. The resources belong to `../dcp`, so their names come in through the `ingestion_*` variables. Dev's list is empty, since its operators hold these roles by hand or through owner.
+- **Applier impersonators** — `roles/iam.serviceAccountTokenCreator` on `dfo-infra-applier` for each member in the principals secret's `applier_impersonators` object (see "Principals secret" below). Impersonating the applier reaches every role in `applier_project_roles`, so the object holds only people, directly or through a group, who already have project owner. Dev's object holds one group and prod's is empty.
+
+- **Ingestion operator grants** — for each member in the principals secret's `ingestion_operators` object: token creator on the dcp ingestion workflow's service account, `roles/storage.objectUser` on the artifacts bucket, `roles/workflows.invoker` on the project (the provider has no per-workflow IAM resource), `roles/spanner.databaseReader` on the Data Commons database, and `roles/workflows.viewer`, `roles/storage.bucketViewer`, `roles/logging.viewer`, `roles/run.viewer`, `roles/spanner.viewer`, `roles/dataflow.viewer`, and `roles/monitoring.viewer` on the project, so an operator can follow a run in the console, plus `roles/serviceusage.serviceUsageConsumer` so their API calls can bill to the project. The resources belong to `../dcp`, so their names come in through the `ingestion_*` variables. Dev's object is empty, since its operators hold these roles by hand or through owner, and prod's holds one group.
+
+## Principals secret
+
+The applier impersonators, ingestion operators and Gemini budget alert recipients live in the Secret Manager secret `<namespace>-foundation-principals` (`dfo-dev-foundation-principals` here, `dfo-prod-foundation-principals` in prod). Each environment needs it, and an environment with no members of a kind holds an empty object for it. The impersonators and operators are IAM members and the budget alert recipients bare addresses:
+
+```json
+{
+  "applier_impersonators": {"appliers": "group:appliers@example.org"},
+  "ingestion_operators": {"ops": "group:operators@example.org"},
+  "budget_alerts": {"finance": "finance@example.org"}
+}
+```
+
+To create the secret or change its members, write the JSON to a file outside the repository and run
+
+```sh
+scripts/bootstrap-principals.sh dev-fin-observatory dfo-dev-foundation-principals principals.json
+```
+
+[`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states the rules the secret must meet, what the script does, the relabel order, and the `removed` blocks that moved these grants off member-keyed state.
 
 ## Gemini spend budget
 
-`budget.tf` creates a Cloud Billing budget on the Gemini API (billing catalog service "Gemini API", `generativelanguage.googleapis.com`) for the project that owns the dev Gemini key. It emails when spend reaches 50%, 90% and 100% of `var.gemini_budget_usd` (default 500 USD a month), and when the forecast for the month reaches 100%. Billing account admins get the default emails. Each address in `var.budget_alert_emails` gets a Cloud Monitoring email channel and the same alerts.
+`budget.tf` creates a Cloud Billing budget on the Gemini API (billing catalog service "Gemini API", `generativelanguage.googleapis.com`) for the project that owns the dev Gemini key. It emails when spend reaches 50%, 90% and 100% of `var.gemini_budget_usd` (default 500 USD a month), and when the forecast for the month reaches 100%. Billing account admins get the default emails. Each address in the principals secret's `budget_alerts` object gets a Cloud Monitoring email channel, named by its label, and the same alerts.
 
 The budget alerts and caps nothing. Google reports billing data with a delay of hours, so the first email can arrive well after the spend it describes, and requests keep succeeding past 100%. A hard stop needs a quota on the key's project, which this stack does not set.
 
-The budget stays off, and the stack plans as a no-op, until `budget.auto.tfvars` holds:
+The budget stays off, and the stack plans as a no-op, until `budget.auto.tfvars` holds the two values below. The extra recipients live in the principals secret's `budget_alerts` object, and an empty object leaves billing admins as the only recipients.
 
 - `billing_account_id`: the billing account id. `gcloud billing projects describe <gemini_key_project_number>` prints it.
 - `gemini_key_project_number`: the number of the project that owns the key, the digits after `projects/` in the key name `gcloud services api-keys lookup <key string>` prints. That project can differ from `project_id` when the key came from AI Studio. The budget filter takes the number, so neither the planner nor the applier needs access to that project.
-- `budget_alert_emails`: the recipient list. Empty leaves billing admins as the only recipients.
 
 One manual step before the first apply with those values set. `dfo-infra-applier` needs Billing Account Costs Manager on the billing account, and this repo does not manage billing account IAM, so a billing account admin grants it once:
 
@@ -89,7 +110,7 @@ The condition holds one clause per owner: `DevelopmentFinanceObservatory`'s id w
 
 ## Pull-request access
 
-Of the eight identities above, `dfo-infra-planner` is the one a pull-request run reaches unconditionally, by this Terraform alone. In dev its WIF binding is repo-scoped (`planner_wif_ref` and `planner_wif_environment` are null), so any workflow in `DevelopmentFinanceObservatory/infra` can impersonate it, and `plan.yml` runs on every pull request by design. It cannot mutate anything: `roles/viewer` plus the two read-only project roles alongside it grant no write API. But its read reaches further than this stack. `state_bucket` (`tf-state-dfo-dev-dev-fin-observatory`) is one GCS bucket shared by all six stacks, split only by object prefix, and the grant is a bucket-level `roles/storage.objectViewer` with no per-prefix condition, so a pull-request run can read every stack's state, not just foundation's. That includes `../dcp`'s state, which holds `random_password.datasets_migrator` in plaintext: Terraform's `sensitive` marking redacts CLI/plan output, not the state file itself, and that password authenticates a Postgres user the dcp stack grants DDL on. The planner also holds a resource-scoped `secretAccessor` grant on the `dc-api-key` secret, and `roles/iam.securityReviewer`, which permits reading every IAM policy binding in the project. So: no mutation, but broad read, including at least one live credential.
+Of the eight identities above, `dfo-infra-planner` is the one a pull-request run reaches unconditionally, by this Terraform alone. In dev its WIF binding is repo-scoped (`planner_wif_ref` and `planner_wif_environment` are null), so any workflow in `DevelopmentFinanceObservatory/infra` can impersonate it, and `plan.yml` runs on every pull request by design. It cannot mutate anything: `roles/viewer` plus the two read-only project roles alongside it grant no write API. But its read reaches further than this stack. `state_bucket` (`tf-state-dfo-dev-dev-fin-observatory`) is one GCS bucket shared by every stack, split only by object prefix, and the grant is a bucket-level `roles/storage.objectViewer` conditioned on the prefixes of the stacks in `local.state_bucket_stacks`, which lists every stack, so a pull-request run can read every stack's state, not just foundation's. That includes `../dcp`'s state, which holds `random_password.datasets_migrator` in plaintext: Terraform's `sensitive` marking redacts CLI/plan output, not the state file itself, and that password authenticates a Postgres user the dcp stack grants DDL on. The planner also holds a resource-scoped `secretAccessor` grant on the `dc-api-key` secret, and `roles/iam.securityReviewer`, which permits reading every IAM policy binding in the project. So: no mutation, but broad read, including at least one live credential.
 
 The other six are not reachable the same way, and the strength of that guarantee differs between them:
 

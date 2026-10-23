@@ -21,6 +21,12 @@ state_bucket                   = "tf-state-dfo-prod-prod-fin-observatory"
 # prod and the Gemini key projects.
 billing_export_dataset_id = "billing_export"
 
+# This stack reads its applier impersonators and ingestion operators from
+# dfo-prod-foundation-principals, the ai stack reads its token readers from
+# dfo-prod-ai-principals, and the telemetry stack, prod only, reads its readers
+# and alert recipients from dfo-prod-telemetry-principals.
+principals_secret_stacks = ["foundation", "ai", "telemetry"]
+
 # plan-prod.yml's plan job runs PR code on pull_request_target, whose ref is
 # refs/heads/main, the applier's ref. The planner binds to the `plan`
 # environment on main and the applier to `production` on main, so that job's
@@ -31,14 +37,9 @@ planner_wif_environment = "plan"
 applier_wif_ref         = "refs/heads/main"
 applier_wif_environment = "production"
 
-# Placeholder: list the project owners who may impersonate the applier, as
-# "user:<email>". Empty grants no one.
-applier_impersonators = []
-
-# The Google group whose members run Dagster ingestion into prod. Membership
-# lives in ONE's Workspace. The four names below are dcp's outputs of the same
-# names.
-ingestion_operators                      = ["group:dfo-prod-ingestion@one.org"]
+# The ingestion operators, a Google group whose members run Dagster ingestion
+# into prod, come from dfo-prod-foundation-principals. The four names below are
+# dcp's outputs of the same names.
 ingestion_workflow_service_account_email = "dfo-prod-dc-ing-wf-sa@prod-fin-observatory.iam.gserviceaccount.com"
 ingestion_artifacts_bucket_name          = "dfo-prod-dc-artifacts-prod-fin-observatory"
 ingestion_spanner_instance_id            = "dfo-prod-dc-instance"

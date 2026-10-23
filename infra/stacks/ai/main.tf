@@ -21,6 +21,21 @@ provider "google" {
   region  = var.region
 }
 
+# The studio and MCP token readers (studio_token.tf, mcp_token.tf), read from a
+# hand-made secret. The module holds the rules and this stack's schema, and
+# scripts/bootstrap-principals.sh writes it.
+module "principals" {
+  source = "../../modules/principals-secret"
+
+  project_id = var.project_id
+  namespace  = var.namespace
+  stack      = "ai"
+}
+
+locals {
+  principals = module.principals.principals
+}
+
 # Reuse the existing, already-created Gemini API key secret (not
 # terraform-managed — see infra/stacks/dcp/dfo.tf for the same secret's
 # other consumer) rather than creating a dedicated one for this service.
