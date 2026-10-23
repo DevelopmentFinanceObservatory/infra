@@ -137,9 +137,10 @@ resource "google_service_account_iam_member" "logs_daily_transfer_agent" {
   member             = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com"
 }
 
-# A script with DDL and DML, so no destination table. It runs at 02:00 UTC
-# and starts each table from its latest loaded day minus one, so the day the
-# previous run loaded in part is reloaded in full.
+# A script with DDL and DML, so no destination table. It runs at 02:00 UTC,
+# loads whole days up to yesterday, and starts each table from its latest
+# loaded day minus one, so the run reloads that day with any entry that
+# reached the source after the previous run.
 resource "google_bigquery_data_transfer_config" "logs_daily" {
   display_name         = "${var.namespace}-logs-daily"
   location             = local.bigquery_location

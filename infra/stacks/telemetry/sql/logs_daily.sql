@@ -7,14 +7,16 @@
 --
 -- The source's oldest day is partial, since the copy or retention cut
 -- entries part way through it, so the oldest whole day is the one after.
--- requests_daily, routes_daily and errors_daily replace the days from
--- requests_daily's latest loaded day minus one through today, and from the
--- oldest whole day when requests_daily is empty. The start never falls
--- before a floor. While ${live_source} reaches back to the cut-off, the
--- view has no gap and the floor is the source's oldest whole day. Once
--- retention has moved ${live_source}'s oldest entry past the cut-off, the
--- view has a gap between the backfill and that entry, and the floor is
--- ${live_source}'s oldest whole day. Either way every day a run deletes is
+-- The run's own day is partial too, so requests_daily, routes_daily and
+-- errors_daily read entries before the current UTC day only, and every day
+-- they hold is whole. They replace the days from requests_daily's latest
+-- loaded day minus one through yesterday, and from the oldest whole day when
+-- requests_daily is empty. The start never falls before a floor. While
+-- ${live_source} reaches back to the cut-off, the view has no gap and the
+-- floor is the source's oldest whole day. Once retention has moved
+-- ${live_source}'s oldest entry past the cut-off, the view has a gap
+-- between the backfill and that entry, and the floor is ${live_source}'s
+-- oldest whole day. Either way every day a run deletes is
 -- a day it reloads in full, even after an outage longer than retention.
 -- errors_daily shares requests_daily's start, so a stretch with no warnings
 -- cannot widen its window. A source with no entries, or an empty
@@ -22,16 +24,18 @@
 -- since the start is then NULL.
 --
 -- deploys gains a row for each revision it has not seen, timed at the
--- revision's first request across the whole source, and never changes a row
--- once written. before_source is true, as of the run that records the
--- revision, when no other revision of its service served a request earlier
--- in the source. A revision with an earlier sibling was deployed after the
--- source began. One without was serving when the source began, or is the
--- first after a service-wide silence longer than retention, or the first of
--- a new service. Its first request is not a known deploy, so deploy markers
--- read only rows where before_source is false. Recording it anyway keeps it
--- out of later runs, which would otherwise time it at whatever request
--- survives retention and mark a deploy weeks late.
+-- revision's first request across the whole source, today included, and
+-- never changes a row once written, so an earlier entry that reaches the
+-- source after the run does not move it. before_source is true, as of the
+-- run that records the revision, when no other revision of its service
+-- served a request earlier in the source. A revision with an earlier
+-- sibling was deployed after the source began. One without was serving when
+-- the source began, or is the first after a service-wide silence longer
+-- than retention, or the first of a new service. Its first request is not a
+-- known deploy, so deploy markers read only rows where before_source is
+-- false. Recording it anyway keeps it out of later runs, which would
+-- otherwise time it at whatever request survives retention and mark a
+-- deploy weeks late.
 -- Days are UTC.
 
 DECLARE source_first_day, load_from DATE;
@@ -119,6 +123,7 @@ SELECT
   ) AS latency_ms
 FROM `${source}`
 WHERE timestamp >= TIMESTAMP(load_from)
+  AND timestamp < TIMESTAMP(CURRENT_DATE())
   AND resource.type = 'cloud_run_revision'
   AND log_id = 'run.googleapis.com/requests';
 
@@ -167,6 +172,7 @@ SELECT
   COUNT(*)
 FROM `${source}`
 WHERE timestamp >= TIMESTAMP(load_from)
+  AND timestamp < TIMESTAMP(CURRENT_DATE())
   AND log_id IN ('run.googleapis.com/stdout', 'run.googleapis.com/stderr')
   AND severity IN ('WARNING', 'ERROR', 'CRITICAL', 'ALERT', 'EMERGENCY')
 GROUP BY 1, 2, 3, 4, 5;
