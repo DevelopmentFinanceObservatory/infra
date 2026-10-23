@@ -401,6 +401,24 @@ resource "google_secret_manager_secret_iam_member" "dc_key_planner" {
   member    = module.planner.member
 }
 
+# The same grant on each stack's hand-made principals secret, which holds the
+# addresses that stack grants or notifies (the telemetry stack reads
+# <namespace>-telemetry-principals in its main.tf). The planner reads it to
+# plan that stack. scripts/bootstrap-principals.sh makes the same grant when
+# it creates the secret, since the stack's first plan can run before this
+# one applies.
+locals {
+  principals_secrets = [for stack in var.principals_secret_stacks : "${var.namespace}-${stack}-principals"]
+}
+
+resource "google_secret_manager_secret_iam_member" "principals_planner" {
+  for_each = toset(local.principals_secrets)
+
+  secret_id = "projects/${var.project_id}/secrets/${each.key}"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = module.planner.member
+}
+
 # Applies this environment's stacks on a push to its branch. No separate
 # state_bucket grant: roles/storage.admin above already covers the state
 # bucket. var.applier_wif_ref pins the binding to that branch and

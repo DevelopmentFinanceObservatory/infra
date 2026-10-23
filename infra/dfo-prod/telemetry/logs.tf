@@ -1,0 +1,1 @@
+../../stacks/telemetry/logs.tf

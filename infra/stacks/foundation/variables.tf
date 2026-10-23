@@ -119,6 +119,12 @@ variable "provider_id" {
   default     = "github"
 }
 
+variable "principals_secret_stacks" {
+  description = "Stacks in this environment that read their principals from a hand-made <namespace>-<stack>-principals secret. The planner gets roles/secretmanager.secretAccessor on each, and the grant fails while the secret does not exist, so a stack is listed only in the environments that deploy it."
+  type        = list(string)
+  default     = []
+}
+
 variable "applier_impersonators" {
   description = "Principals that may mint access tokens for the dfo-infra-applier service account, as full IAM member strings. Impersonating the applier reaches every role in applier_project_roles, so this list stays short and holds only people, directly or through a group, who already have project owner."
   type        = list(string)
