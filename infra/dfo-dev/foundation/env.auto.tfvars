@@ -18,9 +18,10 @@ github_repositories = {
 website_deployer_account_id    = "dfo-website-staging-deployer"
 website_artifact_repository_id = "dfo-website-staging"
 state_bucket                   = "tf-state-dfo-dev-dev-fin-observatory"
-applier_impersonators          = ["group:dfo-dev-appliers@one.org"]
-# Dev's ingestion operators hold their roles by hand or through owner.
-ingestion_operators = []
+# This stack reads its applier impersonators and ingestion operators from
+# dfo-dev-foundation-principals. Dev's ingestion_operators object is empty,
+# since its operators hold their roles by hand or through owner.
+principals_secret_stacks = ["foundation"]
 # Dev's plan.yml runs on pull_request, whose ref is refs/pull/<n>/merge, so the
 # planner's binding stays repo-scoped. The applier binds to the `dev`
 # environment on refs/heads/dev, which apply-stack.yml declares for dfo-dev.

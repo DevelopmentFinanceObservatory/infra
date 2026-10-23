@@ -2,15 +2,17 @@
 #
 # Write a stack's hand-made principals secret from a local JSON file.
 #
-# A stack that grants or notifies people (the telemetry stack's reporting
-# readers and alert recipients) reads their addresses from a Secret Manager
+# A stack that grants or notifies people (foundation's applier impersonators
+# and ingestion operators, the telemetry stack's reporting readers and alert
+# recipients) reads their addresses from a Secret Manager
 # secret, so no address sits in this public repository or in a plan log. The
 # file is an object of objects of strings, each inner object keyed by labels
 # that name resources in Terraform state and plan output, for example
 #   {"readers": {"team": "group:readers@example.org"},
 #    "alerts": {"team": "alerts@example.org"}}
 # A label holds only lower-case letters, digits, hyphens and underscores, so
-# an address cannot end up as one.
+# an address cannot end up as one. An inner object may be empty, as when an
+# environment has no members of that kind, but the file may not be {}.
 #
 # This creates the secret when it is absent, adds the file as a new version,
 # and grants the dfo-infra-planner service account secretAccessor on it. The

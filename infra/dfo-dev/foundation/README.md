@@ -34,7 +34,32 @@ Infrastructure that more than one stack (or more than one repo's CI) depends on.
 
 - **Artifact Registry repo `dfo-website-staging`** — dfo-website's image repo (`var.website_artifact_repository_id`), separate from `datacommons` so its writer grant can be scoped to `dfo-website-staging-deployer` alone. Each image keeps its ten most recent tagged versions and drops any other tagged version older than thirty days.
 
-- **Ingestion operator grants** — for each principal in `var.ingestion_operators`: token creator on the dcp ingestion workflow's service account, `roles/storage.objectUser` on the artifacts bucket, `roles/workflows.invoker` on the project (the provider has no per-workflow IAM resource), `roles/spanner.databaseReader` on the Data Commons database, and `roles/workflows.viewer`, `roles/storage.bucketViewer`, `roles/logging.viewer`, `roles/run.viewer`, `roles/spanner.viewer`, `roles/dataflow.viewer`, and `roles/monitoring.viewer` on the project, so an operator can follow a run in the console, plus `roles/serviceusage.serviceUsageConsumer` so their API calls can bill to the project. The resources belong to `../dcp`, so their names come in through the `ingestion_*` variables. Dev's list is empty, since its operators hold these roles by hand or through owner.
+- **Applier impersonators** — `roles/iam.serviceAccountTokenCreator` on `dfo-infra-applier` for each member in the principals secret's `applier_impersonators` object (see "Principals secret" below). Impersonating the applier reaches every role in `applier_project_roles`, so the object holds only people, directly or through a group, who already have project owner. Dev's object holds one group and prod's is empty.
+
+- **Ingestion operator grants** — for each member in the principals secret's `ingestion_operators` object: token creator on the dcp ingestion workflow's service account, `roles/storage.objectUser` on the artifacts bucket, `roles/workflows.invoker` on the project (the provider has no per-workflow IAM resource), `roles/spanner.databaseReader` on the Data Commons database, and `roles/workflows.viewer`, `roles/storage.bucketViewer`, `roles/logging.viewer`, `roles/run.viewer`, `roles/spanner.viewer`, `roles/dataflow.viewer`, and `roles/monitoring.viewer` on the project, so an operator can follow a run in the console, plus `roles/serviceusage.serviceUsageConsumer` so their API calls can bill to the project. The resources belong to `../dcp`, so their names come in through the `ingestion_*` variables. Dev's object is empty, since its operators hold these roles by hand or through owner, and prod's holds one group.
+
+## Principals secret
+
+The applier impersonators and ingestion operators live in the Secret Manager secret `<namespace>-foundation-principals` (`dfo-dev-foundation-principals` here, `dfo-prod-foundation-principals` in prod), which `main.tf` reads, so no address sits in this repository or in a plan log. Every value from the secret prints in plan output as `(sensitive value)`. Each environment needs the secret, and an environment with no members of a kind holds an empty object for it. The secret holds one JSON object:
+
+```json
+{
+  "applier_impersonators": {"appliers": "group:appliers@example.org"},
+  "ingestion_operators": {"ops": "group:operators@example.org"}
+}
+```
+
+Each member is `group:`, `user:`, `serviceAccount:` or `domain:` followed by an address. The labels key the grants, so they appear in resource addresses and plan output, and hold only lower-case letters, digits, hyphens and underscores. Plan fails on a secret of any other shape.
+
+To create the secret or change its members, write the JSON to a file outside the repository and run
+
+```sh
+scripts/bootstrap-principals.sh dev-fin-observatory dfo-dev-foundation-principals principals.json
+```
+
+The script checks the file's shape, creates the secret if it is absent, adds the file as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. `principals_secret_stacks` lists `foundation`, so this stack also grants the planner access to its own secret, but a plan reads the secret before that grant exists, and the script's grant covers the first plan. The next apply moves the grants to the new members.
+
+The grants were once keyed by member string. The `removed` blocks in `main.tf` make Terraform forget those state entries without destroying the live bindings, and the label-keyed resources create the same bindings again, which IAM accepts as no change.
 
 ## Gemini spend budget
 
@@ -89,7 +114,7 @@ The condition holds one clause per owner: `DevelopmentFinanceObservatory`'s id w
 
 ## Pull-request access
 
-Of the eight identities above, `dfo-infra-planner` is the one a pull-request run reaches unconditionally, by this Terraform alone. In dev its WIF binding is repo-scoped (`planner_wif_ref` and `planner_wif_environment` are null), so any workflow in `DevelopmentFinanceObservatory/infra` can impersonate it, and `plan.yml` runs on every pull request by design. It cannot mutate anything: `roles/viewer` plus the two read-only project roles alongside it grant no write API. But its read reaches further than this stack. `state_bucket` (`tf-state-dfo-dev-dev-fin-observatory`) is one GCS bucket shared by all six stacks, split only by object prefix, and the grant is a bucket-level `roles/storage.objectViewer` with no per-prefix condition, so a pull-request run can read every stack's state, not just foundation's. That includes `../dcp`'s state, which holds `random_password.datasets_migrator` in plaintext: Terraform's `sensitive` marking redacts CLI/plan output, not the state file itself, and that password authenticates a Postgres user the dcp stack grants DDL on. The planner also holds a resource-scoped `secretAccessor` grant on the `dc-api-key` secret, and `roles/iam.securityReviewer`, which permits reading every IAM policy binding in the project. So: no mutation, but broad read, including at least one live credential.
+Of the eight identities above, `dfo-infra-planner` is the one a pull-request run reaches unconditionally, by this Terraform alone. In dev its WIF binding is repo-scoped (`planner_wif_ref` and `planner_wif_environment` are null), so any workflow in `DevelopmentFinanceObservatory/infra` can impersonate it, and `plan.yml` runs on every pull request by design. It cannot mutate anything: `roles/viewer` plus the two read-only project roles alongside it grant no write API. But its read reaches further than this stack. `state_bucket` (`tf-state-dfo-dev-dev-fin-observatory`) is one GCS bucket shared by every stack, split only by object prefix, and the grant is a bucket-level `roles/storage.objectViewer` conditioned on the prefixes of the stacks in `local.state_bucket_stacks`, which lists every stack, so a pull-request run can read every stack's state, not just foundation's. That includes `../dcp`'s state, which holds `random_password.datasets_migrator` in plaintext: Terraform's `sensitive` marking redacts CLI/plan output, not the state file itself, and that password authenticates a Postgres user the dcp stack grants DDL on. The planner also holds a resource-scoped `secretAccessor` grant on the `dc-api-key` secret, and `roles/iam.securityReviewer`, which permits reading every IAM policy binding in the project. So: no mutation, but broad read, including at least one live credential.
 
 The other six are not reachable the same way, and the strength of that guarantee differs between them:
 

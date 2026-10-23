@@ -125,36 +125,26 @@ variable "principals_secret_stacks" {
   default     = []
 }
 
-variable "applier_impersonators" {
-  description = "Principals that may mint access tokens for the dfo-infra-applier service account, as full IAM member strings. Impersonating the applier reaches every role in applier_project_roles, so this list stays short and holds only people, directly or through a group, who already have project owner."
-  type        = list(string)
-}
-
-variable "ingestion_operators" {
-  description = "Principals that run Dagster ingestion into this environment's Data Commons, as full IAM member strings. Each gets token creator on the ingestion workflow's service account, object read and write on the artifacts bucket, workflows.invoker on the project, spanner.databaseReader on the Data Commons database, and workflows.viewer, storage.bucketViewer, logging.viewer, run.viewer, spanner.viewer, dataflow.viewer, monitoring.viewer, and serviceusage.serviceUsageConsumer on the project. The four resources belong to the dcp stack, so this list stays empty until dcp has applied and the ingestion_* names below are set."
-  type        = list(string)
-}
-
 variable "ingestion_workflow_service_account_email" {
-  description = "Email of the dcp ingestion workflow's service account (dcp output ingestion_workflow_service_account_email). Required once ingestion_operators is non-empty."
+  description = "Email of the dcp ingestion workflow's service account (dcp output ingestion_workflow_service_account_email). Required once the foundation principals secret's ingestion_operators object is non-empty."
   type        = string
   default     = null
 }
 
 variable "ingestion_artifacts_bucket_name" {
-  description = "Name of the dcp artifacts bucket (dcp output storage_artifacts_bucket_name). Required once ingestion_operators is non-empty."
+  description = "Name of the dcp artifacts bucket (dcp output storage_artifacts_bucket_name). Required once the foundation principals secret's ingestion_operators object is non-empty."
   type        = string
   default     = null
 }
 
 variable "ingestion_spanner_instance_id" {
-  description = "Spanner instance holding the Data Commons database (dcp output spanner_instance_id). Required once ingestion_operators is non-empty."
+  description = "Spanner instance holding the Data Commons database (dcp output spanner_instance_id). Required once the foundation principals secret's ingestion_operators object is non-empty."
   type        = string
   default     = null
 }
 
 variable "ingestion_spanner_database_id" {
-  description = "Spanner database the Data Commons services read (dcp output spanner_database_id). Required once ingestion_operators is non-empty."
+  description = "Spanner database the Data Commons services read (dcp output spanner_database_id). Required once the foundation principals secret's ingestion_operators object is non-empty."
   type        = string
   default     = null
 }

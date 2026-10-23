@@ -59,7 +59,7 @@ bootstrap: _check-gcloud
     cd {{TF_DIR}} && terraform init
 
 # Grant a collaborator read access to the DC API key secret:
-#   just grant-dc-key alice@one.org
+#   just grant-dc-key alice@example.org
 [doc("Grant a collaborator read access to the DC API key secret")]
 grant-dc-key email: _check-gcloud
     gcloud secrets add-iam-policy-binding {{DC_KEY_SECRET}} --member='user:{{email}}' --role='roles/secretmanager.secretAccessor' --project={{PROJECT}}
