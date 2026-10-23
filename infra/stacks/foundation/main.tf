@@ -321,14 +321,12 @@ locals {
     "roles/cloudsql.admin",                       # Cloud SQL instance + databases + users (website datasets instance, dcp datasets db)
     "roles/workflows.admin",                      # ingestion Cloud Workflow (dcp)
     "roles/redis.admin",                          # Memorystore Redis — only when enable_redis=true (dcp)
-    "roles/vpcaccess.admin",                      # VPC Access Connector — only when enable_redis=true (dcp)
     "roles/serviceusage.serviceUsageAdmin",       # enable project APIs (all stacks)
     "roles/serviceusage.apiKeysAdmin",            # google_apikeys_key: Maps API key (dcp auth module)
     "roles/bigquery.connectionAdmin",             # google_bigquery_connection (dcp spanner federation)
     "roles/bigquery.resourceAdmin",               # google_bigquery_reservation + assignment (dcp)
     "roles/bigquery.jobUser",                     # data.google_bigquery_default_service_account (dcp spanner federation)
     "roles/bigquery.dataOwner",                   # google_bigquery_dataset (pipelines)
-    "roles/compute.networkViewer",                # data.google_compute_network.default (dcp)
     "roles/compute.networkAdmin",                 # consumer PSC network VPC + subnetwork + address + forwarding rule (website, dcp)
     "roles/compute.loadBalancerAdmin",            # serverless NEG create/delete, which networkAdmin only reads (edge)
     "roles/compute.securityAdmin",                # Cloud Armor security policy create/update/delete (edge)
@@ -703,9 +701,10 @@ resource "google_project_iam_member" "ingestion_operator_workflow_invoker" {
 }
 
 # Read access to follow a run: the workflow and its executions, the bucket
-# list the console needs, the logs the workflow and its prep job write, the
-# prep job's executions, the Dataflow jobs the workflow launches, the
-# project's metrics, and the Spanner instance and database in the console.
+# list the console needs, the logs the workflow and its jobs write, the
+# Cloud Run job executions, the Cloud Batch preprocessing jobs, the Dataflow
+# jobs the workflow launches, the project's metrics, and the Spanner
+# instance and database in the console.
 # serviceUsageConsumer lets an operator's gcloud and client libraries bill
 # their API calls to this project. The writes stay as above, on the
 # artifacts bucket's objects and on starting the workflow.
@@ -715,6 +714,7 @@ locals {
     "roles/storage.bucketViewer",
     "roles/logging.viewer",
     "roles/run.viewer",
+    "roles/batch.jobsViewer",
     "roles/spanner.viewer",
     "roles/dataflow.viewer",
     "roles/monitoring.viewer",

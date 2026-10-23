@@ -37,9 +37,8 @@ stateless_deletion_protection = false
 # dfo_storage.tf declares the artifacts bucket so it can carry lifecycle
 # rules, which the upstream module has no input for. The module receives
 # the name and passes it through to its consumers.
-storage_create_artifacts_bucket            = false
-storage_artifacts_bucket_name              = "dfo-dev-dc-artifacts-dev-fin-observatory"
-storage_artifacts_bucket_enable_versioning = false
+storage_create_artifacts_bucket = false
+storage_artifacts_bucket_name   = "dfo-dev-dc-artifacts-dev-fin-observatory"
 
 # =============================================================================
 # Redis Module
