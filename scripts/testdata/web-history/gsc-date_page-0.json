@@ -1,0 +1,25 @@
+{
+  "rows": [
+    {
+      "keys": [
+        "2026-10-05",
+        "https://developmentfinance.org/"
+      ],
+      "clicks": 4,
+      "impressions": 120,
+      "ctr": 0.0333,
+      "position": 8.5
+    },
+    {
+      "keys": [
+        "2026-10-05",
+        "https://developmentfinance.org/data?country=KE"
+      ],
+      "clicks": 1,
+      "impressions": 30,
+      "ctr": 0.0333,
+      "position": 12
+    }
+  ],
+  "responseAggregationType": "byPage"
+}

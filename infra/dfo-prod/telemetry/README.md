@@ -27,7 +27,6 @@ The oldest day in `dfo_logs` is partial, because the sink started or retention c
 
 Days are UTC.
 
-
 ### Routes
 
 `logs_daily.normalise_route(url)` turns a request URL into a route. It drops the scheme, host, query string, fragment and trailing slashes, collapses everything under `/_next/static/` to `/_next/static/:asset`, and replaces a path segment with `:id` when it starts with a digit, holds an upper-case letter, is a UUID, or holds a digit with no hyphen or dot. API versions such as `v1` stay. The body lives in `sql/normalise_route.sql`.
@@ -51,6 +50,38 @@ The four Job policies read Cloud Run's `run.googleapis.com/job/completed_executi
 
 The dataset `searchconsole` takes Search Console's bulk data export. `search-console-data-export@system.gserviceaccount.com` gets `WRITER` on it and `roles/bigquery.jobUser` on the project. The export has no backfill, so the data starts from the day it is turned on. Search Console's setup docs ask for project-level `roles/bigquery.dataEditor` for that account. If the bulk-export setup refuses the dataset-level grant, the documented fallback is project-level `roles/bigquery.dataEditor` for `search-console-data-export@system.gserviceaccount.com`.
 
+## Web history before the exports
+
+Neither the GA4 BigQuery link nor Search Console's bulk export backfills, and developmentfinance.org has been live since 2026-10-05. Two one-off loaders read the products' APIs for the days before each export's first day and write them to the dataset `web_history`:
+
+- `scripts/load-ga4-history.sh` reads the GA4 Data API into `ga4_pages_daily`, with active users, sessions and page views per day and page path, and `ga4_daily`, with the same per day, since users do not sum across pages.
+- `scripts/load-search-console-history.sh` reads the Search Analytics API into `search_console_pages_daily`, with clicks, impressions and `sum_position` per day and page URL, and `search_console_daily`, with the same for the whole property. It reads final web-search data and requests no query dimension.
+
+`sum_position` is on the bulk export's scale, with the top position as 0. It is the API's average position minus 1, times impressions. History and export rows therefore union without adjustment, and `sum_position / impressions + 1` is the average position as Search Console shows it.
+
+GA4's `pagePath` holds no query string, so the GA4 loader stores it as returned. Users and sessions do not sum across pages, so a day with two rows for one path stops the run. The Search Console loader strips the query string and fragment from each URL and sums the rows that then match, since clicks, impressions and `sum_position` add up. The export's `url` keeps query strings, so a view must strip them the same way before the union. Each loader's first run creates its two tables, partitioned by `date`, with `CREATE TABLE IF NOT EXISTS` statements that run before the transaction. In one transaction, a run then deletes every day in its range from both its tables and inserts the rows it read. A table with no rows in the range gets only the delete, so a rerun is safe and clears stale rows. The run prints the rows it loaded per day. GA4 days are in the property's reporting time zone and Search Console days in Pacific Time, as in their exports. The reporting views union these tables with the exports, taking history rows only for days before each export's first day.
+
+The loaders run as the service account in the `web_history_service_account` output, `dfo-prod-web-history`, which has `WRITER` on `web_history` and `roles/bigquery.jobUser` on the project. Before the first run, once:
+
+- In GA4, under Admin, Property access management, add the service account's address with the Viewer role.
+- In Search Console, under Settings, Users and permissions, a property owner adds the address as a Restricted user.
+- Give the person running the loaders `roles/iam.serviceAccountTokenCreator` on the service account. Terraform sets no IAM policy on the account, so the binding stays until `remove-iam-policy-binding` with the same flags removes it.
+
+```sh
+gcloud iam service-accounts add-iam-policy-binding \
+  "$(terraform -chdir=infra/dfo-prod/telemetry output -raw web_history_service_account)" \
+  --project=prod-fin-observatory --member=user:<address> --role=roles/iam.serviceAccountTokenCreator
+```
+
+Then, from the repository root, load from launch to the day before each export's first day. Both APIs finish a day's figures about 2 to 3 days late, and a run replaces every day in its range, so a loader refuses an end date later than 4 days before today in UTC. The fourth day covers Search Console's Pacific Time days. Run it once the day before the export's first day is that old. `<site_url>` is `sc-domain:developmentfinance.org` for a Domain property, or the URL prefix with its trailing slash.
+
+```sh
+scripts/load-ga4-history.sh <ga4_property_id> 2026-10-05 <day before the GA4 export's first day>
+scripts/load-search-console-history.sh <site_url> 2026-10-05 <day before the bulk export's first day>
+```
+
+`scripts/web-history.test.sh` runs both loaders against stub `curl`, `gcloud` and `terraform` commands and the hand-written API responses in `scripts/testdata/web-history`. Run it by hand after changing either loader or `scripts/web-history-lib.sh`.
+
 ## Readers
 
 The principals secret's `readers` object lists the readers of `dfo_reporting` as IAM member strings. Each gets `READER` on `dfo_reporting`, and `roles/bigquery.jobUser` and `roles/mcp.toolUser` on the project, and no access to `logs_daily`, `dfo_logs`, `searchconsole`, or any other source dataset.
@@ -61,8 +92,8 @@ The readers and alert recipients live in the Secret Manager secret `dfo-prod-tel
 
 ```json
 {
-  "readers": {"team": "group:readers@example.org"},
-  "alerts": {"team": "alerts@example.org"}
+  "readers": { "team": "group:readers@example.org" },
+  "alerts": { "team": "alerts@example.org" }
 }
 ```
 
