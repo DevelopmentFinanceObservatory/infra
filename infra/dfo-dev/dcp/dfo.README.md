@@ -46,6 +46,8 @@ Three `just` recipes touch the dcp database. Terraform grants none of the IAM th
 
 `just datasets` lists the values `load` accepts. `load` reaches the bucket named by the `storage_artifacts_bucket_name` output under your own credentials rather than the workflow account's, and it needs object write and object delete there.
 
+Terraform grants the workflow account `roles/workflows.viewer` (`ingestion_workflow_sa_viewer` in `dfo.tf`) on top of the stack module's `roles/workflows.invoker`. `load` needs it to read the workflow definition before it starts an execution.
+
 A permission error from any of these names the resource it denied rather than the principal it denied, which sends you to the wrong service account. Read the principal off the table first.
 
 ### init-db on an existing database
