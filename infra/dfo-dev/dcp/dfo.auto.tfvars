@@ -75,11 +75,10 @@ spanner_processing_units = 1000
 # roles/run.invoker to each caller (infra/stacks/apis/dcp_access.tf, and
 # the eval reader in infra/dfo-dev/apis/eval_reader.tf), and the callers
 # send a Google ID token in X-Serverless-Authorization. Browsers cannot,
-# so the Data Commons web UI and /prototype are not public.
+# so the Data Commons web UI and /prototype are not public. DCP still
+# creates its Maps key: the services image exits at start without
+# MAPS_API_KEY, and with no public page the key is never served.
 datacommons_services_allow_unauthenticated_access = false
-
-# With no public pages, nothing loads the Maps key, so DCP creates none.
-auth_create_google_maps_api_key = false
 
 # One instance stays warm because a cold start on this service is
 # user-visible. max_instances = 1 caps it at exactly one instance. The
