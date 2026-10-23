@@ -46,10 +46,24 @@ data "google_secret_manager_secret_version" "this" {
     postcondition {
       condition = try(alltrue(flatten([
         for key, rule in local.schema : [
-          for value in values(jsondecode(self.secret_data)[key]) : can(regex(local.schemas.forms[rule.form], value))
+          # jsonencode tests the JSON type itself: only a string encodes with
+          # a leading quote, where regex would convert a number or bool.
+          for value in values(jsondecode(self.secret_data)[key]) :
+          startswith(jsonencode(value), "\"") && can(regex(local.schemas.forms[rule.form], value))
         ]
       ])), false)
-      error_message = "Every value in ${local.secret} must be in lower-case ASCII and match its object's form: ${join(", ", [for key in sort(keys(local.schema)) : "${key} ${local.schema[key].form}"])}."
+      error_message = "Every value in ${local.secret} must be a string in lower-case ASCII that matches its object's form: ${join(", ", [for key in sort(keys(local.schema)) : "${key} ${local.schema[key].form}"])}."
+    }
+    postcondition {
+      # The same minimum scripts/mask-principals.sh needs to mask a value and
+      # its address, the value with its member prefix removed.
+      condition = try(alltrue(flatten([
+        for key in keys(local.schema) : [
+          for value in values(jsondecode(self.secret_data)[key]) :
+          length(value) >= local.schemas.min_length && length(replace(value, "/${local.schemas.prefix}/", "")) >= local.schemas.min_length
+        ]
+      ])), false)
+      error_message = "Every value in ${local.secret}, and its address without the member prefix, must be at least ${local.schemas.min_length} characters, so CI can mask it."
     }
     postcondition {
       condition = try(alltrue([

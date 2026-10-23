@@ -135,6 +135,11 @@ accepts "ai with both empty" "$A" '{"studio_token_readers": {}, "mcp_token_reade
 refuses "ai missing key" "$A" "{\"studio_token_readers\": {\"testers\": $G}}" "missing top-level key mcp_token_readers"
 refuses "ai unknown prefix" "$A" '{"studio_token_readers": {"x": "team:a@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai non-string member" "$A" '{"studio_token_readers": {"x": 1}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
+refuses "ai bool member" "$A" '{"studio_token_readers": {"x": true}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
+refuses "ai null member" "$A" '{"studio_token_readers": {"x": null}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
+accepts "ai member with a 4-character address" "$A" '{"studio_token_readers": {"x": "group:a@bc", "y": "domain:ab.c"}, "mcp_token_readers": {}}'
+refuses "ai member with a 3-character address" "$A" '{"studio_token_readers": {"x": "group:a@b"}, "mcp_token_readers": {}}' "at least 4 characters"
+refuses "ai domain with a 3-character domain" "$A" '{"studio_token_readers": {"x": "domain:a.b"}, "mcp_token_readers": {}}' "at least 4 characters"
 refuses "ai duplicate member" "$A" "{\"studio_token_readers\": {}, \"mcp_token_readers\": {\"x\": $G, \"y\": $G}}" "mcp_token_readers holds the same value"
 refuses "ai upper-case address" "$A" '{"studio_token_readers": {"x": "group:A@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai case-only duplicate" "$A" '{"studio_token_readers": {"x": "group:a@example.org", "y": "group:A@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
@@ -146,6 +151,9 @@ refuses "telemetry missing readers" "$T" '{"alerts": {"x": "a@example.org"}}' "m
 refuses "telemetry empty alerts" "$T" "{\"readers\": {\"x\": $G}, \"alerts\": {}}" "alerts must hold at least 1 entry"
 refuses "telemetry prefixed alert" "$T" "{\"readers\": {}, \"alerts\": {\"x\": $G}}" "each alerts value must be a bare email address"
 refuses "telemetry reader with no prefix" "$T" '{"readers": {"x": "a@example.org"}, "alerts": {"x": "b@example.org"}}' "each readers value must be"
+accepts "telemetry 4-character alert" "$T" '{"readers": {}, "alerts": {"x": "a@bc"}}'
+refuses "telemetry 3-character alert" "$T" '{"readers": {}, "alerts": {"x": "a@b"}}' "at least 4 characters"
+refuses "telemetry number alert" "$T" '{"readers": {}, "alerts": {"x": 1234}}' "each alerts value must be"
 refuses "telemetry duplicate alert" "$T" '{"readers": {}, "alerts": {"x": "a@example.org", "y": "a@example.org"}}' "alerts holds the same value"
 refuses "telemetry alert with a trailing space" "$T" '{"readers": {}, "alerts": {"x": "a@example.org "}}' "each alerts value must be a bare email address"
 
