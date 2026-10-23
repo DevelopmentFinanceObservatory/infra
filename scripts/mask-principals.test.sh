@@ -84,23 +84,42 @@ check "a -principal secret is not read" "$(lacks 'versions access')"
 check "listing names the project" "$(has 'secrets list --project=example-project')"
 
 # 2. Each value is masked whole and without its type prefix, at any depth,
-# and the file holds the same set once each.
+# each lower-cased and URL-encoded from both cases, and the file holds the
+# same set once each.
 cat >"$WORK/secrets/ns-apis-principals" <<'JSON'
-{"invokers": {"devs": "group:devs@example.org", "lead": "lead@example.org"}}
+{"invokers": {"devs": "group:devs@example.org", "lead": "Lead.Person@Example.org"}}
 JSON
 cat >"$WORK/secrets/ns-website-principals" <<'JSON'
 {"admins": {"ops": "user:ops@example.org", "devs": "group:devs@example.org"}, "nested": {"a": {"b": "serviceAccount:bot@example.iam.gserviceaccount.com"}}}
 JSON
-expected="$(printf '%s\n' bot@example.iam.gserviceaccount.com devs@example.org group:devs@example.org lead@example.org ops@example.org serviceAccount:bot@example.iam.gserviceaccount.com user:ops@example.org | sort -u)"
+expected="$(printf '%s\n' \
+    group:devs@example.org group%3Adevs%40example.org group%3adevs%40example.org \
+    devs@example.org devs%40example.org \
+    Lead.Person@Example.org lead.person@example.org Lead.Person%40Example.org lead.person%40example.org \
+    user:ops@example.org user%3Aops%40example.org user%3aops%40example.org \
+    ops@example.org ops%40example.org \
+    serviceAccount:bot@example.iam.gserviceaccount.com serviceaccount:bot@example.iam.gserviceaccount.com \
+    serviceAccount%3Abot%40example.iam.gserviceaccount.com serviceaccount%3abot%40example.iam.gserviceaccount.com \
+    serviceaccount%3Abot%40example.iam.gserviceaccount.com \
+    bot@example.iam.gserviceaccount.com bot%40example.iam.gserviceaccount.com | sort -u)"
 run example-project "$OUT_FILE"
 check "principals secrets exit 0" "$(is "$status" 0)"
-check "the file holds every member and address once" "$(is "$file" "$expected")"
+check "the file holds every form of every member and address once" "$(is "$file" "$expected")"
 check "every file line is masked" "$(is "$(printf '%s\n' "$out" | grep '^::add-mask::' | sed 's/^::add-mask:://')" "$expected")"
-check "no value appears outside a mask command" "$(is "$(plain | grep -c 'example\.org' || true)" 0)"
+check "no value appears outside a mask command" "$(is "$(plain | grep -ci 'example\.org' || true)" 0)"
 check "each principals secret is read at latest in the project" "$(has 'secrets versions access latest --secret=ns-apis-principals --project=example-project')"
 check "the second principals secret is read" "$(has '--secret=ns-website-principals')"
-check "the summary counts values and secrets" "$(says 'Masked 7 principal value(s) from 2 secret(s)')"
+check "the summary counts values and secrets" "$(says 'Masked 21 principal value(s) from 2 secret(s)')"
 check "the file is private" "$(is "$(stat -f '%Lp' "$OUT_FILE" 2>/dev/null || stat -c '%a' "$OUT_FILE")" 600)"
+
+# The URL-encoded form escapes what encodeURIComponent escapes, and keeps
+# the !'()* that jq's @uri would also escape.
+printf '%s' '{"a": {"b": "user:O'"'"'Neil+(x)@example.org"}}' >"$WORK/secrets/ns-ai-principals"
+run example-project "$OUT_FILE"
+rm "$WORK/secrets/ns-ai-principals"
+check "an address with reserved characters exits 0" "$(is "$status" 0)"
+check "it is URL-encoded as encodeURIComponent does" "$(is "$(grep -cx "O'Neil%2B(x)%40example.org" <<<"$file" || true)" 1)"
+check "and lower-cased" "$(is "$(grep -cx "user%3ao'neil%2b(x)%40example.org" <<<"$file" || true)" 1)"
 
 # 3. A failed listing fails, and writes no file.
 export STUB_FAIL_LIST=1

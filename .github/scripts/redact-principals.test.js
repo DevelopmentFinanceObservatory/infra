@@ -36,6 +36,14 @@ test("leaves no character of an address that holds a shorter one", () => {
   assert.equal(redact("aa@example.org a@example.org"), "*** ***");
 });
 
+test("matches any letter case and leaves other text alone", () => {
+  const redact = redactor(listFile(["Lead.Person@Example.org", "group%3ALead.Person%40Example.org"]));
+  assert.equal(
+    redact("[id=p/roles/viewer/user:lead.person@example.org] LEAD.PERSON@EXAMPLE.ORG group%3alead.person%40example.org LeadXPerson@Example.org"),
+    "[id=p/roles/viewer/user:***] *** *** LeadXPerson@Example.org",
+  );
+});
+
 test("an empty list passes text through", () => {
   assert.equal(redactor(listFile([]))("Plan: 1 to add"), "Plan: 1 to add");
 });

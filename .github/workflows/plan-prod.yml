@@ -44,7 +44,10 @@
 # `<namespace>-<stack>-principals` secrets in the job's log and lists them in
 # $RUNNER_TEMP, and base's plan-comment.js strips each listed address from the
 # step summary and the PR comment. See plan.yml's "Principal addresses". Both
-# come from main, so a release PR plans with main's copy of each.
+# come from main, so a release PR plans with main's copy of each, and a
+# release PR that adds them is planned without them. They reach main in a
+# release of their own, before any release that carries a stack reading a
+# `*-principals` secret.
 #
 # The plan job holds no concurrency group. It runs `-lock=false` and writes
 # nothing, and a job waiting for approval in apply-stack.yml's group would
