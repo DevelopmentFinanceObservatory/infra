@@ -8,10 +8,11 @@ Ai applies after `foundation`, `platform`, `dcp`, and `apis`, and before `websit
 
 ## Made by hand first
 
-Three secrets, each with at least one version:
+Four secrets, each with at least one version:
 
 - `dfo-prod-gemini-api-key`, the Gemini API key, shared with the `dcp` stack.
 - `dfo-prod-langfuse-public-key` and `dfo-prod-langfuse-secret-key`, a Langfuse Cloud EU key pair.
+- `dfo-prod-ai-principals`, the studio and MCP token readers, which `scripts/bootstrap-principals.sh` writes, as `infra/dfo-dev/ai/README.md` "Principals secret" describes, with `prod-fin-observatory` and `dfo-prod-ai-principals` as its arguments. Both objects are empty until someone needs a token. Plan fails while the secret does not exist.
 
 ## Langfuse export
 

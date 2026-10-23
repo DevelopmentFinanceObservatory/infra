@@ -3,4 +3,3 @@
 # them in.
 billing_account_id        = ""
 gemini_key_project_number = ""
-budget_alert_emails       = []

@@ -34,10 +34,19 @@ resource "google_secret_manager_secret_version" "studio_api_token" {
 }
 
 # Humans who send studio requests from their own machines read the value from Secret Manager rather than passing it around; each grant is scoped to this one secret.
+# The members come from the principals secret's studio_token_readers object (main.tf), keyed by label.
 # The service's own read arrives through the module's secret_env_vars grant, not here.
-resource "google_secret_manager_secret_iam_member" "studio_api_token_readers" {
-  for_each  = toset(var.studio_token_readers)
+resource "google_secret_manager_secret_iam_member" "studio_api_token_reader" {
+  for_each  = toset(nonsensitive(keys(local.principals.studio_token_readers)))
   secret_id = google_secret_manager_secret.studio_api_token.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = each.value
+  member    = local.principals.studio_token_readers[each.key]
+}
+
+# The resource above was once keyed by member string. Its old state entries are forgotten, so the live bindings stay, and the label-keyed resource re-creates the same bindings, which IAM accepts as no change.
+removed {
+  from = google_secret_manager_secret_iam_member.studio_api_token_readers
+  lifecycle {
+    destroy = false
+  }
 }

@@ -57,7 +57,7 @@ The principals secret's `readers` object lists the readers of `dfo_reporting` as
 
 ## Principals secret
 
-The readers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`, which `main.tf` reads, so no address sits in this repository or in a plan log. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. The secret holds one JSON object:
+The readers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. `readers` holds IAM members and `alerts` at least one bare address:
 
 ```json
 {
@@ -66,15 +66,13 @@ The readers and alert recipients live in the Secret Manager secret `dfo-prod-tel
 }
 ```
 
-A reader is `group:`, `user:`, `serviceAccount:` or `domain:` followed by an address, and `alerts` holds at least one address. The labels key the grants and channels, so they appear in resource addresses and plan output, and hold only lower-case letters, digits, hyphens and underscores. Plan fails on a secret of any other shape.
-
 To create the secret or change its members, write the JSON to a file outside the repository and run
 
 ```sh
 scripts/bootstrap-principals.sh prod-fin-observatory dfo-prod-telemetry-principals principals.json
 ```
 
-The script checks the file's shape, creates the secret if it is absent, adds the file as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. `foundation` makes the same grant through `principals_secret_stacks`, but this stack's first plan can run before that apply. The next telemetry apply moves the grants and channels to the new members.
+[`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states the rules the secret must meet, what the script does, and the relabel order.
 
 ## Apply order
 

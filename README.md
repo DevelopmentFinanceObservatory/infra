@@ -43,7 +43,7 @@ Each stack's README says what belongs in it.
 
 ## Getting started
 
-Planning and applying need access to ONE's Google Cloud projects (`dev-fin-observatory` and `prod-fin-observatory`), which only the ONE Data team holds. Without it you can read the code and run the checks that need no credentials. You need [just](https://github.com/casey/just), [Terraform](https://developer.hashicorp.com/terraform/install) 1.5 or later, and [uv](https://docs.astral.sh/uv/).
+Planning and applying need access to ONE's Google Cloud projects (`dev-fin-observatory` and `prod-fin-observatory`), which only the ONE Data team holds. Without it you can read the code and run the checks that need no credentials. You need [just](https://github.com/casey/just), [Terraform](https://developer.hashicorp.com/terraform/install) 1.7 or later, and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 just install                # install the pre-commit hooks

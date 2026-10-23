@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.7"
 
   required_providers {
     google = {
@@ -402,9 +402,10 @@ resource "google_secret_manager_secret_iam_member" "dc_key_planner" {
 }
 
 # The same grant on each stack's hand-made principals secret, which holds the
-# addresses that stack grants or notifies (the telemetry stack reads
-# <namespace>-telemetry-principals in its main.tf). The planner reads it to
-# plan that stack. scripts/bootstrap-principals.sh makes the same grant when
+# addresses that stack grants or notifies. Each listed stack, this one
+# included, reads its <namespace>-<stack>-principals secret through
+# infra/modules/principals-secret, and the planner reads it to plan that
+# stack. scripts/bootstrap-principals.sh makes the same grant when
 # it creates the secret, since the stack's first plan can run before this
 # one applies.
 locals {
@@ -417,6 +418,22 @@ resource "google_secret_manager_secret_iam_member" "principals_planner" {
   secret_id = "projects/${var.project_id}/secrets/${each.key}"
   role      = "roles/secretmanager.secretAccessor"
   member    = module.planner.member
+}
+
+# This stack's own principals: the applier impersonators, the ingestion
+# operators and the Gemini budget alert recipients (budget.tf), read from a
+# hand-made secret. The module holds the rules and this stack's schema, and
+# scripts/bootstrap-principals.sh writes it.
+module "principals" {
+  source = "../../modules/principals-secret"
+
+  project_id = var.project_id
+  namespace  = var.namespace
+  stack      = "foundation"
+}
+
+locals {
+  principals = module.principals.principals
 }
 
 # Applies this environment's stacks on a push to its branch. No separate
@@ -480,12 +497,23 @@ resource "google_project_iam_member" "applier_transfer_configs" {
 # automation at a glance. The original caller survives in
 # authenticationInfo.serviceAccountDelegationInfo. Anyone auditing this
 # account's activity has to read that field to tell a person from a pipeline.
-resource "google_service_account_iam_member" "applier_impersonators" {
-  for_each = toset(var.applier_impersonators)
+resource "google_service_account_iam_member" "applier_impersonator" {
+  for_each = toset(nonsensitive(keys(local.principals.applier_impersonators)))
 
   service_account_id = module.applier.name
   role               = "roles/iam.serviceAccountTokenCreator"
-  member             = each.value
+  member             = local.principals.applier_impersonators[each.key]
+}
+
+# The resource above and the five ingestion operator resources below were once
+# keyed by member string. Their old state entries are forgotten, so the live
+# bindings stay, and the label-keyed resources re-create the same bindings,
+# which IAM accepts as no change.
+removed {
+  from = google_service_account_iam_member.applier_impersonators
+  lifecycle {
+    destroy = false
+  }
 }
 
 # The foundation creates dfo-ai's deployer identity and grants its Artifact
@@ -674,37 +702,38 @@ module "site_qa_deployer" {
 # own service account, stages import bundles in the artifacts bucket, and
 # reads the Spanner database to check what landed. All four resources
 # belong to the dcp stack, which applies after this one, so their names
-# arrive as variables and the list stays empty until dcp exists.
+# arrive as variables and the secret's ingestion_operators object stays empty
+# until dcp exists. Each resource is keyed by the operator's label.
 locals {
-  ingestion_operators = toset(var.ingestion_operators)
+  ingestion_operators = toset(nonsensitive(keys(local.principals.ingestion_operators)))
 }
 
-resource "google_service_account_iam_member" "ingestion_operator_workflow_token_creator" {
+resource "google_service_account_iam_member" "ingestion_workflow_token_creator" {
   for_each = local.ingestion_operators
 
   service_account_id = "projects/${var.project_id}/serviceAccounts/${var.ingestion_workflow_service_account_email}"
   role               = "roles/iam.serviceAccountTokenCreator"
-  member             = each.value
+  member             = local.principals.ingestion_operators[each.key]
 
   lifecycle {
     precondition {
       condition     = var.ingestion_workflow_service_account_email != null
-      error_message = "ingestion_operators is set, so ingestion_workflow_service_account_email must be too."
+      error_message = "The foundation principals secret lists ingestion_operators, so ingestion_workflow_service_account_email must be too."
     }
   }
 }
 
-resource "google_storage_bucket_iam_member" "ingestion_operator_artifacts_writer" {
+resource "google_storage_bucket_iam_member" "ingestion_artifacts_writer" {
   for_each = local.ingestion_operators
 
   bucket = var.ingestion_artifacts_bucket_name
   role   = "roles/storage.objectUser"
-  member = each.value
+  member = local.principals.ingestion_operators[each.key]
 
   lifecycle {
     precondition {
       condition     = var.ingestion_artifacts_bucket_name != null
-      error_message = "ingestion_operators is set, so ingestion_artifacts_bucket_name must be too."
+      error_message = "The foundation principals secret lists ingestion_operators, so ingestion_artifacts_bucket_name must be too."
     }
   }
 }
@@ -712,12 +741,12 @@ resource "google_storage_bucket_iam_member" "ingestion_operator_artifacts_writer
 # Cloud Workflows has no per-workflow IAM resource in the provider, so the
 # invoker grant is project-wide. The ingestion workflow is the only workflow
 # in the project.
-resource "google_project_iam_member" "ingestion_operator_workflow_invoker" {
+resource "google_project_iam_member" "ingestion_workflow_invoker" {
   for_each = local.ingestion_operators
 
   project = var.project_id
   role    = "roles/workflows.invoker"
-  member  = each.value
+  member  = local.principals.ingestion_operators[each.key]
 }
 
 # Read access to follow a run: the workflow and its executions, the bucket
@@ -740,29 +769,64 @@ locals {
   ]
 }
 
-resource "google_project_iam_member" "ingestion_operator_viewer" {
+resource "google_project_iam_member" "ingestion_viewer" {
   for_each = {
     for pair in setproduct(local.ingestion_operators, local.ingestion_operator_viewer_roles) :
-    "${pair[0]} ${pair[1]}" => { member = pair[0], role = pair[1] }
+    "${pair[0]} ${pair[1]}" => { label = pair[0], role = pair[1] }
   }
 
   project = var.project_id
   role    = each.value.role
-  member  = each.value.member
+  member  = local.principals.ingestion_operators[each.value.label]
 }
 
-resource "google_spanner_database_iam_member" "ingestion_operator_database_reader" {
+resource "google_spanner_database_iam_member" "ingestion_database_reader" {
   for_each = local.ingestion_operators
 
   instance = var.ingestion_spanner_instance_id
   database = var.ingestion_spanner_database_id
   role     = "roles/spanner.databaseReader"
-  member   = each.value
+  member   = local.principals.ingestion_operators[each.key]
 
   lifecycle {
     precondition {
       condition     = var.ingestion_spanner_instance_id != null && var.ingestion_spanner_database_id != null
-      error_message = "ingestion_operators is set, so ingestion_spanner_instance_id and ingestion_spanner_database_id must be too."
+      error_message = "The foundation principals secret lists ingestion_operators, so ingestion_spanner_instance_id and ingestion_spanner_database_id must be too."
     }
+  }
+}
+
+removed {
+  from = google_service_account_iam_member.ingestion_operator_workflow_token_creator
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = google_storage_bucket_iam_member.ingestion_operator_artifacts_writer
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = google_project_iam_member.ingestion_operator_workflow_invoker
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = google_project_iam_member.ingestion_operator_viewer
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = google_spanner_database_iam_member.ingestion_operator_database_reader
+  lifecycle {
+    destroy = false
   }
 }

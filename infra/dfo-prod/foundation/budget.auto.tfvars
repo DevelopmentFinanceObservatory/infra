@@ -5,4 +5,3 @@
 # give prod its own figure.
 billing_account_id        = ""
 gemini_key_project_number = ""
-budget_alert_emails       = []

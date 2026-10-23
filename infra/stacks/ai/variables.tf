@@ -59,17 +59,6 @@ variable "site_origin" {
   }
 }
 
-variable "studio_token_readers" {
-  description = "IAM members granted secretAccessor on the studio API token secret alone, the humans who call the studio routes from their own machines."
-  type        = list(string)
-}
-
-variable "mcp_token_readers" {
-  description = "IAM members granted secretAccessor on the MCP API token secret alone, the callers who reach the raw MCP tool mounts from outside the service. Empty by default: the token reaches the tools directly, below the studio routes, so each member is added as one needs that access."
-  type        = list(string)
-  default     = []
-}
-
 variable "platform_postgres_instance_name" {
   description = "Name of the shared Cloud SQL instance from the `platform` stack. Copied from that stack's `instance_name` output."
   type        = string
