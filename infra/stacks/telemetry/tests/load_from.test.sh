@@ -3,7 +3,7 @@
 # start day it computes, load_from, and the end of its source reads before
 # the current UTC day. Not wired into CI. Run by hand after touching the
 # DECLARE and SET statements at the top of the query or the source reads of
-# requests_daily, routes_daily and errors_daily:
+# requests_daily, routes_daily, errors_daily and mcp_daily:
 #   infra/stacks/telemetry/tests/load_from.test.sh [project]
 #
 # Each case runs some of the query's statements as one BigQuery script, with
@@ -17,27 +17,8 @@ PROJECT="${1:-prod-fin-observatory}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CUTOFF="2026-10-23 19:00:00+00"
 
-# statements <pattern>: the statements of logs_daily.sql that start with
-# <pattern>, each ending at a line that ends in ";", with comment lines
-# dropped. Exits when none matches.
-statements() {
-    local found
-    found="$(awk -v pattern="^($1)" '
-        { buf = buf $0 "\n" }
-        /;[[:space:]]*$/ {
-            body = buf
-            gsub(/(^|\n)[[:space:]]*--[^\n]*/, "", body)
-            sub(/^[[:space:]]+/, "", body)
-            if (body ~ pattern) printf "%s\n", body
-            buf = ""
-        }
-    ' "$DIR/../sql/logs_daily.sql")"
-    [ -n "$found" ] || {
-        echo "load_from.test.sh: no statement in logs_daily.sql starts with $1" >&2
-        exit 1
-    }
-    printf '%s\n' "$found"
-}
+# shellcheck source=infra/stacks/telemetry/tests/logs-daily-lib.sh
+. "$DIR/logs-daily-lib.sh"
 
 HEAD="$(statements 'DECLARE |SET ')"
 
@@ -87,13 +68,18 @@ check gap-daily "$BACKFILL" "TIMESTAMP '2026-12-05 03:00:00+00'" "DATE '2026-12-
 check gap-empty-table "$BACKFILL" "TIMESTAMP '2026-12-05 03:00:00+00'" "" 2026-09-24
 check gap-on-cutoff-day "$BACKFILL" "TIMESTAMP '2026-10-23 20:00:00+00'" "DATE '2026-10-24'" 2026-10-24
 
-# The source reads of requests_daily and errors_daily, run from load_from
-# yesterday over a request and an error entry just before midnight and just
-# after it. The run's own day is partial, so only yesterday's entries load.
+# The source reads of requests_daily, errors_daily and mcp_daily, run from
+# load_from yesterday over a request, an error and an MCP entry just before
+# midnight and just after it. The run's own day is partial, so only yesterday's entries load.
 # routes_daily reads the requests temp table, so it shares that bound.
 REQUESTS="$(statements 'CREATE TEMP TABLE requests ')"
 # shellcheck disable=SC2016 # the pattern is the template's literal placeholder
 ERRORS="$(statements 'INSERT INTO `[$][{]dataset[}][.]errors_daily`')"
+MCP_LINE="$(statements 'DECLARE mcp_line ')"
+# shellcheck disable=SC2016 # the pattern is the template's literal placeholder
+MCP="$(statements 'INSERT INTO `[$][{]dataset[}][.]mcp_daily`')"
+# A tool call as harness.combined_mcp logs it.
+MCP_ENTRY='combined mcp call tool=get_data outcome=ok revision=2026-07-28 caller=ip:0f3a trace_id=None client="claude-code" client_version="2.1.309" views=undeclared view_mime_types=None'
 ENTRIES="(SELECT * FROM UNNEST(ARRAY<STRUCT<
     timestamp TIMESTAMP, log_id STRING, severity STRING,
     resource STRUCT<type STRING, labels JSON>,
@@ -111,18 +97,31 @@ ENTRIES="(SELECT * FROM UNNEST(ARRAY<STRUCT<
     NULL, JSON '{\"logger\": \"app\"}'),
   (TIMESTAMP(CURRENT_DATE()), 'run.googleapis.com/stderr', 'ERROR',
     ('cloud_run_revision', JSON '{\"service_name\": \"dfo-prod-api\"}'),
-    NULL, JSON '{\"logger\": \"app\"}')]))"
+    NULL, JSON '{\"logger\": \"app\"}'),
+  (TIMESTAMP(CURRENT_DATE()) - INTERVAL 1 SECOND, 'run.googleapis.com/stderr', 'INFO',
+    ('cloud_run_revision', JSON '{\"service_name\": \"dfo-prod-ai\"}'),
+    NULL, JSON_OBJECT('logger', 'harness.combined_mcp', 'message', '$MCP_ENTRY')),
+  (TIMESTAMP(CURRENT_DATE()), 'run.googleapis.com/stderr', 'INFO',
+    ('cloud_run_revision', JSON '{\"service_name\": \"dfo-prod-ai\"}'),
+    NULL, JSON_OBJECT('logger', 'harness.combined_mcp', 'message', '$MCP_ENTRY'))]))"
 script="DECLARE load_from DATE DEFAULT CURRENT_DATE() - 1;
+$MCP_LINE
 CREATE TEMP FUNCTION normalise_route(url STRING) AS (url);
 CREATE TEMP TABLE errors_daily (
   day DATE, resource_type STRING, service STRING, logger STRING, severity STRING, entries INT64
 );
+CREATE TEMP TABLE mcp_daily (
+  day DATE, caller_kind STRING, client STRING, request STRING, outcome STRING, calls INT64,
+  callers_sketch BYTES
+);
 $REQUESTS
 $ERRORS
+$MCP
 SELECT FORMAT(
-  'requests %s and errors %s',
+  'requests %s and errors %s and mcp %s',
   (SELECT STRING_AGG(CAST(day AS STRING), ' ' ORDER BY day) FROM requests),
-  (SELECT STRING_AGG(CAST(day AS STRING), ' ' ORDER BY day) FROM errors_daily)
+  (SELECT STRING_AGG(CAST(day AS STRING), ' ' ORDER BY day) FROM errors_daily),
+  (SELECT STRING_AGG(CAST(day AS STRING), ' ' ORDER BY day) FROM mcp_daily)
 ) AS days;"
 # shellcheck disable=SC2016 # the patterns are the template's literal placeholders
 script="${script//'`${source}`'/$ENTRIES}"
@@ -130,10 +129,12 @@ script="${script//'`${source}`'/$ENTRIES}"
 script="${script//'`${normalise_route}`'/normalise_route}"
 # shellcheck disable=SC2016
 script="${script//'`${dataset}.errors_daily`'/errors_daily}"
+# shellcheck disable=SC2016
+script="${script//'`${dataset}.mcp_daily`'/mcp_daily}"
 got="$(bq --quiet query --project_id="$PROJECT" --location=EU --use_legacy_sql=false \
     --format=csv <<<"$script" | tail -n 1)"
 yesterday="$(date -u -v-1d +%F 2>/dev/null || date -u -d '1 day ago' +%F)"
-want="requests $yesterday and errors $yesterday"
+want="requests $yesterday and errors $yesterday and mcp $yesterday"
 cases=$((cases + 1))
 if [ "$got" != "$want" ]; then
     echo "FAIL whole-days: want $want, got $got" >&2

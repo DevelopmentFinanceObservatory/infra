@@ -11,7 +11,9 @@ locals {
   # foundation stack.
   reporting_source_datasets = {
     logs           = [google_bigquery_dataset.logs_daily.dataset_id]
+    mcp            = [google_bigquery_dataset.logs_daily.dataset_id]
     website        = ["website_export"]
+    accounts       = ["website_export"]
     langfuse       = ["langfuse_export"]
     ga4            = [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
     search_console = [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
@@ -42,6 +44,11 @@ locals {
       description = "Cloud Run stdout and stderr entries at WARNING or above per UTC day, service or job, logger and severity. No message text."
       query       = templatefile("${path.module}/sql/reporting/service_errors_daily.sql", { errors_daily = "${local.logs_daily_ref}.errors_daily" })
     }
+    mcp_daily = {
+      source      = "mcp"
+      description = "Combined MCP server tool calls, resource reads, resource lists and initializes per UTC day, caller kind, client, request and outcome, with an HLL++ sketch of the callers. No caller, trace id, URI or other text."
+      query       = templatefile("${path.module}/sql/reporting/mcp_daily.sql", { mcp_daily = "${local.logs_daily_ref}.mcp_daily" })
+    }
     deploys = {
       source      = "logs"
       description = "Each Cloud Run revision deployed while the logs source ran, timed at its first request."
@@ -55,6 +62,11 @@ locals {
         normalise_route = "${var.project_id}.${google_bigquery_dataset.reporting.dataset_id}.${google_bigquery_routine.reporting_normalise_route.routine_id}"
       })
     }
+    accounts_daily = {
+      source      = "accounts"
+      description = "Website accounts created per UTC day and organisation: the email domain when it holds at least 3 accounts, Personal email for a webmail domain, and Other organisations otherwise. No address and no user id."
+      query       = templatefile("${path.module}/sql/reporting/accounts_daily.sql", { accounts = "${var.project_id}.website_export.account_daily" })
+    }
     ai_turns = {
       source      = "langfuse"
       description = "One row per AI assistant turn: start, latency, time to first token, generation and tool counts, tokens, cost, errors, and an HLL++ sketch of its session. No text and no id."
@@ -62,7 +74,7 @@ locals {
     }
     ai_observations_daily = {
       source      = "langfuse"
-      description = "Langfuse observations per UTC day, type, name and model, with errors, latency quantiles, tokens and cost."
+      description = "Langfuse observations per UTC day, type, name and model, with errors, latency quantiles, tokens, cost, and a KLL sketch of latency that merges across rows."
       query       = templatefile("${path.module}/sql/reporting/ai_observations_daily.sql", { observations = local.langfuse_ref })
     }
     ga4_daily = {

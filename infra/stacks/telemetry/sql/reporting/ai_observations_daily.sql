@@ -4,7 +4,10 @@
 -- the Langfuse export's observation rows, across every trace. It holds no
 -- text and no id. errors counts the observations at level ERROR. Counts,
 -- tokens and cost sum across rows. The latency quantiles are approximate
--- and do not combine across rows.
+-- and do not combine across rows. latency_sketch is a KLL sketch of the
+-- row's latency_seconds (precision 1000), NULL when no observation in the row
+-- has a latency; KLL_QUANTILES.MERGE_FLOAT64 over the sketches of several
+-- rows gives the quantiles of their pooled observations.
 SELECT
   DATE(start_time) AS day,
   type,
@@ -19,6 +22,7 @@ SELECT
   SUM(total_cost_usd) AS cost_usd,
   trace_name,
   level,
-  SUM(total_tokens) AS total_tokens
+  SUM(total_tokens) AS total_tokens,
+  KLL_QUANTILES.INIT_FLOAT64(latency_seconds, 1000) AS latency_sketch
 FROM `${observations}`
 GROUP BY day, type, name, model, trace_name, level
