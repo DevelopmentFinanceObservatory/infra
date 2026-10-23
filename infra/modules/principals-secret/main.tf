@@ -1,4 +1,8 @@
 terraform {
+  # The stack validation in variables.tf reads path.module, which input
+  # validations accept from Terraform 1.9.
+  required_version = ">= 1.9"
+
   required_providers {
     google = {
       source = "hashicorp/google"

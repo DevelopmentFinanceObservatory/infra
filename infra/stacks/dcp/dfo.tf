@@ -44,8 +44,8 @@ data "google_secret_manager_secret" "search_api_gemini" {
 }
 
 # The serving SA reads the Gemini key secret through this per-secret grant.
-# DCP 1.1.6 removes the project-wide secretmanager.secretAccessor the stack
-# module grants it; until then it holds both.
+# The stack module grants it the DC and Maps key secrets the same way and no
+# project-wide secretmanager.secretAccessor.
 resource "google_secret_manager_secret_iam_member" "serving_sa_gemini_key" {
   project   = var.project_id
   secret_id = data.google_secret_manager_secret.search_api_gemini.secret_id
@@ -113,4 +113,18 @@ resource "google_project_iam_member" "ingestion_workflow_sa_viewer" {
   project = var.project_id
   role    = "roles/workflows.viewer"
   member  = "serviceAccount:${module.stack.ingestion_workflow_service_account_email}"
+}
+
+# DCP 1.1.6 runs preprocessing on Cloud Batch and drops the Cloud Run
+# preprocessing job. Prod state holds that job with deletion_protection = true,
+# a Terraform-side flag that blocks the destroy, and the module no longer
+# declares the job, so no apply can clear the flag first. Terraform forgets the
+# job here, and infra/dfo-prod/dcp/dfo.README.md, "Retired preprocessing job",
+# gives the gcloud command that deletes it.
+removed {
+  from = module.stack.module.ingestion_preprocessing_job.google_cloud_run_v2_job.dc_data_job
+
+  lifecycle {
+    destroy = false
+  }
 }
