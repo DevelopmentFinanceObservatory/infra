@@ -68,7 +68,7 @@ locals {
     }
     ai_observations_daily = {
       source      = "langfuse"
-      description = "Langfuse observations per UTC day, type, name and model, with errors, latency quantiles, tokens and cost."
+      description = "Langfuse observations per UTC day, type, name and model, with errors, latency quantiles, tokens, cost, and a KLL sketch of latency that merges across rows."
       query       = templatefile("${path.module}/sql/reporting/ai_observations_daily.sql", { observations = local.langfuse_ref })
     }
     ga4_daily = {

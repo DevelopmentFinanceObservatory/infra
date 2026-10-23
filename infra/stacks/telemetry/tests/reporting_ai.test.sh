@@ -14,6 +14,9 @@
 #     its generation's start to its tool call's end.
 #   t3, a turn in sess-2 still running, with no end time.
 #   t4, a studio.refresh trace with no session, which is not a turn.
+#   t5 and t6, studio.refresh traces on two later days holding fetch tool
+#     calls: three of 1 second on the first day and one of 9 on the second.
+#     The pooled median is 1, and the mean of the two daily medians is 5.
 # Each turn's session sketch counts one session, and merged over all turns
 # they count 2.
 set -euo pipefail
@@ -45,7 +48,15 @@ SOURCES="WITH
     ('o6', 't3', NULL, TRUE, 'sess-2', 'turn', 'turn', 'SPAN', 'DEFAULT', 'dfo-prod-ai', NULL,
       '2026-10-06 08:00:00+00', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
     ('o7', 't4', NULL, TRUE, NULL, 'studio.refresh', 'studio.refresh', 'SPAN', 'DEFAULT', 'dfo-prod-ai', NULL,
-      '2026-10-06 09:00:00+00', '2026-10-06 09:00:01+00', 1.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL)])
+      '2026-10-06 09:00:00+00', '2026-10-06 09:00:01+00', 1.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+    ('o9', 't5', NULL, TRUE, NULL, 'studio.refresh', 'fetch', 'TOOL', 'DEFAULT', 'dfo-prod-ai', NULL,
+      '2026-10-07 09:00:00+00', '2026-10-07 09:00:01+00', 1.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+    ('o10', 't5', 'o9', FALSE, NULL, 'studio.refresh', 'fetch', 'TOOL', 'DEFAULT', 'dfo-prod-ai', NULL,
+      '2026-10-07 09:00:02+00', '2026-10-07 09:00:03+00', 1.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+    ('o11', 't5', 'o9', FALSE, NULL, 'studio.refresh', 'fetch', 'TOOL', 'DEFAULT', 'dfo-prod-ai', NULL,
+      '2026-10-07 09:00:04+00', '2026-10-07 09:00:05+00', 1.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+    ('o12', 't6', NULL, TRUE, NULL, 'studio.refresh', 'fetch', 'TOOL', 'DEFAULT', 'dfo-prod-ai', NULL,
+      '2026-10-08 09:00:00+00', '2026-10-08 09:00:09+00', 9.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL)])
   )"
 
 TURNS="$(view_sql ai_turns observations=observations)"
@@ -65,14 +76,35 @@ check 'ai_turns sessions merged over every turn' \
   SELECT COUNT(*) AS turns, HLL_COUNT.MERGE(session_sketch) AS sessions FROM ($TURNS)
 ) AS t")"
 
+OBSERVATIONS="$(view_sql ai_observations_daily observations=observations)"
+
+# The sketch column is bytes, so this check reads it as its median, which
+# equals latency_p50_seconds and is null where no observation has a latency.
 check ai_observations_daily \
-    '{"day":"2026-10-05","type":"GENERATION","name":"bind","model":"gemini-3.5-flash-lite","observations":1,"errors":1,"latency_p50_seconds":3,"latency_p95_seconds":3,"input_tokens":10,"output_tokens":5,"cost_usd":0.25,"trace_name":"turn","level":"ERROR","total_tokens":15}
-{"day":"2026-10-05","type":"GENERATION","name":"orchestrate","model":"gemini-3.8-flash","observations":2,"errors":0,"latency_p50_seconds":2,"latency_p95_seconds":2,"input_tokens":101,"output_tokens":21,"cost_usd":0.625,"trace_name":"turn","level":"DEFAULT","total_tokens":122}
-{"day":"2026-10-05","type":"SPAN","name":"turn","model":null,"observations":1,"errors":0,"latency_p50_seconds":5,"latency_p95_seconds":5,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"turn","level":"DEFAULT","total_tokens":null}
-{"day":"2026-10-05","type":"TOOL","name":"search","model":null,"observations":1,"errors":0,"latency_p50_seconds":0.5,"latency_p95_seconds":0.5,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"turn","level":"DEFAULT","total_tokens":null}
-{"day":"2026-10-06","type":"SPAN","name":"studio.refresh","model":null,"observations":1,"errors":0,"latency_p50_seconds":1,"latency_p95_seconds":1,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"studio.refresh","level":"DEFAULT","total_tokens":null}
-{"day":"2026-10-06","type":"SPAN","name":"turn","model":null,"observations":1,"errors":0,"latency_p50_seconds":null,"latency_p95_seconds":null,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"turn","level":"DEFAULT","total_tokens":null}
-{"day":"2026-10-06","type":"TOOL","name":"search","model":null,"observations":1,"errors":0,"latency_p50_seconds":4,"latency_p95_seconds":4,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"turn","level":"DEFAULT","total_tokens":null}' \
-    "$(view_rows ai_observations_daily 't.day, t.type, t.name' observations=observations)"
+    '{"day":"2026-10-05","type":"GENERATION","name":"bind","model":"gemini-3.5-flash-lite","observations":1,"errors":1,"latency_p50_seconds":3,"latency_p95_seconds":3,"input_tokens":10,"output_tokens":5,"cost_usd":0.25,"trace_name":"turn","level":"ERROR","total_tokens":15,"latency_sketch":3}
+{"day":"2026-10-05","type":"GENERATION","name":"orchestrate","model":"gemini-3.8-flash","observations":2,"errors":0,"latency_p50_seconds":2,"latency_p95_seconds":2,"input_tokens":101,"output_tokens":21,"cost_usd":0.625,"trace_name":"turn","level":"DEFAULT","total_tokens":122,"latency_sketch":2}
+{"day":"2026-10-05","type":"SPAN","name":"turn","model":null,"observations":1,"errors":0,"latency_p50_seconds":5,"latency_p95_seconds":5,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"turn","level":"DEFAULT","total_tokens":null,"latency_sketch":5}
+{"day":"2026-10-05","type":"TOOL","name":"search","model":null,"observations":1,"errors":0,"latency_p50_seconds":0.5,"latency_p95_seconds":0.5,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"turn","level":"DEFAULT","total_tokens":null,"latency_sketch":0.5}
+{"day":"2026-10-06","type":"SPAN","name":"studio.refresh","model":null,"observations":1,"errors":0,"latency_p50_seconds":1,"latency_p95_seconds":1,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"studio.refresh","level":"DEFAULT","total_tokens":null,"latency_sketch":1}
+{"day":"2026-10-06","type":"SPAN","name":"turn","model":null,"observations":1,"errors":0,"latency_p50_seconds":null,"latency_p95_seconds":null,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"turn","level":"DEFAULT","total_tokens":null,"latency_sketch":null}
+{"day":"2026-10-06","type":"TOOL","name":"search","model":null,"observations":1,"errors":0,"latency_p50_seconds":4,"latency_p95_seconds":4,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"turn","level":"DEFAULT","total_tokens":null,"latency_sketch":4}
+{"day":"2026-10-07","type":"TOOL","name":"fetch","model":null,"observations":3,"errors":0,"latency_p50_seconds":1,"latency_p95_seconds":1,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"studio.refresh","level":"DEFAULT","total_tokens":null,"latency_sketch":1}
+{"day":"2026-10-08","type":"TOOL","name":"fetch","model":null,"observations":1,"errors":0,"latency_p50_seconds":9,"latency_p95_seconds":9,"input_tokens":null,"output_tokens":null,"cost_usd":null,"trace_name":"studio.refresh","level":"DEFAULT","total_tokens":null,"latency_sketch":9}' \
+    "$(query_rows "SELECT TO_JSON_STRING(t) AS row FROM (
+  SELECT * REPLACE (KLL_QUANTILES.EXTRACT_POINT_FLOAT64(latency_sketch, 0.5) AS latency_sketch)
+  FROM ($OBSERVATIONS)
+) AS t
+ORDER BY t.day, t.type, t.name")"
+
+check 'ai_observations_daily latency merged over two days of one name' \
+    '{"observations":4,"p50":1,"mean_of_daily_p50":5}' \
+    "$(query_rows "SELECT TO_JSON_STRING(t) AS row FROM (
+  SELECT
+    SUM(observations) AS observations,
+    KLL_QUANTILES.MERGE_POINT_FLOAT64(latency_sketch, 0.5) AS p50,
+    AVG(latency_p50_seconds) AS mean_of_daily_p50
+  FROM ($OBSERVATIONS)
+  WHERE name = 'fetch'
+) AS t")"
 
 finish reporting_ai.test.sh
