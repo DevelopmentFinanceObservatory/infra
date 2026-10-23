@@ -71,11 +71,15 @@ spanner_processing_units = 1000
 # =============================================================================
 # Datacommons Services Module
 # =============================================================================
-# Controls whether the Data Commons API and frontend services are publicly accessible.
-# Set to true to allow unauthenticated public internet traffic to access the service.
-# Set to false (default) to check for access permissions. For more information, see the
-# Data Commons documentation.
-datacommons_services_allow_unauthenticated_access = true
+# Only our own identities may call the service: the apis stack grants
+# roles/run.invoker to each caller (infra/stacks/apis/dcp_access.tf, and
+# the eval reader in infra/dfo-dev/apis/eval_reader.tf), and the callers
+# send a Google ID token in X-Serverless-Authorization. Browsers cannot,
+# so the Data Commons web UI and /prototype are not public.
+datacommons_services_allow_unauthenticated_access = false
+
+# With no public pages, nothing loads the Maps key, so DCP creates none.
+auth_create_google_maps_api_key = false
 
 # One instance stays warm because a cold start on this service is
 # user-visible. max_instances = 1 caps it at exactly one instance. The
