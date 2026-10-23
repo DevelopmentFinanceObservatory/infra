@@ -104,7 +104,7 @@ gh auth status >/dev/null 2>&1 || { echo "Not logged in to GitHub. Run 'gh auth 
 # with nothing on stdout for a state with no outputs, where `output -raw` exits
 # 0 and prints a "No outputs found" warning to stdout. Terraform stores no
 # null output, so an output whose resource is off in this environment is
-# missing too; deploy_values lists such rows only where the resource exists.
+# missing too. deploy_values lists such rows only where the resource exists.
 read_output() {
     local dir="$1" name="$2" val
     # stdin is closed so terraform cannot consume the table the caller's loop reads.

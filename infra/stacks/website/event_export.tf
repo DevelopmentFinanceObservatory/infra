@@ -114,7 +114,7 @@ resource "google_sql_provision_script" "website_export_reader_schema" {
 
 # Both APIs are already on in prod (dcp enables BigQuery, apis Cloud
 # Scheduler). Declaring them keeps this stack's applies independent of those
-# stacks; disable_on_destroy = false leaves them on for the other owners.
+# stacks. disable_on_destroy = false leaves them on for the other owners.
 resource "google_project_service" "event_export" {
   for_each = var.event_export_enabled ? toset([
     "bigquery.googleapis.com",
@@ -143,7 +143,7 @@ resource "google_bigquery_dataset" "website_export" {
   depends_on = [google_project_service.event_export]
 }
 
-# Running a load job is authorised at the project level only; this grant reads
+# Running a load job is authorised at the project level only. This grant reads
 # and writes no table by itself.
 resource "google_project_iam_member" "website_export_bigquery_job_user" {
   count = local.event_export_count
@@ -223,7 +223,7 @@ resource "google_secret_manager_secret_iam_member" "website_export_hmac_key_acce
 # Job (dfo-prod)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Bootstrap only, for the reason website_migrate_bootstrap_image records:
+# Bootstrap only, for the reason website_migrate_bootstrap_image records.
 # gcr.io/cloudrun/hello has no node binary, so a Job the deploy pipeline has
 # not yet moved fails on the command instead of exiting 0.
 variable "website_export_bootstrap_image" {
@@ -358,7 +358,7 @@ resource "google_service_account_iam_member" "website_export_deployer_act_as" {
 # ─────────────────────────────────────────────────────────────────────────────
 
 # A dedicated identity purely to authenticate the Scheduler->Cloud Run Admin
-# API call; it never runs as anything and holds no other grant.
+# API call. It runs as nothing and holds no other grant.
 resource "google_service_account" "website_export_scheduler" {
   count = local.event_export_count
 

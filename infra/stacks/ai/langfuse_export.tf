@@ -5,7 +5,7 @@
 # `langfuse_export.observations` per UTC day, from the latest loaded day minus
 # one through today. The job creates and evolves the table itself, so
 # Terraform owns the dataset and IAM only. Prompts, answers, metadata and
-# `statusMessage` never reach BigQuery: the job requests no `io` or
+# `statusMessage` do not reach BigQuery. The job requests no `io` or
 # `metadata` field group and copies named fields only.
 #
 # Prod only. var.langfuse_export_enabled is false in dfo-dev, where every
@@ -23,7 +23,7 @@ locals {
 
 # Both APIs are already on in prod (the dcp stack enables BigQuery and the
 # apis stack Cloud Scheduler). Declaring them here keeps this file's applies
-# independent of those stacks; disable_on_destroy = false leaves them on for
+# independent of those stacks. disable_on_destroy = false leaves them on for
 # the other owners.
 resource "google_project_service" "langfuse_export_bigquery" {
   count = local.langfuse_export_count
@@ -67,7 +67,7 @@ resource "google_bigquery_dataset" "langfuse_export" {
 # Job identity and its access
 # ─────────────────────────────────────────────────────────────────────────────
 
-# A dedicated identity, separate from module.ai_service's runtime account: the
+# A dedicated identity, separate from module.ai_service's runtime account. The
 # public service has no reason to write BigQuery, and the job has no reason to
 # hold the service's Gemini, token and session-store access.
 resource "google_service_account" "langfuse_export" {
@@ -78,7 +78,7 @@ resource "google_service_account" "langfuse_export" {
   display_name = "Langfuse export Job"
 }
 
-# Running a load job is authorised at the project level only; this grant reads
+# Running a load job is authorised at the project level only. This grant reads
 # and writes no table by itself.
 resource "google_project_iam_member" "langfuse_export_bigquery_job_user" {
   count = local.langfuse_export_count
@@ -155,7 +155,7 @@ resource "google_cloud_run_v2_job" "langfuse_export" {
       timeout = "1800s"
 
       containers {
-        # Bootstrap only: the dfo-ai image the service runs now. The dfo-ai
+        # Bootstrap only, the dfo-ai image the service runs. The dfo-ai
         # deploy workflow moves the Job to each new image with
         # `gcloud run jobs update --image`, and lifecycle.ignore_changes below
         # keeps that from reading as drift. An image older than the export
@@ -216,8 +216,8 @@ resource "google_cloud_run_v2_job" "langfuse_export" {
         }
       }
 
-      # No vpc_access: the job reaches Langfuse Cloud and BigQuery over the
-      # public internet and never opens a database connection.
+      # No vpc_access. The job reaches Langfuse Cloud and BigQuery over the
+      # public internet and opens no database connection.
     }
   }
 
@@ -258,7 +258,7 @@ output "langfuse_export_job_name" {
 # ─────────────────────────────────────────────────────────────────────────────
 
 # A dedicated identity purely to authenticate the Scheduler->Cloud Run Admin
-# API call; it never runs as anything and holds no other grant.
+# API call. It runs as nothing and holds no other grant.
 resource "google_service_account" "langfuse_export_scheduler" {
   count = local.langfuse_export_count
 

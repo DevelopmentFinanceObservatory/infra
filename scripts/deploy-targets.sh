@@ -232,7 +232,7 @@ handoff_targets() {
 # environment here keeps every listed output required, so a dfo-prod handoff
 # run before the apply that creates the output still fails. Each guard
 # mirrors a flag in the stack's tfvars, on in dfo-prod and off in dfo-dev:
-#   JOB_COVERAGE         legacy_coverage_pipeline (apis; default true, false in dfo-dev)
+#   JOB_COVERAGE         legacy_coverage_pipeline (apis, true by default, false in dfo-dev)
 #   JOB_LANGFUSE_EXPORT  langfuse_export_enabled (ai)
 #   EXPORT_JOB_WEBSITE   event_export_enabled (website)
 #

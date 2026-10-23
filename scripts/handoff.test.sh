@@ -289,9 +289,8 @@ check "stub: a missing output prints nothing on stdout" "$(is "$stub_out" "")"
 check "stub: a missing output says Output not found" "$(is "$stub_err" 'Error: Output "coverage_job_name" not found')"
 
 # 3b. Each prod-only output is missing from dfo-dev's state, so dfo-dev
-# succeeds without reading it, and dfo-prod still fails when it is missing,
-# as before the apply that creates it. The dfo-dev apis row is the fault a
-# skip-on-null read had: dev's state has no coverage_job_name at all.
+# succeeds without reading it. dfo-prod fails when the output is missing, as
+# it does before the apply that creates it.
 prod_only=0
 while read -r stack output name; do
     [ -z "$stack" ] && continue
