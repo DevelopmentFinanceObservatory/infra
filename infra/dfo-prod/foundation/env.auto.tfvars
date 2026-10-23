@@ -9,7 +9,7 @@ github_repositories = {
   infra   = { name = "infra", id = "1401633456" }
   ai      = { name = "ai", id = "1401633727", deploy_environment = "production", deploy_branch = "main" }
   apis    = { name = "apis", id = "1401633649", deploy_environment = "production", deploy_branch = "main" }
-  dcp     = { name = "dcp", id = "1401633556", deploy_environment = "production", deploy_branch = "main" }
+  dcp     = { name = "dcp", id = "1431071058", deploy_environment = "production", deploy_branch = "main" }
   website = { name = "website", id = "1401633828", deploy_environment = "production", deploy_branch = "main" }
   docs    = { name = "docs", id = "1401634043", deploy_branch = "main" }
 }
