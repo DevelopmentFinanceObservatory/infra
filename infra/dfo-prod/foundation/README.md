@@ -12,7 +12,7 @@ The planner binds to the infra repo's `plan` environment and the applier to its 
 
 - The `prod-fin-observatory` project, linked to a billing account, with `serviceusage.googleapis.com` enabled.
 
-- The state bucket `tf-state-dfo-prod-prod-fin-observatory`. Bucket creation grants `projectViewer` `roles/storage.legacyObjectReader`, and the planner holds `roles/viewer`, so that grant lets it read every object in the bucket and its `objectViewer` grant on this repository's state prefixes restricts nothing. Remove the grant with
+- The state bucket `tf-state-dfo-prod-prod-fin-observatory`. The bucket grants `projectViewer` `roles/storage.legacyObjectReader`, left from the default object ACL it was created with, and the planner holds `roles/viewer`, so that grant lets it read every object in the bucket and its `objectViewer` grant on this repository's state prefixes restricts nothing. Remove the grant with
 
   ```sh
   gcloud storage buckets remove-iam-policy-binding gs://tf-state-dfo-prod-prod-fin-observatory \
@@ -21,11 +21,11 @@ The planner binds to the infra repo's `plan` environment and the applier to its 
 
   Dev's bucket has no such grant.
 
-- The `dfo-prod-foundation-principals` secret, which `scripts/bootstrap-principals.sh` writes, as `infra/dfo-dev/foundation/README.md` "Principals secret" describes, with `prod-fin-observatory` and `dfo-prod-foundation-principals` as its arguments. Prod's `ingestion_operators` object holds the ingestion group, and its `applier_impersonators` object is empty until the project owners who may impersonate the applier are added. Plan fails while the secret does not exist.
+- The `dfo-prod-foundation-principals` secret, which `scripts/bootstrap-principals.sh` writes, as `infra/dfo-dev/foundation/README.md` "Principals secret" describes, with `prod-fin-observatory` and `dfo-prod-foundation-principals` as its arguments. Prod's `ingestion_operators` object holds the ingestion group, and its `applier_impersonators` object is empty until the project owners who may impersonate the applier are added. Its `budget_alerts` object is empty until the budget has recipients beyond the billing admins. Plan fails while the secret does not exist.
 
 - The `dc-api-key` secret, holding the Data Commons API key. The planner's access grant on it fails while the secret does not exist.
 
-- The `dfo-prod-telemetry-principals` secret, which `scripts/bootstrap-principals.sh` writes (see `infra/dfo-prod/telemetry/README.md`). `principals_secret_stacks` in `env.auto.tfvars` lists `foundation` and `telemetry`, and the planner's access grant on each secret fails while that secret does not exist.
+- The `dfo-prod-telemetry-principals` secret, which `scripts/bootstrap-principals.sh` writes (see `infra/dfo-prod/telemetry/README.md`). `principals_secret_stacks` in `env.auto.tfvars` lists `foundation`, `ai` and `telemetry`, and the planner's access grant on each secret fails while that secret does not exist.
 
 ## After the first apply
 

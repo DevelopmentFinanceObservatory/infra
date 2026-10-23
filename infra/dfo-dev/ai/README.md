@@ -60,13 +60,38 @@ Three env vars carry this to the service: `SESSION_STORE_INSTANCE_CONNECTION_NAM
 
 `studio_token.tf` generates the shared bearer secret the harness's studio routes compare requests against (`harness.auth` in the `ai` repo), stores it as `dfo-dev-studio-api-token`, and mounts it on the service as `STUDIO_API_TOKEN`. Until that mount reaches a running revision, the harness accepts any non-empty bearer token and logs `STUDIO AUTH IS OPEN` at startup, on a public URL, so this is a gap being closed rather than a feature being added.
 
-This is the interim scheme: #12's settled end-state for proxy-to-harness auth is a service-to-service ID token from the website proxy, with this service coming off public access, and this secret retires when that lands. The website services get their own mount of this secret in a later PR, once the proxy code reads it; humans who call the studio routes directly are granted read on this one secret through `var.studio_token_readers` (dev lists the `dfo-dev-studio-testers@googlegroups.com` group, so membership is managed in the group), and fetch it with `just studio-token`. Rotation is bumping `studio_api_token_version`: the replacement version is created before the old one is destroyed, and the service's mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new token and warm and new instances can never disagree.
+This is the interim scheme: #12's settled end-state for proxy-to-harness auth is a service-to-service ID token from the website proxy, with this service coming off public access, and this secret retires when that lands. The website services get their own mount of this secret in a later PR, once the proxy code reads it; humans who call the studio routes directly are granted read on this one secret through the principals secret's `studio_token_readers` object (see "Principals secret" below; dev lists one group, so membership is managed in the group), and fetch it with `just studio-token`. Rotation is bumping `studio_api_token_version`: the replacement version is created before the old one is destroyed, and the service's mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new token and warm and new instances can never disagree.
 
 ## MCP API token
 
 `mcp_token.tf` generates the shared bearer secret the harness's MCP mounts (`/mcp/data`, `/mcp/analysis`, `/mcp/presentation`) compare requests against, stores it as `dfo-dev-mcp-api-token`, and mounts it on the service as `MCP_API_TOKEN`. Unset, the harness mints a random token at startup for its own in-process clients only, so this mount is what lets callers outside the process — including the out-of-repo e2e test daemon that points at this service's deployed URL — reach the MCP mounts instead of drawing a `401`. Health routes are unaffected either way. The bearer gate on the three mounts lives in the ai repository's harness, which reads this variable.
 
-Humans who call the MCP mounts directly, and whoever configures the e2e test daemon, are granted read on this one secret through `var.mcp_token_readers`. Rotation is bumping `mcp_api_token_version`: the replacement version is created before the old one is destroyed, and the service's mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new token and warm and new instances can never disagree.
+Humans who call the MCP mounts directly, and whoever configures the e2e test daemon, are granted read on this one secret through the principals secret's `mcp_token_readers` object. Rotation is bumping `mcp_api_token_version`: the replacement version is created before the old one is destroyed, and the service's mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new token and warm and new instances can never disagree.
+
+## Principals secret
+
+The studio and MCP token readers live in the Secret Manager secret `<namespace>-ai-principals` (`dfo-dev-ai-principals` here, `dfo-prod-ai-principals` in prod), which `main.tf` reads, so no address sits in this repository or in a plan log. Every value from the secret prints in plan output as `(sensitive value)`. Each environment needs the secret, and plan fails while it does not exist. An environment with no readers of a kind holds an empty object for it. The secret holds one JSON object:
+
+```json
+{
+  "studio_token_readers": {"testers": "group:testers@example.org"},
+  "mcp_token_readers": {}
+}
+```
+
+Each member is `group:`, `user:`, `serviceAccount:` or `domain:` followed by an address, and no member appears under two labels of one object. The labels key the grants, so they appear in resource addresses and plan output, and hold only lower-case letters, digits, hyphens and underscores. Plan fails on a secret of any other shape.
+
+To create the secret or change its members, write the JSON to a file outside the repository and run
+
+```sh
+scripts/bootstrap-principals.sh dev-fin-observatory dfo-dev-ai-principals principals.json
+```
+
+The script checks the file against the same rules, creates the secret if it is absent, adds the file as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. `foundation` makes the same grant through `principals_secret_stacks`, but this stack's plan can run before that apply. The next apply moves the grants to the new members.
+
+A relabel with the same member needs a `moved` block for the grant, for example `moved { from = google_secret_manager_secret_iam_member.studio_api_token_reader["old"] to = google_secret_manager_secret_iam_member.studio_api_token_reader["new"] }`. Without one, the plan destroys one instance and creates the other on the same binding in no fixed order, and a delete that runs last revokes the member. Labels are not addresses, so the block is safe to commit.
+
+The studio grant was once keyed by member string. The `removed` block in `studio_token.tf` makes Terraform forget those state entries without destroying the live bindings, and the label-keyed resource creates the same bindings again, which IAM accepts as no change.
 
 ## Datasets first-party principal
 

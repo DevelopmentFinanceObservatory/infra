@@ -33,10 +33,11 @@ resource "google_secret_manager_secret_version" "mcp_api_token" {
 }
 
 # Humans who call the MCP mounts directly, and whoever configures the out-of-repo e2e test daemon that points at this service's deployed URL, read the value from Secret Manager rather than passing it around; each grant is scoped to this one secret.
+# The members come from the principals secret's mcp_token_readers object (main.tf), keyed by label.
 # The service's own read arrives through the module's secret_env_vars grant, not here.
 resource "google_secret_manager_secret_iam_member" "mcp_api_token_readers" {
-  for_each  = toset(var.mcp_token_readers)
+  for_each  = toset(nonsensitive(keys(local.principals.mcp_token_readers)))
   secret_id = google_secret_manager_secret.mcp_api_token.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = each.value
+  member    = local.principals.mcp_token_readers[each.key]
 }

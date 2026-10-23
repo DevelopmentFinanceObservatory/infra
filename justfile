@@ -64,8 +64,8 @@ bootstrap: _check-gcloud
 grant-dc-key email: _check-gcloud
     gcloud secrets add-iam-policy-binding {{DC_KEY_SECRET}} --member='user:{{email}}' --role='roles/secretmanager.secretAccessor' --project={{PROJECT}}
 
-# Print the studio API token, for an account in a group listed in the ai
-# stack's studio_token_readers. The token goes to stdout and everything else to
+# Print the studio API token, for an account in a group listed in the
+# studio_token_readers object of the ai stack's principals secret. The token goes to stdout and everything else to
 # stderr, so `export STUDIO_API_TOKEN=$(just studio-token)` works. Needs
 # only `gcloud auth login`, not application-default credentials.
 [doc("Print the studio API token (for members of the studio_token_readers group)")]

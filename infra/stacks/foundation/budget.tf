@@ -22,14 +22,16 @@ resource "google_project_service" "budget_apis" {
   disable_on_destroy = false
 }
 
-# An email channel carries one address, so each recipient gets a channel.
+# An email channel carries one address, so each recipient in the principals
+# secret's budget_alerts object (main.tf) gets a channel, keyed and named by
+# its label.
 resource "google_monitoring_notification_channel" "budget_email" {
-  for_each = local.gemini_budget_enabled ? toset(var.budget_alert_emails) : toset([])
+  for_each = local.gemini_budget_enabled ? toset(nonsensitive(keys(local.principals.budget_alerts))) : toset([])
 
   display_name = "Gemini budget alerts: ${each.key}"
   type         = "email"
   labels = {
-    email_address = each.key
+    email_address = local.principals.budget_alerts[each.key]
   }
 
   depends_on = [google_project_service.budget_apis]

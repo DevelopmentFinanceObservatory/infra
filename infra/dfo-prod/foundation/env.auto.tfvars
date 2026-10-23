@@ -22,9 +22,10 @@ state_bucket                   = "tf-state-dfo-prod-prod-fin-observatory"
 billing_export_dataset_id = "billing_export"
 
 # This stack reads its applier impersonators and ingestion operators from
-# dfo-prod-foundation-principals, and the telemetry stack, prod only, reads its
-# readers and alert recipients from dfo-prod-telemetry-principals.
-principals_secret_stacks = ["foundation", "telemetry"]
+# dfo-prod-foundation-principals, the ai stack reads its token readers from
+# dfo-prod-ai-principals, and the telemetry stack, prod only, reads its readers
+# and alert recipients from dfo-prod-telemetry-principals.
+principals_secret_stacks = ["foundation", "ai", "telemetry"]
 
 # plan-prod.yml's plan job runs PR code on pull_request_target, whose ref is
 # refs/heads/main, the applier's ref. The planner binds to the `plan`

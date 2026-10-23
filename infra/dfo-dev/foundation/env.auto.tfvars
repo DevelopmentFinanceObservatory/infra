@@ -20,8 +20,9 @@ website_artifact_repository_id = "dfo-website-staging"
 state_bucket                   = "tf-state-dfo-dev-dev-fin-observatory"
 # This stack reads its applier impersonators and ingestion operators from
 # dfo-dev-foundation-principals. Dev's ingestion_operators object is empty,
-# since its operators hold their roles by hand or through owner.
-principals_secret_stacks = ["foundation"]
+# since its operators hold their roles by hand or through owner. The ai stack
+# reads its token readers from dfo-dev-ai-principals.
+principals_secret_stacks = ["foundation", "ai"]
 # Dev's plan.yml runs on pull_request, whose ref is refs/pull/<n>/merge, so the
 # planner's binding stays repo-scoped. The applier binds to the `dev`
 # environment on refs/heads/dev, which apply-stack.yml declares for dfo-dev.

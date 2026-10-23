@@ -174,11 +174,6 @@ variable "gemini_budget_usd" {
   default     = 500
 }
 
-variable "budget_alert_emails" {
-  description = "Addresses that receive the Gemini budget alerts, each through its own Cloud Monitoring email channel. Billing account admins are notified as well, whatever this holds."
-  type        = list(string)
-}
-
 variable "billing_export_dataset_id" {
   description = "Id of the BigQuery dataset, in project_id, that Cloud Billing exports this environment's billing account to. Empty creates no dataset. Set it in one environment only, since one export covers every project on the account."
   type        = string

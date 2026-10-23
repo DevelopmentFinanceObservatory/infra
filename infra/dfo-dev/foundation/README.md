@@ -40,16 +40,17 @@ Infrastructure that more than one stack (or more than one repo's CI) depends on.
 
 ## Principals secret
 
-The applier impersonators and ingestion operators live in the Secret Manager secret `<namespace>-foundation-principals` (`dfo-dev-foundation-principals` here, `dfo-prod-foundation-principals` in prod), which `main.tf` reads, so no address sits in this repository or in a plan log. Every value from the secret prints in plan output as `(sensitive value)`. Each environment needs the secret, and an environment with no members of a kind holds an empty object for it. The secret holds one JSON object:
+The applier impersonators, ingestion operators and Gemini budget alert recipients live in the Secret Manager secret `<namespace>-foundation-principals` (`dfo-dev-foundation-principals` here, `dfo-prod-foundation-principals` in prod), which `main.tf` reads, so no address sits in this repository or in a plan log. Every value from the secret prints in plan output as `(sensitive value)`. Each environment needs the secret, and an environment with no members of a kind holds an empty object for it. The secret holds one JSON object:
 
 ```json
 {
   "applier_impersonators": {"appliers": "group:appliers@example.org"},
-  "ingestion_operators": {"ops": "group:operators@example.org"}
+  "ingestion_operators": {"ops": "group:operators@example.org"},
+  "budget_alerts": {"finance": "finance@example.org"}
 }
 ```
 
-Each member is `group:`, `user:`, `serviceAccount:` or `domain:` followed by an address. The labels key the grants, so they appear in resource addresses and plan output, and hold only lower-case letters, digits, hyphens and underscores. Plan fails on a secret of any other shape.
+Each impersonator and operator is `group:`, `user:`, `serviceAccount:` or `domain:` followed by an address, and each budget alert recipient is a bare address with no prefix. The labels key the grants and channels, so they appear in resource addresses and plan output, and hold only lower-case letters, digits, hyphens and underscores. Plan fails on a secret of any other shape.
 
 To create the secret or change its members, write the JSON to a file outside the repository and run
 
@@ -59,19 +60,20 @@ scripts/bootstrap-principals.sh dev-fin-observatory dfo-dev-foundation-principal
 
 The script checks the file's shape, creates the secret if it is absent, adds the file as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. `principals_secret_stacks` lists `foundation`, so this stack also grants the planner access to its own secret, but a plan reads the secret before that grant exists, and the script's grant covers the first plan. The next apply moves the grants to the new members.
 
+A relabel with the same member needs a `moved` block for each resource the label keys, for example `moved { from = google_service_account_iam_member.applier_impersonator["old"] to = google_service_account_iam_member.applier_impersonator["new"] }`, and for an ingestion operator one for each instance of the five `ingestion_*` resources, where `ingestion_viewer` holds one instance per role, keyed `"<label> <role>"`. Without one, the plan destroys one instance and creates the other on the same binding in no fixed order, and a delete that runs last revokes the member. A budget alert relabel needs one for `google_monitoring_notification_channel.budget_email`, or the channel is replaced. Labels are not addresses, so the block is safe to commit. No member appears under two labels of one object, since removing either label would revoke both, and plan fails on a secret that repeats one.
+
 The grants were once keyed by member string. The `removed` blocks in `main.tf` make Terraform forget those state entries without destroying the live bindings, and the label-keyed resources create the same bindings again, which IAM accepts as no change.
 
 ## Gemini spend budget
 
-`budget.tf` creates a Cloud Billing budget on the Gemini API (billing catalog service "Gemini API", `generativelanguage.googleapis.com`) for the project that owns the dev Gemini key. It emails when spend reaches 50%, 90% and 100% of `var.gemini_budget_usd` (default 500 USD a month), and when the forecast for the month reaches 100%. Billing account admins get the default emails. Each address in `var.budget_alert_emails` gets a Cloud Monitoring email channel and the same alerts.
+`budget.tf` creates a Cloud Billing budget on the Gemini API (billing catalog service "Gemini API", `generativelanguage.googleapis.com`) for the project that owns the dev Gemini key. It emails when spend reaches 50%, 90% and 100% of `var.gemini_budget_usd` (default 500 USD a month), and when the forecast for the month reaches 100%. Billing account admins get the default emails. Each address in the principals secret's `budget_alerts` object gets a Cloud Monitoring email channel, named by its label, and the same alerts.
 
 The budget alerts and caps nothing. Google reports billing data with a delay of hours, so the first email can arrive well after the spend it describes, and requests keep succeeding past 100%. A hard stop needs a quota on the key's project, which this stack does not set.
 
-The budget stays off, and the stack plans as a no-op, until `budget.auto.tfvars` holds:
+The budget stays off, and the stack plans as a no-op, until `budget.auto.tfvars` holds the two values below. The extra recipients live in the principals secret's `budget_alerts` object, and an empty object leaves billing admins as the only recipients.
 
 - `billing_account_id`: the billing account id. `gcloud billing projects describe <gemini_key_project_number>` prints it.
 - `gemini_key_project_number`: the number of the project that owns the key, the digits after `projects/` in the key name `gcloud services api-keys lookup <key string>` prints. That project can differ from `project_id` when the key came from AI Studio. The budget filter takes the number, so neither the planner nor the applier needs access to that project.
-- `budget_alert_emails`: the recipient list. Empty leaves billing admins as the only recipients.
 
 One manual step before the first apply with those values set. `dfo-infra-applier` needs Billing Account Costs Manager on the billing account, and this repo does not manage billing account IAM, so a billing account admin grants it once:
 

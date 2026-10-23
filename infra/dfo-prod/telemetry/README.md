@@ -66,7 +66,7 @@ The readers and alert recipients live in the Secret Manager secret `dfo-prod-tel
 }
 ```
 
-A reader is `group:`, `user:`, `serviceAccount:` or `domain:` followed by an address, and `alerts` holds at least one address. The labels key the grants and channels, so they appear in resource addresses and plan output, and hold only lower-case letters, digits, hyphens and underscores. Plan fails on a secret of any other shape.
+A reader is `group:`, `user:`, `serviceAccount:` or `domain:` followed by an address, and `alerts` holds at least one bare address, with no prefix. The labels key the grants and channels, so they appear in resource addresses and plan output, and hold only lower-case letters, digits, hyphens and underscores. Plan fails on a secret of any other shape.
 
 To create the secret or change its members, write the JSON to a file outside the repository and run
 
@@ -75,6 +75,8 @@ scripts/bootstrap-principals.sh prod-fin-observatory dfo-prod-telemetry-principa
 ```
 
 The script checks the file's shape, creates the secret if it is absent, adds the file as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. `foundation` makes the same grant through `principals_secret_stacks`, but this stack's first plan can run before that apply. The next telemetry apply moves the grants and channels to the new members.
+
+A relabel with the same member needs a `moved` block for each resource the label keys: the three reader resources in `reporting.tf` for a reader, the channel in `alerts.tf` for an alert recipient. Without one, the plan destroys one instance and creates the other on the same binding in no fixed order, and a delete that runs last revokes the member. Labels are not addresses, so the block is safe to commit. No value appears under two labels of one object, since removing either label would revoke both, and plan fails on a secret that repeats one.
 
 ## Apply order
 

@@ -66,8 +66,15 @@ data "google_secret_manager_secret_version" "principals" {
       error_message = "Each readers value in the principals secret must be group:, user:, serviceAccount: or domain: followed by an address."
     }
     postcondition {
-      condition     = try(length(jsondecode(self.secret_data).alerts) > 0 && alltrue([for e in values(jsondecode(self.secret_data).alerts) : can(regex("^[^@\\s]+@[^@\\s]+$", e))]), false)
-      error_message = "The principals secret's alerts object must hold at least one email address."
+      condition     = try(length(jsondecode(self.secret_data).alerts) > 0 && alltrue([for e in values(jsondecode(self.secret_data).alerts) : can(regex("^[^@:\\s]+@[^@:\\s]+$", e))]), false)
+      error_message = "The principals secret's alerts object must hold at least one bare email address, with no member prefix."
+    }
+    postcondition {
+      condition = try(alltrue([
+        for obj in [jsondecode(self.secret_data).readers, jsondecode(self.secret_data).alerts] :
+        length(distinct(values(obj))) == length(obj)
+      ]), false)
+      error_message = "An object in the principals secret holds the same value under two labels, so removing either label would revoke or unsubscribe both."
     }
   }
 }
