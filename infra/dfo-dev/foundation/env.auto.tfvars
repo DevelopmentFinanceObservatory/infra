@@ -9,7 +9,7 @@ github_repositories = {
   infra   = { name = "infra", id = "1401633456" }
   ai      = { name = "ai", id = "1401633727", deploy_environment = "dev", deploy_branch = "dev" }
   apis    = { name = "apis", id = "1401633649", deploy_environment = "dev", deploy_branch = "dev" }
-  dcp     = { name = "dcp", id = "1401633556", deploy_environment = "dev", deploy_branch = "dev" }
+  dcp     = { name = "dcp", id = "1431071058", deploy_environment = "dev", deploy_branch = "dev" }
   website = { name = "website", id = "1401633828", deploy_environment = "dev", deploy_branch = "dev" }
   docs    = { name = "docs", id = "1401634043", deploy_environment = "docsync", deploy_branch = "dev" }
   # The site QA repository stays private under its original owner, so its entry names that owner.
