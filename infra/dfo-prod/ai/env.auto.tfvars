@@ -27,3 +27,6 @@ site_origin = "https://developmentfinance.org"
 
 # Terraform refuses to destroy or replace this stack's Cloud Run services and Jobs.
 stateless_deletion_protection = true
+
+# The Langfuse export dataset, Job and hourly trigger (langfuse_export.tf).
+langfuse_export_enabled = true

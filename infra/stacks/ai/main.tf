@@ -38,6 +38,15 @@ data "google_secret_manager_secret" "langfuse_secret_key" {
   secret_id = "${var.namespace}-langfuse-secret-key"
 }
 
+locals {
+  # Langfuse Cloud EU, the region the Langfuse keys above belong to.
+  langfuse_base_url = "https://cloud.langfuse.com"
+  # Tags deployed traces so they filter apart from a local harness's, which
+  # export under Langfuse's default environment. langfuse_export.tf reads
+  # this environment back.
+  langfuse_tracing_environment = "${var.namespace}-ai"
+}
+
 # The dfo-ai CI image-deployer (provisioned in ../foundation) needs actAs on the
 # runtime SA to push image-only revision updates; it's granted that per-SA below.
 data "google_service_account" "ai_deployer" {
@@ -92,13 +101,10 @@ module "ai_service" {
     DFO_SITE_ORIGIN = var.site_origin
     # The combined MCP server's service-wide ceiling on tool calls, one bucket
     # per instance shared by every outside caller (harness.combined_mcp).
-    COMBINED_MCP_REQUESTS_PER_S = "20"
-    COMBINED_MCP_BURST          = "60"
-    # Langfuse Cloud EU, the region the Langfuse keys above belong to.
-    LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
-    # Tags deployed traces so they filter apart from a local harness's, which
-    # export under Langfuse's default environment.
-    LANGFUSE_TRACING_ENVIRONMENT = "${var.namespace}-ai"
+    COMBINED_MCP_REQUESTS_PER_S  = "20"
+    COMBINED_MCP_BURST           = "60"
+    LANGFUSE_BASE_URL            = local.langfuse_base_url
+    LANGFUSE_TRACING_ENVIRONMENT = local.langfuse_tracing_environment
 
     # Selects the engine that answers a live studio turn: "orchestrator" is one
     # agent calling tools itself, "graph" is the workflow graph. The harness

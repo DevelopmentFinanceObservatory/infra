@@ -53,3 +53,6 @@ ses = {
 # Cloudflare Turnstile widget "DFO website production" in the ONE Campaign
 # account, for developmentfinance.org. Public: the login page renders it.
 turnstile_site_key = "0x4AAAAAAFiLPXQeqPLKYQs9"
+
+# The event export dataset, ID hashing key, Job and hourly trigger (event_export.tf).
+event_export_enabled = true
