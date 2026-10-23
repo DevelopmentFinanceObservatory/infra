@@ -24,15 +24,20 @@ STUDIO_TOKEN_SECRET := ENV + "-studio-api-token"
 # source ref). init-db and load both invoke datacommons-cli, and an unpinned
 # uvx call floats to whatever's latest on PyPI regardless of the module ref
 # this repo is actually running.
-DCP_CLI_VERSION := "1.1.5"
+DCP_CLI_VERSION := "1.1.6"
 
 # datacommons-cli finds its project, Spanner instance and database,
 # ingestion-helper URL and workflow service account by running
-# `terraform output -json` in its own working directory. It offers no
-# flag, environment variable, config file or directory walk for any of
-# them, and just runs a recipe from this file's directory whatever
-# directory the operator invoked it from. Hence the `cd {{TF_DIR}} &&`
-# on every recipe that reaches the CLI.
+# `terraform output -json` in its own working directory unless the admin
+# group gets remote-state flags. --project-id with --instance-name assumes
+# the state prefix terraform/state/<instance>, which misses this repo's
+# terraform/state/<env>/dcp. --tf-state-location takes the exact state URI
+# (gs://<bucket>/<prefix>/default.tfstate) and would reach it, but the URI
+# would repeat the bucket and prefix that backend.tf already holds. The
+# recipes cd into the stack directory instead and read that backend. just
+# runs a recipe from this file's directory whatever directory the operator
+# invoked it from, hence the `cd {{TF_DIR}} &&` on every recipe that
+# reaches the CLI.
 TF_DIR  := "infra" / ENV / STACK
 
 # GCP Application Default Credentials (what Terraform's GCS backend uses)
@@ -257,54 +262,31 @@ setup-github-apps *args:
 
 # ── Data ──────────────────────────────────────
 
-# One-time bootstrap for a brand-new dcp database. Creates the schema.
-# --init-only skips the seed step (now 'just seed-db') but still runs
-# migrations, matching upstream's own guard message treating initialize,
-# migrate and seed as independently runnable steps.
-# The already-initialised check runs Spanner locally under your ADC and
-# fails open on a permissions or connectivity error. On that path,
-# initialize_database() still POSTs to the ingestion-helper's
-# database/initialize. Migrations find nothing pending on an up-to-date
-# schema and skip. The CLI reports "Successfully initialized Spanner
-# database!" with no sign anything was unusual. What database/initialize
-# does to an existing database isn't established from source. It runs
-# server-side in the ingestion-helper image, under the impersonated
-# workflow service account, so a 403 on your principal doesn't restrain it.
-# Only run this against a known-fresh database. Needs
-# roles/iam.serviceAccountTokenCreator on the ingestion workflow service
-# account (init call) and Spanner read (e.g. roles/spanner.databaseReader)
-# on your principal (initialised check). Terraform grants neither by
-# default (see README.md).
-[confirm("The already-initialised check fails open on a permissions or connectivity error. On that path this still calls the ingestion-helper's database/initialize against a possibly-live database and reports success regardless — migrations are safe (they skip if the schema is current), but database/initialize's own effect on an existing database isn't established. Continue only if this database is known to be fresh.")]
+# One-time bootstrap for a brand-new dcp database. Applies the baseline
+# schema, then every migration. The ingestion preprocessor creates the
+# dc/g/Root node itself, so there is no seed step. The CLI talks to
+# Spanner directly under your ADC and needs roles/spanner.databaseAdmin
+# and roles/spanner.databaseUser on your own principal. Terraform grants
+# neither (see README.md). The CLI skips a database whose Node table
+# exists. If that check errors it treats the database as empty, and the
+# baseline schema's first statement, CREATE TABLE Node, then fails
+# against an existing database before any DDL applies.
 [doc("Bootstrap schema for a brand-new dcp database")]
 init-db: _check-gcloud
-    cd {{TF_DIR}} && uvx --from "datacommons-cli=={{DCP_CLI_VERSION}}" --with "datacommons-admin=={{DCP_CLI_VERSION}}" datacommons admin init-db --init-only
+    cd {{TF_DIR}} && uvx --from "datacommons-cli=={{DCP_CLI_VERSION}}" --with "datacommons-admin=={{DCP_CLI_VERSION}}" datacommons admin init-db
 
 # Migrate the dcp database schema forward. Run only after 'terraform
-# apply' has finished, not just merged. The apply workflow fires
-# asynchronously, and the migration locks through endpoints that exist
-# only on the matching ingestion-helper image. Acquires that lock through
-# impersonated credentials (needs roles/iam.serviceAccountTokenCreator on
-# the ingestion workflow service account) but talks to Spanner as you
-# (needs roles/spanner.databaseAdmin on your own principal). Terraform
-# grants neither by default. Migrations are forward-only. The CLI's prompt
-# recommends and confirms a backup but doesn't take one. Back up Spanner
-# yourself before proceeding.
+# apply' has finished. The apply workflow fires asynchronously after a
+# merge, and the CLI reads its Spanner targets from Terraform outputs.
+# The CLI runs under your ADC, takes the ingestion lock in
+# Spanner directly, and fails if an ingestion holds it. It needs
+# roles/spanner.databaseAdmin and roles/spanner.databaseUser on your own
+# principal. Terraform grants neither. Migrations are forward-only. The
+# CLI's prompt recommends and confirms a backup but doesn't take one.
+# Back up Spanner yourself before proceeding.
 [doc("Migrate the dcp database schema forward")]
 migrate-db: _check-gcloud
     cd {{TF_DIR}} && uvx --from "datacommons-cli=={{DCP_CLI_VERSION}}" --with "datacommons-admin=={{DCP_CLI_VERSION}}" datacommons admin migrate-db
-
-# Re-run the platform's base geographic and schema seeds. 'just load'
-# stages and ingests a custom dataset. This only refreshes Base DC's own
-# seed data. It goes through the ingestion-helper service, not Spanner
-# directly. It needs roles/iam.serviceAccountTokenCreator on the ingestion
-# workflow service account, and no Spanner role at all. Unguarded and
-# unprompted, an unconditional reseed call with no already-seeded check
-# and no confirmation. Typing the command is the only thing standing
-# between you and it running.
-[doc("Re-run Base DC's geographic and schema seeds")]
-seed-db: _check-gcloud
-    cd {{TF_DIR}} && uvx --from "datacommons-cli=={{DCP_CLI_VERSION}}" --with "datacommons-admin=={{DCP_CLI_VERSION}}" datacommons admin seed-db
 
 # Stage a dataset into the ingestion bucket + trigger ingestion: just load data/oecd-wage
 load dataset: _check-gcloud

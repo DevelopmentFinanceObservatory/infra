@@ -36,36 +36,31 @@ Two resources appear in every plan. `null_resource.search_api_gemini_key` carrie
 
 ## The database commands
 
-Four `just` recipes touch the dcp database. Terraform grants none of the IAM they need, so grant it by hand before the first run.
+Three `just` recipes touch the dcp database. Terraform grants none of the IAM they need, so grant it by hand before the first run.
 
-| Recipe                  | What it does                                                                | Spanner role on your principal | Token creator on the workflow account |
-| ----------------------- | --------------------------------------------------------------------------- | ------------------------------ | ------------------------------------- |
-| `just init-db`          | Creates the schema on a brand-new database                                  | `roles/spanner.databaseReader` | yes                                   |
-| `just migrate-db`       | Applies pending Spanner schema migrations                                   | `roles/spanner.databaseAdmin`  | yes                                   |
-| `just seed-db`          | Re-applies Base DC's own geographic and schema seeds                        | none                           | yes                                   |
-| `just load data/<name>` | Stages one of this repo's datasets into the ingestion bucket and ingests it | none                           | yes                                   |
+| Recipe                  | What it does                                                                | Spanner roles on your principal                             | Token creator on the workflow account |
+| ----------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------- |
+| `just init-db`          | Creates the schema on a brand-new database                                  | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` | no                                    |
+| `just migrate-db`       | Applies pending Spanner schema migrations                                   | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` | no                                    |
+| `just load data/<name>` | Stages one of this repo's datasets into the ingestion bucket and ingests it | none                                                        | yes                                   |
 
 `just datasets` lists the values `load` accepts. `load` reaches the bucket named by the `storage_artifacts_bucket_name` output under your own credentials rather than the workflow account's, and it needs object write and object delete there.
 
 A permission error from any of these names the resource it denied rather than the principal it denied, which sends you to the wrong service account. Read the principal off the table first.
 
-### init-db is safe only on a fresh database
+### init-db on an existing database
 
-`init-db`'s already-initialised check fails open. Any exception from the Spanner client or the table lookup returns "not initialised", and a permissions error is the default case, since Terraform grants `roles/spanner.databaseReader` to no principal. On that path `database/initialize` still fires against the live database. It runs under the impersonated workflow service account, so a 403 on your own principal does nothing to stop it. Nothing outside the ingestion-helper image documents what that call does to a populated database.
-
-The recipe passes `--init-only` and puts a `[confirm]` prompt in front of it. Answer that prompt only for a database you know is empty.
+`init-db` skips a database whose `Node` table exists. If that check errors, the CLI treats the database as empty and applies the baseline schema under your own credentials. The schema's first statement, `CREATE TABLE Node`, then fails against an existing database before any DDL applies.
 
 ### Before running migrate-db
 
 Take a Spanner backup. Migrations are forward-only, the framework has no `downgrade()`, and Spanner has no transactional DDL rollback. The CLI asks whether you have taken a backup and does not take one for you.
 
-Then wait for a `terraform apply` on this stack to finish. `apply.yml` runs asynchronously, so a merged PR leaves the apply still in flight. The ingestion-helper has to reach the matching image before the lock endpoints exist, and these commands read their targets from `terraform output -json`, which stays empty until the apply populates state.
+Then wait for a `terraform apply` on this stack to finish. `apply.yml` runs asynchronously, so a merged PR leaves the apply still in flight. These commands read their targets from `terraform output -json`, which stays empty until the apply populates state. `migrate-db` takes the ingestion lock in Spanner and fails while an ingestion holds it.
 
 ### load replaces the whole input prefix
 
 Ingestion reads every file under `gs://<bucket>/ingestion/input/` against a single `config.json`, so `load` clears that prefix before uploading. The clear runs under your own credentials and discards its own errors. Without object delete on the bucket it does nothing, the new dataset lands on top of the old files, and ingestion reads both.
-
-`seed-db` and `load` both add data. `seed-db` re-applies Data Commons' own base seeds. `load` imports the datasets under `data/`. `seed-db` has no already-seeded check and no confirmation prompt, so it reseeds the moment you run it.
 
 ## Migrator password rotation and recovery
 

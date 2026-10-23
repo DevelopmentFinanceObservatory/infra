@@ -19,8 +19,9 @@ stateless_deletion_protection = true
 # =============================================================================
 # Storage Module
 # =============================================================================
-storage_create_artifacts_bucket = false
-storage_artifacts_bucket_name   = "dfo-prod-dc-artifacts-prod-fin-observatory"
+storage_create_artifacts_bucket            = false
+storage_artifacts_bucket_name              = "dfo-prod-dc-artifacts-prod-fin-observatory"
+storage_artifacts_bucket_enable_versioning = false
 
 # =============================================================================
 # Redis Module
