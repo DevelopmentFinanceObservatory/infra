@@ -389,7 +389,7 @@ case " $repos " in
                 while read -r _ var _ _; do
                     [ -z "$var" ] && continue
                     printf '%s\n' "$held" | grep -qx "$var" || infra_wif_pending="$infra_wif_pending $env:$var"
-                done <<<"$(deploy_values "$values_key")"
+                done <<<"$(deploy_values "$values_key" "$dfo_env")"
             done <<<"$(handoff_targets "$dfo_env" infra)"
         done
         if [ -n "$infra_wif_pending" ]; then
