@@ -4,6 +4,13 @@
 # optional list, so rules added out of band on a module-owned bucket are
 # stripped on the module's next apply. The moved block below re-parents
 # the module's existing bucket onto this resource in place.
+#
+# Object versioning is off for this bucket. The module's
+# storage_artifacts_bucket_enable_versioning flag only reaches the bucket
+# the module creates, which storage_create_artifacts_bucket = false
+# suppresses, so it is set to false in each environment's dfo.auto.tfvars
+# and has no effect here. Versioning for this bucket would need a
+# versioning block on the resource below.
 resource "google_storage_bucket" "dc_artifacts" {
   name                        = var.storage_artifacts_bucket_name
   project                     = var.project_id
