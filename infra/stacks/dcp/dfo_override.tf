@@ -9,8 +9,9 @@
 #
 # What it does: rewrites ONLY module.stack's auth_config, swapping the empty
 # var-sourced DC API key for the value read from Secret Manager in dfo.tf. The
-# other two auth_config fields (google_maps_api_key, create_google_maps_key)
-# are preserved from local.auth_config via merge().
+# other auth_config fields (google_maps_api_key, create_google_maps_key,
+# google_maps_allowed_referrers) are preserved from local.auth_config via
+# merge().
 #
 # If you regenerate main.tf, this file and dfo.tf survive untouched and the
 # redirection keeps working. See dfo.README.md for the full story.

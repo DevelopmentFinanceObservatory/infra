@@ -102,3 +102,15 @@ resource "null_resource" "search_api_gemini_key" {
     google_secret_manager_secret_iam_member.serving_sa_gemini_key,
   ]
 }
+
+# dcp-tools reads the ingestion workflow's definition (workflows.workflows.get)
+# before it starts an execution, and it does so as the workflow service account
+# when the caller impersonates it. The stack module grants that account only
+# roles/workflows.invoker, which lacks the permission.
+resource "google_project_iam_member" "ingestion_workflow_sa_viewer" {
+  count = var.enable_ingestion ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/workflows.viewer"
+  member  = "serviceAccount:${module.stack.ingestion_workflow_service_account_email}"
+}

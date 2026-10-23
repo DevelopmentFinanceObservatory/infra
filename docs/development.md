@@ -92,7 +92,7 @@ cd infra/dfo-dev/dcp
 terraform init && terraform apply
 ```
 
-After `apply` completes, grant the operator `roles/iam.serviceAccountTokenCreator` on the ingestion workflow service account (printed in the Terraform outputs) so the CLI can impersonate it for `init-db` and `ingest`:
+After `apply` completes, grant the operator `roles/spanner.databaseAdmin` and `roles/spanner.databaseUser` on the dcp database for `init-db` and `migrate-db`, and `roles/iam.serviceAccountTokenCreator` on the ingestion workflow service account (printed in the Terraform outputs) so the CLI can impersonate it for `ingest`:
 
 ```bash
 gcloud iam service-accounts add-iam-policy-binding \
@@ -120,7 +120,7 @@ For a break-glass deploy, `just deploy <image>` applies an image directly agains
 ### Upgrading the DCP module
 
 ```bash
-just dcp-scaffold 1.1.5
+just dcp-scaffold 1.1.6
 ```
 
 The recipe regenerates `main.tf`, `variables.tf`, `outputs.tf`, and `README.md` from the upstream CLI at the given version. It copies the three `.tf` files over the tracked files in `infra/stacks/dcp`, which every environment's dcp root links to, and `README.md` into `infra/<ENV>/dcp`. It leaves `backend.tf` and `terraform.tfvars` untouched, because the CLI's own `backend.tf` assumes one stack per instance and would point this stack at empty state. [infra/dfo-dev/dcp/dfo.README.md](../infra/dfo-dev/dcp/dfo.README.md) explains why. It fails on uncommitted edits to `backend.tf` or any `dfo.*` file, so those do not blend into the diff it prints. It also checks the file set the CLI emitted against the expected six, which catches upstream drift the copy loop would otherwise drop silently.
