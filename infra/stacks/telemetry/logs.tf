@@ -15,7 +15,7 @@ resource "google_logging_project_bucket_config" "telemetry" {
 
 # Matches by resource type with no service list, so a new or renamed service
 # or job is routed with no change here. Request logs carry status, latency and
-# URL; stdout and stderr carry the services' structured logs. The load
+# URL. Stdout and stderr carry the services' structured logs. The load
 # balancer's logs and the datacommons service's nginx access log stay out.
 # So do the website's usage-event lines (jsonPayload.message "event" on its
 # stdout), which repeat the Postgres event table the website export copies,

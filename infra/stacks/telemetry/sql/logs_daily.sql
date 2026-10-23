@@ -16,7 +16,7 @@
 -- deploys gains a row for each revision it has not seen, timed at the
 -- revision's first request across the whole source, so a row once written
 -- never changes. A revision whose first request falls on the source's oldest
--- day gets no row: it was already serving when the source began, so its
+-- day gets no row. It was already serving when the source began, so its
 -- first request there is not its deploy. Days are UTC.
 
 DECLARE source_first_day, load_from DATE;
