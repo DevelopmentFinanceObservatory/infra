@@ -13,6 +13,13 @@ variable "namespace" {
   type        = string
 }
 
+# Prod gives each Gemini caller its own key from its own AI Studio project, so
+# the billing export attributes spend by project. Dev shares one key.
+variable "gemini_api_key_secret_id" {
+  description = "Secret Manager id of the Gemini API key the ai service mounts as GOOGLE_API_KEY, which serves the harness and its direct genai calls, such as dfo-prod-ai-gemini-api-key. The secret is created outside Terraform and must hold a version before apply."
+  type        = string
+}
+
 variable "cloudsql_login_role_id" {
   description = "Id of this stack's project-scoped custom role for Cloud SQL IAM login without the Data API, such as dfoDevAiCloudsqlLoginOnly. See session_store.tf."
   type        = string

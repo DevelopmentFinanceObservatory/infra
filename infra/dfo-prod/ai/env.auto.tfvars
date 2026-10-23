@@ -5,6 +5,7 @@ project_id                               = "prod-fin-observatory"
 region                                   = "europe-west1"
 namespace                                = "dfo-prod"
 cloudsql_login_role_id                   = "dfoProdAiCloudsqlLoginOnly"
+gemini_api_key_secret_id                 = "dfo-prod-ai-gemini-api-key" # one Gemini key per caller
 datasets_first_party_principal_secret_id = "dfo-prod-datasets-first-party-principal"
 live_refresh_principal_secret_id         = "dfo-prod-live-refresh-principal"
 platform_postgres_instance_name          = "dfo-prod-platform-postgres"                                   # platform output instance_name

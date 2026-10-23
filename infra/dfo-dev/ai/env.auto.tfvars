@@ -4,6 +4,7 @@ project_id                               = "dev-fin-observatory"
 region                                   = "northamerica-northeast1"
 namespace                                = "dfo-dev"
 cloudsql_login_role_id                   = "dfoDevAiCloudsqlLoginOnly"
+gemini_api_key_secret_id                 = "dfo-dev-gemini-api-key" # shared by every dev caller
 dfo_apis_url                             = "https://dfo-dev-apis-zms5lj4zhq-nn.a.run.app"
 apis_service_name                        = "dfo-dev-apis" # apis output service_name
 datasets_first_party_principal_secret_id = "dfo-dev-datasets-first-party-principal"

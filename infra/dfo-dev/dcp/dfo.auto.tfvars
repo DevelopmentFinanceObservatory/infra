@@ -12,6 +12,10 @@ project_id = "dev-fin-observatory"
 namespace  = "dfo-dev"
 region     = "northamerica-northeast1"
 
+# The Gemini key the DFO prototype app reads (dfo.tf).
+# Dev shares one Gemini key across callers.
+search_api_gemini_api_key_secret_id = "dfo-dev-gemini-api-key"
+
 # Deletion protection for stateful resources holding persistent data. In the
 # upstream module this maps to the Spanner *database* deletion_protection and
 # the artifacts-bucket force_destroy — it does NOT cover the Spanner instance,

@@ -60,14 +60,14 @@ scripts/bootstrap-principals.sh dev-fin-observatory dfo-dev-foundation-principal
 
 ## Gemini spend budget
 
-`budget.tf` creates a Cloud Billing budget on the Gemini API (billing catalog service "Gemini API", `generativelanguage.googleapis.com`) for the project that owns the dev Gemini key. It emails when spend reaches 50%, 90% and 100% of `var.gemini_budget_usd` (default 500 USD a month), and when the forecast for the month reaches 100%. Billing account admins get the default emails. Each address in the principals secret's `budget_alerts` object gets a Cloud Monitoring email channel, named by its label, and the same alerts.
+`budget.tf` creates one Cloud Billing budget on the Gemini API (billing catalog service "Gemini API", `generativelanguage.googleapis.com`) for each project in `var.gemini_key_projects`, the projects that own this environment's Gemini keys, keyed by caller. Each budget emails when its project's spend reaches 50%, 90% and 100% of the entry's `budget_usd` (default 500 USD a month), and when the forecast for the month reaches 100%. Billing account admins get the default emails. Each address in the principals secret's `budget_alerts` object gets a Cloud Monitoring email channel, named by its label, and every budget's alerts.
 
-The budget alerts and caps nothing. Google reports billing data with a delay of hours, so the first email can arrive well after the spend it describes, and requests keep succeeding past 100%. A hard stop needs a quota on the key's project, which this stack does not set.
+The budgets alert and cap nothing. Google reports billing data with a delay of hours, so the first email can arrive well after the spend it describes, and requests keep succeeding past 100%. A hard stop needs a quota on the key's project, which this stack does not set.
 
-The budget stays off, and the stack plans as a no-op, until `budget.auto.tfvars` holds the two values below. The extra recipients live in the principals secret's `budget_alerts` object, and an empty object leaves billing admins as the only recipients.
+The budgets stay off, and the stack plans as a no-op, until `budget.auto.tfvars` holds the two values below. The extra recipients live in the principals secret's `budget_alerts` object, and an empty object leaves billing admins as the only recipients.
 
-- `billing_account_id`: the billing account id. `gcloud billing projects describe <gemini_key_project_number>` prints it.
-- `gemini_key_project_number`: the number of the project that owns the key, the digits after `projects/` in the key name `gcloud services api-keys lookup <key string>` prints. That project can differ from `project_id` when the key came from AI Studio. The budget filter takes the number, so neither the planner nor the applier needs access to that project.
+- `billing_account_id`: the billing account id. `gcloud billing projects describe <project_number>` prints it.
+- `gemini_key_projects`: one entry per caller, such as `apis = { project_number = "123456789012" }`. The number is the digits after `projects/` in the key name `gcloud services api-keys lookup <key string>` prints. That project can differ from `project_id` when the key came from AI Studio. The budget filter takes the number, so neither the planner nor the applier needs access to that project. An entry's `budget_usd` overrides the 500 USD default.
 
 One manual step before the first apply with those values set. `dfo-infra-applier` needs Billing Account Costs Manager on the billing account, and this repo does not manage billing account IAM, so a billing account admin grants it once:
 

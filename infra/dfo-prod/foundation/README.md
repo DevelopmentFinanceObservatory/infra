@@ -35,4 +35,13 @@ The planner binds to the infra repo's `plan` environment and the applier to its 
 
 ## Placeholders in the tfvars
 
-- `budget.auto.tfvars` leaves the Gemini budget off until the billing account and key project are known.
+- `budget.auto.tfvars` leaves the Gemini budgets off until the key projects are known. See "Gemini spend budgets".
+
+## Gemini spend budgets
+
+Prod gives each Gemini caller its own AI Studio project and key, so the billing export attributes spend by project: the apis service, the search catalogue Job, the ai service and the dcp prototype app. Their secrets are `dfo-prod-apis-gemini-api-key`, `dfo-prod-search-catalogue-gemini-api-key`, `dfo-prod-ai-gemini-api-key` and `dfo-prod-dcp-gemini-api-key`, each made by hand with a version before the stack that reads it plans. To switch the budgets on, fill in `budget.auto.tfvars`:
+
+- `billing_account_id`, the DFO billing account, which `gcloud billing projects describe <project_number>` prints.
+- `gemini_key_projects`, one entry per caller keyed `apis`, `search-catalogue`, `ai` and `dcp`, each with the `project_number` of that caller's AI Studio project and, optionally, its own `budget_usd`.
+
+Recipients beyond the billing admins go in the principals secret's `budget_alerts` object. The applier then needs Billing Account Costs Manager and the planner Billing Account Viewer on that billing account, as `infra/dfo-dev/foundation/README.md` "Gemini spend budget" describes, with the `prod-fin-observatory` service accounts in the commands.

@@ -149,29 +149,33 @@ variable "ingestion_spanner_database_id" {
   default     = null
 }
 
-# The four budget variables below have no default and are set in
-# budget.auto.tfvars. Leaving billing_account_id or gemini_key_project_number
-# empty there switches the Gemini budget off, so every other stack and CI's
-# validate and plan keep working before anyone fills them in.
+# The two budget variables below have no default and are set in
+# budget.auto.tfvars. An empty billing_account_id or gemini_key_projects there
+# switches the Gemini budgets off, so every other stack and CI's validate and
+# plan keep working before anyone fills them in.
 variable "billing_account_id" {
-  description = "Billing account that pays for the project holding the Gemini key, as the bare id (`XXXXXX-XXXXXX-XXXXXX`). Look it up with `gcloud billing projects describe <gemini_key_project_number>`. Empty disables the Gemini budget."
+  description = "Billing account that pays for the projects holding the Gemini keys, as the bare id (`XXXXXX-XXXXXX-XXXXXX`). Look it up with `gcloud billing projects describe <project_number>`. Empty disables the Gemini budgets."
   type        = string
 }
 
-variable "gemini_key_project_number" {
-  description = "Number of the project that owns this environment's Gemini API key: the digits after `projects/` in the key name `gcloud services api-keys lookup <key string>` prints. It can belong to another project than project_id when the key came from AI Studio. Empty disables the Gemini budget."
-  type        = string
+variable "gemini_key_projects" {
+  description = "The projects that own this environment's Gemini API keys, keyed by caller (such as apis or ai), one budget each. project_number is the digits after `projects/` in the key name `gcloud services api-keys lookup <key string>` prints. It can belong to another project than project_id when the key came from AI Studio. budget_usd is the monthly Gemini API spend, in USD, that the budget's thresholds are percentages of. Empty disables the Gemini budgets."
+  type = map(object({
+    project_number = string
+    budget_usd     = optional(number, 500)
+  }))
 
   validation {
-    condition     = can(regex("^[0-9]*$", var.gemini_key_project_number))
-    error_message = "gemini_key_project_number must be the project's number (digits only), or empty."
+    condition     = alltrue([for p in values(var.gemini_key_projects) : can(regex("^[0-9]+$", p.project_number))])
+    error_message = "Each gemini_key_projects project_number must be the project's number, digits only."
   }
-}
 
-variable "gemini_budget_usd" {
-  description = "Monthly Gemini API spend, in USD, that the budget's thresholds are percentages of."
-  type        = number
-  default     = 500
+  # The Budget API caps a display name at 60 characters, and budget.tf names
+  # each budget "Gemini API spend: <key>". Its amount takes whole units.
+  validation {
+    condition     = alltrue([for k, p in var.gemini_key_projects : length(k) <= 42 && floor(p.budget_usd) == p.budget_usd])
+    error_message = "Each gemini_key_projects key must be at most 42 characters, and each budget_usd a whole number of dollars."
+  }
 }
 
 variable "billing_export_dataset_id" {

@@ -12,6 +12,10 @@ project_id = "prod-fin-observatory"
 namespace  = "dfo-prod"
 region     = "europe-west1"
 
+# The Gemini key the DFO prototype app reads (dfo.tf).
+# One Gemini key per caller, each from its own AI Studio project.
+search_api_gemini_api_key_secret_id = "dfo-prod-dcp-gemini-api-key"
+
 stateful_deletion_protection  = true
 skip_container_restarts       = true
 stateless_deletion_protection = true
