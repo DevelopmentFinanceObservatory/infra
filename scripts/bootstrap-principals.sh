@@ -49,9 +49,9 @@ done
 [[ "$project" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || { echo "error: $project is not a GCP project id" >&2; exit 1; }
 [[ "$secret_name" =~ ^[A-Za-z0-9_-]{1,255}$ ]] || { echo "error: $secret_name is not a Secret Manager secret name" >&2; exit 1; }
 
-# The stack's schema, the label pattern and each form's pattern come from the
-# file infra/modules/principals-secret reads at plan, so both sides apply the
-# same patterns. The secret is <namespace>-<stack>-principals.
+# The stack's schema, the label pattern, each form's pattern, the type prefix
+# pattern and min_length come from the file infra/modules/principals-secret
+# reads at plan, so both sides apply the same rules. The secret is <namespace>-<stack>-principals.
 schemas="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/modules/principals-secret/schemas.json"
 stack=$(sed -nE 's/^.+-([a-z0-9]+)-principals$/\1/p' <<<"$secret_name")
 schema=$(jq -ce --arg stack "$stack" '.stacks[$stack] // empty' "$schemas") || {

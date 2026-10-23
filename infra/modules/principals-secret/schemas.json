@@ -3,8 +3,8 @@
   "prefix": "\\A([A-Za-z]+:)+",
   "min_length": 4,
   "forms": {
-    "email": "\\A[a-z0-9._%+-]+@[a-z0-9.-]+\\z",
-    "member": "\\A((group|user|serviceAccount):[a-z0-9._%+-]+@|domain:)[a-z0-9.-]+\\z"
+    "email": "\\A[a-z0-9._+-]+@[a-z0-9.-]+\\z",
+    "member": "\\A((group|user|serviceAccount):[a-z0-9._+-]+@|domain:)[a-z0-9.-]+\\z"
   },
   "stacks": {
     "ai": {

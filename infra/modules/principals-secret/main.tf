@@ -8,8 +8,9 @@ terraform {
 
 # A stack's hand-made principals secret. README.md states the rules the
 # postconditions below check, and schemas.json holds the label pattern, the
-# pattern of each value form, and each stack's schema: its top-level keys,
-# each with a form and the fewest entries it holds.
+# pattern of each value form, the type prefix pattern and the shortest value
+# or address CI can mask (min_length), and each stack's schema: its top-level
+# keys, each with a form and the fewest entries it holds.
 # scripts/bootstrap-principals.sh reads the same file, so both sides apply the
 # same patterns. The patterns use only ASCII classes and \A and \z, which RE2
 # (regex here) and Oniguruma (jq's test) read the same way.
