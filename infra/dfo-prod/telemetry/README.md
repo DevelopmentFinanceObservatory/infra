@@ -29,14 +29,15 @@ scripts/load-logs-backfill.sh --ignore-operation=CAESEzkwNzkxOTQ2NTY4NDM4MzI2NDg
 
 ### Rebuilding logs_daily from the backfill
 
-`requests_daily`, `routes_daily` and `errors_daily` reload only from their latest day minus one, and `deploys` never changes a row, so the tables written before the load hold no backfill days and time each revision against `dfo_logs` alone. After the first load, and after any reload, empty the four tables and run the query once. With `requests_daily` empty it loads from the backfill's oldest whole day, and `deploys` computes `before_source` against the longer source.
+`requests_daily`, `routes_daily`, `errors_daily` and `mcp_daily` reload only from `requests_daily`'s latest day minus one, and `deploys` never changes a row, so the tables written before the load hold no backfill days and time each revision against `dfo_logs` alone. After the first load, and after any reload, empty the five tables and run the query once. With `requests_daily` empty it loads from the backfill's oldest whole day, and `deploys` computes `before_source` against the longer source.
 
 ```sh
 bq query --project_id=prod-fin-observatory --location=EU --use_legacy_sql=false \
   'TRUNCATE TABLE `prod-fin-observatory.logs_daily.requests_daily`;
    TRUNCATE TABLE `prod-fin-observatory.logs_daily.routes_daily`;
    TRUNCATE TABLE `prod-fin-observatory.logs_daily.errors_daily`;
-   TRUNCATE TABLE `prod-fin-observatory.logs_daily.deploys`;'
+   TRUNCATE TABLE `prod-fin-observatory.logs_daily.deploys`;
+   TRUNCATE TABLE `prod-fin-observatory.logs_daily.mcp_daily`;'
 config="$(bq ls --transfer_config --transfer_location=EU --project_id=prod-fin-observatory --format=json |
   jq -r '.[] | select(.displayName == "dfo-prod-logs-daily") | .name')"
 bq mk --transfer_run --run_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$config"
@@ -46,20 +47,35 @@ The run's progress shows on the BigQuery console's Scheduled queries page. The d
 
 ## logs_daily
 
-The scheduled query `dfo-prod-logs-daily` runs `sql/logs_daily.sql` at 02:00 UTC every day as `dfo-prod-logs-daily`. It reads `logs_daily.entries`, which is `dfo_logs` from the cut-off on and `backfill_entries` before it. It creates the four tables if they are missing and writes them in one transaction:
+The scheduled query `dfo-prod-logs-daily` runs `sql/logs_daily.sql` at 02:00 UTC every day as `dfo-prod-logs-daily`. It reads `logs_daily.entries`, which is `dfo_logs` from the cut-off on and `backfill_entries` before it. It creates the five tables if they are missing and writes them in one transaction:
 
 - `requests_daily`: requests per day and service, with 4xx and 5xx counts and approximate p50, p95 and p99 latency in milliseconds.
 - `routes_daily`: the same per day, service, method and route.
 - `errors_daily`: stdout and stderr entries at `WARNING` or above per day, resource type, service or job, the structured `logger` field, and severity. Request logs are excluded, and so is every message.
 - `deploys`: each revision that served a request, with the time of its first request and `before_source`. A revision that never passed its startup probe served nothing and has no row.
+- `mcp_daily`: the combined MCP server's calls per day, caller kind, client, request and outcome, with an HLL++ sketch of the callers. "MCP calls" below describes it.
 
-The oldest day in `logs_daily.entries` is partial, because the copy or retention cut entries part way through it, so the oldest whole day is the one after. The day of the run is partial too, so the first three tables read entries before the current UTC day only, and every day they hold is whole. They reload the days from `requests_daily`'s latest loaded day minus one through yesterday, and from the oldest whole day when `requests_daily` is empty. The start never falls before a floor, so a run deletes only days it reloads in full. While `dfo_logs` reaches back to the cut-off, the view has no gap and the floor is the view's oldest whole day. From about 2026-11-22, retention moves `dfo_logs`'s oldest entry past the cut-off, the view has a gap between the backfill and that entry, and the floor becomes `dfo_logs`'s oldest whole day. `logs_daily.sql` reads `dfo_logs` directly for that test. An empty `dfo_logs` with days already loaded gives no start, so the run deletes and loads nothing. `errors_daily` shares the start, so a stretch with no warnings cannot widen its window. The day of the cut-off is whole, since the backfill holds its entries before the cut-off and `dfo_logs` the rest. A missed run heals on the next one as long as the gap is shorter than the bucket's retention. A longer gap loses the days that aged out of the bucket and keeps every day already loaded.
+The oldest day in `logs_daily.entries` is partial, because the copy or retention cut entries part way through it, so the oldest whole day is the one after. The day of the run is partial too, so `requests_daily`, `routes_daily`, `errors_daily` and `mcp_daily` read entries before the current UTC day only, and every day they hold is whole. They reload the days from `requests_daily`'s latest loaded day minus one through yesterday, and from the oldest whole day when `requests_daily` is empty. The start never falls before a floor, so a run deletes only days it reloads in full. While `dfo_logs` reaches back to the cut-off, the view has no gap and the floor is the view's oldest whole day. From about 2026-11-22, retention moves `dfo_logs`'s oldest entry past the cut-off, the view has a gap between the backfill and that entry, and the floor becomes `dfo_logs`'s oldest whole day. `logs_daily.sql` reads `dfo_logs` directly for that test. An empty `dfo_logs` with days already loaded gives no start, so the run deletes and loads nothing. `errors_daily` and `mcp_daily` share the start, so a stretch with no warnings or no MCP calls cannot widen their window. The day of the cut-off is whole, since the backfill holds its entries before the cut-off and `dfo_logs` the rest. A missed run heals on the next one as long as the gap is shorter than the bucket's retention. A longer gap loses the days that aged out of the bucket and keeps every day already loaded.
 
 `infra/stacks/telemetry/tests/load_from.test.sh` runs the query's start-day statements over literal sources, through both floors and an empty source, and fails on any start that differs from the one it pins. It also runs the `requests_daily` and `errors_daily` source reads over entries either side of midnight and fails when the current day loads. Run it by hand after changing those statements.
 
 `deploys` adds each revision it has not seen, timed over the whole of `logs_daily.entries`, today included, and never changes a row. `before_source` is true, as of the run that records the revision, when no other revision of the same service served a request earlier in `logs_daily.entries`. A revision with an earlier sibling was deployed after the source began. One without was serving when the source began, or is the first after a service-wide silence longer than retention, or the first revision of a new service. Its `first_request` is not a known deploy, so deploy markers read only rows where `before_source` is false. Recording it keeps later runs from adding it again once retention trims its early requests, which would time a sparse revision at a request weeks after its deploy. The rule drops the marker of a new service's first deploy. It has one known false marker. An old revision that held 0% of traffic or served only a tag, and later takes traffic, is recorded as a deploy on that later day.
 
 Days are UTC.
+
+### MCP calls
+
+`mcp_daily` counts the lines `harness.combined_mcp` in dfo-ai logs on `dfo-prod-ai`'s stderr, one per tool call, resource read, resource list and initialize. The query reads those lines' fixed fields only. A line from that logger that starts `combined mcp ` in any other shape counts as `request` `unparsed`, with `caller_kind`, `client` and `outcome` `none` and no sketch, so a change of log format in dfo-ai shows as unparsed calls. The server's warnings, which start `combined mcp: `, are not counted. The first line was logged at 2026-10-23 19:49 UTC, after the cut-off, so the backfill holds none.
+
+- `caller_kind` is the prefix of the logged caller, the `x-dfo-caller` header: `user`, `key` and `ip` from the website's edge, and `conversation` for the Studio assistant's own calls through the harness. A line with no caller gives `none`, and any other prefix `other`.
+- `client` is the client name the MCP client sent, when it matches `^[A-Za-z0-9 ._/-]{1,64}$`, `none` when it sent none, and `other` otherwise.
+- `request` is the tool name for a tool call, when it matches `^[A-Za-z0-9_.-]{1,64}$`, and `other` otherwise. It is `resource` for a resource read, `resource_list` for a resource list and `initialize` for an initialize, and `unparsed` for a line the query cannot parse.
+- `outcome` is `ok`, a refusal code or the name of the exception the call raised, when it matches `^[A-Za-z0-9_.-]{1,64}$`, and `other` otherwise.
+- `calls` counts the lines, and `callers_sketch` is `HLL_COUNT.INIT(caller, 14)` over the logged caller strings, NULL when no line in the row names a caller.
+
+A client chooses its name and the tools it calls, so the patterns keep free text out of the table. No caller string, trace id or URI reaches it. `infra/stacks/telemetry/tests/mcp_daily.test.sh` runs the parse over literal lines in each shape and fails on any row that differs from the ones it pins. Run it by hand after changing the parse.
+
+The first MCP line is from 2026-10-23. `mcp_daily` shares `requests_daily`'s start, so its first run loads only from that start on. If `SELECT MIN(day) FROM logs_daily.mcp_daily` is later than 2026-10-23, rebuild `logs_daily` once, as "Rebuilding logs_daily from the backfill" describes, to load every MCP line `dfo_logs` still holds.
 
 ### Routes
 
@@ -126,6 +142,7 @@ scripts/load-search-console-history.sh <site_url> 2026-10-05 <day before the bul
 | `service_routes_daily`   | UTC day, service, method, route                          | `day`, `service`, `method`, `route`, then as `service_requests_daily`                                                                                                                                        |
 | `service_errors_daily`   | UTC day, resource type, service or job, logger, severity | `day`, `resource_type`, `service`, `logger`, `severity`, `entries`                                                                                                                                           |
 | `deploys`                | revision                                                 | `service`, `revision`, `deployed_at`                                                                                                                                                                         |
+| `mcp_daily` | UTC day, caller kind, client, request, outcome | `day`, `caller_kind`, `client`, `request`, `outcome`, `calls`, `callers_sketch` |
 | `product_events_daily`   | UTC day, event name, page, signed-in state               | `day`, `event`, `page`, `signed_in`, `events`, `visitors_sketch`, `users_sketch`                                                                                                                             |
 | `accounts_daily`         | UTC day of account creation, organisation                | `day`, `organisation`, `accounts`                                                                                                                                                                            |
 | `ai_turns`               | turn                                                     | `day`, `started_at`, `session_sketch`, `latency_seconds`, `time_to_first_token_seconds`, `generations`, `tool_calls`, `input_tokens`, `output_tokens`, `cost_usd`, `errored`                                 |
@@ -136,9 +153,9 @@ scripts/load-search-console-history.sh <site_url> 2026-10-05 <day before the bul
 | `search_console_pages`   | Pacific Time day, page URL                               | `day`, `url`, `clicks`, `impressions`, `sum_position`                                                                                                                                                        |
 | `model_spend_daily`      | UTC day, caller, service, SKU, currency                  | `day`, `caller`, `service`, `sku`, `cost`, `credits`, `net_cost`, `currency`                                                                                                                                 |
 
-The `_sketch` columns other than `latency_sketch` are HLL++ sketches (`HLL_COUNT.INIT(x, 14)`), so distinct visitors, users and sessions over any set of rows come from `HLL_COUNT.MERGE` over those rows, and no id or hash of one reaches `dfo_reporting`. The other figures sum across rows, except quantiles and active users, which hold for their own row only. GA4 sessions sum across days but not across pages, and a session that crosses midnight counts on both days, so a sum over several days runs slightly high.
+The `_sketch` columns other than `latency_sketch` are HLL++ sketches (`HLL_COUNT.INIT(x, 14)`), so distinct visitors, users, sessions and MCP callers over any set of rows come from `HLL_COUNT.MERGE` over those rows, and no id or hash of one reaches `dfo_reporting`. The other figures sum across rows, except quantiles and active users, which hold for their own row only. GA4 sessions sum across days but not across pages, and a session that crosses midnight counts on both days, so a sum over several days runs slightly high.
 
-The four service views read `logs_daily`, and `deploys` keeps only the revisions deployed while the logs source ran (`before_source` false), which are the deploy markers.
+The service views and `mcp_daily` read `logs_daily`, and `deploys` keeps only the revisions deployed while the logs source ran (`before_source` false), which are the deploy markers.
 
 `product_events_daily` reads `website_export.event`. Its `page` is the path through `normalise_route`, so ids in paths such as `/studio/<id>` read `:id`. `dfo_reporting` holds its own `normalise_route`, built from the same `sql/normalise_route.sql` as the one in `logs_daily`, since readers can run routines in `dfo_reporting` and have no access to `logs_daily`. `visitors_sketch` holds the export's `visitor_hash` values and `users_sketch` its `user_hash` values, which only signed-in events carry.
 
@@ -159,6 +176,7 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 | Group            | Views                                          | Tables that must exist                                                                                                                                                                            |
 | ---------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `logs`           | the four service views and `deploys`           | `logs_daily.requests_daily`, `routes_daily`, `errors_daily` and `deploys`, from the first `dfo-prod-logs-daily` run                                                                               |
+| `mcp` | `mcp_daily` | `logs_daily.mcp_daily`, from the first `dfo-prod-logs-daily` run |
 | `website`        | `product_events_daily`                         | `website_export.event`, from the website export Job's first run                                                                                                                                   |
 | `accounts`       | `accounts_daily`                               | `website_export.account_daily`, from the first website export Job run that writes it                                                                                                              |
 | `langfuse`       | `ai_turns`, `ai_observations_daily`            | `langfuse_export.observations`, from the Langfuse export Job's first run                                                                                                                          |
