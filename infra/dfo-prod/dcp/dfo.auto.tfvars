@@ -12,12 +12,9 @@ project_id = "prod-fin-observatory"
 namespace  = "dfo-prod"
 region     = "europe-west1"
 
-stateful_deletion_protection = true
-skip_container_restarts      = true
-
-# DCP v1.1.6 deletes the Cloud Run preprocessing job, and Terraform cannot
-# delete it while protection is on. Set back to true once prod runs v1.1.6.
-stateless_deletion_protection = false
+stateful_deletion_protection  = true
+skip_container_restarts       = true
+stateless_deletion_protection = true
 
 # =============================================================================
 # Storage Module
