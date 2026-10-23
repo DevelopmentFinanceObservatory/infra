@@ -89,7 +89,13 @@ SELECT
   http_request.request_method AS method,
   `${normalise_route}`(http_request.request_url) AS route,
   http_request.status AS status,
-  TIMESTAMP_DIFF(TIMESTAMP '1970-01-01' + http_request.latency, TIMESTAMP '1970-01-01', MICROSECOND) / 1000 AS latency_ms
+  -- latency is a STRUCT of INT64 seconds and nanos, and an entry may omit a
+  -- zero component.
+  IF(
+    http_request.latency IS NULL,
+    NULL,
+    IFNULL(http_request.latency.seconds, 0) * 1000 + IFNULL(http_request.latency.nanos, 0) / 1e6
+  ) AS latency_ms
 FROM `${source}`
 WHERE timestamp >= TIMESTAMP(load_from)
   AND resource.type = 'cloud_run_revision'

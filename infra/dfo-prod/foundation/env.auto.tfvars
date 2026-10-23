@@ -21,6 +21,10 @@ state_bucket                   = "tf-state-dfo-prod-prod-fin-observatory"
 # prod and the Gemini key projects.
 billing_export_dataset_id = "billing_export"
 
+# The telemetry stack, prod only, reads its readers and alert recipients from
+# dfo-prod-telemetry-principals.
+principals_secret_stacks = ["telemetry"]
+
 # plan-prod.yml's plan job runs PR code on pull_request_target, whose ref is
 # refs/heads/main, the applier's ref. The planner binds to the `plan`
 # environment on main and the applier to `production` on main, so that job's

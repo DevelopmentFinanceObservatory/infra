@@ -38,7 +38,7 @@ A share id made only of lower-case letters keeps its value, since nothing in its
 
 ## Alerts
 
-Each address in `alert_emails` gets its own Cloud Monitoring email channel, and every alert in this stack notifies all of them. Prod sends to `dfo-alerts@one.org`. Five policies watch the data pipeline the dashboard reads:
+Each address in the principals secret's `alerts` object gets its own Cloud Monitoring email channel, named by its label, and every alert in this stack notifies all of them. Five policies watch the data pipeline the dashboard reads:
 
 - `logs_daily scheduled query failed` fires when a run logs an error against the config, or when the Data Transfer Service counts a run as `FAILED`. A run that keeps failing for longer than the bucket's retention loses those days for good.
 - `dfo-prod-website-export Job execution failed` fires when an execution of the website's hourly event export Job fails.
@@ -53,7 +53,28 @@ The dataset `searchconsole` takes Search Console's bulk data export. `search-con
 
 ## Readers
 
-`reporting_readers` in `env.auto.tfvars` lists the readers of `dfo_reporting` as IAM member strings. Each gets `READER` on `dfo_reporting`, and `roles/bigquery.jobUser` and `roles/mcp.toolUser` on the project, and no access to `logs_daily`, `dfo_logs`, `searchconsole`, or any other source dataset.
+The principals secret's `readers` object lists the readers of `dfo_reporting` as IAM member strings. Each gets `READER` on `dfo_reporting`, and `roles/bigquery.jobUser` and `roles/mcp.toolUser` on the project, and no access to `logs_daily`, `dfo_logs`, `searchconsole`, or any other source dataset.
+
+## Principals secret
+
+The readers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`, which `main.tf` reads, so no address sits in this repository or in a plan log. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. The secret holds one JSON object:
+
+```json
+{
+  "readers": {"team": "group:readers@example.org"},
+  "alerts": {"team": "alerts@example.org"}
+}
+```
+
+A reader is `group:`, `user:`, `serviceAccount:` or `domain:` followed by an address, and `alerts` holds at least one address. The labels key the grants and channels, so they appear in resource addresses and plan output, and hold only lower-case letters, digits, hyphens and underscores. Plan fails on a secret of any other shape.
+
+To create the secret or change its members, write the JSON to a file outside the repository and run
+
+```sh
+scripts/bootstrap-principals.sh prod-fin-observatory dfo-prod-telemetry-principals principals.json
+```
+
+The script checks the file's shape, creates the secret if it is absent, adds the file as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. `foundation` makes the same grant through `principals_secret_stacks`, but this stack's first plan can run before that apply. The next telemetry apply moves the grants and channels to the new members.
 
 ## Apply order
 
@@ -62,8 +83,8 @@ Telemetry applies after `foundation`, which lets the applier write this stack's 
 ## Made by hand first
 
 - A local backend init, `just ENV=dfo-prod STACK=telemetry bootstrap`, once `foundation` has applied.
-- The Google group `dfo-dashboard-readers@one.org`. The reader grants fail while it does not exist.
-- The Google group `dfo-alerts@one.org`, which receives the alert mail. It must accept mail from outside one.org, since Cloud Monitoring sends from a google.com address.
+- The principals secret `dfo-prod-telemetry-principals`, written with `scripts/bootstrap-principals.sh` as "Principals secret" describes. Plan fails while it does not exist.
+- The Google groups the secret names. The reader grants fail while a reader group does not exist, and an alert group must accept mail from outside its domain, since Cloud Monitoring sends from a google.com address.
 - The BigQuery Data Transfer Service agent, `service-<project number>@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com`. The grant that lets it run `dfo-prod-logs-daily` fails while the agent does not exist, and the applier cannot create it. A project owner creates it once with `gcloud beta services identity create --service=bigquerydatatransfer.googleapis.com --project=prod-fin-observatory`.
 
 ## After the first apply

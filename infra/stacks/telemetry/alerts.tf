@@ -3,15 +3,17 @@
 # that fill the datasets the reporting views read. The Jobs belong to the
 # website and ai stacks, and this stack names them by their fixed names.
 
-# An email channel carries one address, so each recipient gets a channel.
+# An email channel carries one address, so each recipient in the principals
+# secret's alerts object (main.tf) gets a channel, keyed and named by its
+# label.
 resource "google_monitoring_notification_channel" "alert_email" {
-  for_each = toset(var.alert_emails)
+  for_each = toset(nonsensitive(keys(local.principals.alerts)))
 
   project      = var.project_id
   display_name = "Telemetry pipeline alerts: ${each.key}"
   type         = "email"
   labels = {
-    email_address = each.key
+    email_address = local.principals.alerts[each.key]
   }
 }
 
