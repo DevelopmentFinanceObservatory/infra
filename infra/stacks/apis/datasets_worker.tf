@@ -144,7 +144,7 @@ resource "google_storage_bucket_iam_member" "datasets_worker_pinned_viewer" {
 resource "google_storage_bucket_iam_member" "datasets_worker_coverage_viewer" {
   count = var.legacy_coverage_pipeline ? 1 : 0
 
-  bucket = google_storage_bucket.coverage.name
+  bucket = google_storage_bucket.coverage[0].name
   role   = "roles/storage.objectViewer"
   member = google_service_account.datasets_worker.member
 }
@@ -389,7 +389,7 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
         for_each = var.legacy_coverage_pipeline ? [1] : []
         content {
           name  = "COVERAGE_ARTIFACT_URI"
-          value = "gs://${google_storage_bucket.coverage.name}/"
+          value = "gs://${google_storage_bucket.coverage[0].name}/"
         }
       }
 

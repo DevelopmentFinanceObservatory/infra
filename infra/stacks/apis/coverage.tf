@@ -7,12 +7,12 @@
 # at it last; it compares a fingerprint of the source data against the
 # published stamp and skips the build when they already agree.
 
-# Every resource here except the bucket exists only while
-# var.legacy_coverage_pipeline is true. The bucket stays either way, so
-# turning the variable off deletes no data.
+# Every resource here exists only while var.legacy_coverage_pipeline is
+# true. Turning it off deletes the bucket, which fails on a non-empty one:
+# empty it first.
 
 variable "legacy_coverage_pipeline" {
-  description = "Whether the coverage job, its Scheduler tick, identities, grants and alerting exist, and whether the apis service, datasets worker and search catalogue job get COVERAGE_ARTIFACT_URI and read access to the coverage bucket. False needs a dfo-apis image that serves coverage from the graph release (graph_release_coverage) and a builder that no longer shadows (graph_release_shadow false). Prod can turn it off once it serves from the graph release. The bucket stays either way."
+  description = "Whether the coverage bucket, job, Scheduler tick, identities, grants and alerting exist, and whether the apis service, datasets worker and search catalogue job get COVERAGE_ARTIFACT_URI and read access to the bucket. False needs a dfo-apis image that serves coverage from the graph release (graph_release_coverage) and a builder that no longer shadows (graph_release_shadow false). Prod can turn it off once it serves from the graph release. False deletes the bucket: empty it first, since the provider refuses to delete a bucket with objects, and the destroy guard needs the allow-destroy label."
   type        = bool
   default     = true
 
@@ -34,6 +34,8 @@ variable "legacy_coverage_pipeline" {
 # per-object conditions, so granting on it would also hand the job write
 # access to ingestion's own jsonld/temp objects.
 resource "google_storage_bucket" "coverage" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   name                        = "${var.namespace}-coverage-${var.project_id}"
   project                     = var.project_id
   location                    = var.region
@@ -56,8 +58,8 @@ resource "google_storage_bucket" "coverage" {
 }
 
 output "coverage_bucket_name" {
-  description = "Name of the coverage artifact bucket. The job publishes to \"versions/<stamp>/\" plus a root \"current.json\" pointer; dfo-apis's COVERAGE_ARTIFACT_URI reads gs://<this>/."
-  value       = google_storage_bucket.coverage.name
+  description = "Name of the coverage artifact bucket, null while legacy_coverage_pipeline is false. The job publishes to \"versions/<stamp>/\" plus a root \"current.json\" pointer; dfo-apis's COVERAGE_ARTIFACT_URI reads gs://<this>/."
+  value       = one(google_storage_bucket.coverage[*].name)
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -160,7 +162,7 @@ resource "google_project_iam_member" "coverage_job_read_session_user" {
 resource "google_storage_bucket_iam_member" "coverage_job_object_user" {
   count = var.legacy_coverage_pipeline ? 1 : 0
 
-  bucket = google_storage_bucket.coverage.name
+  bucket = google_storage_bucket.coverage[0].name
   role   = "roles/storage.objectUser"
   member = google_service_account.coverage_job[0].member
 }
@@ -170,7 +172,7 @@ resource "google_storage_bucket_iam_member" "coverage_job_object_user" {
 resource "google_storage_bucket_iam_member" "coverage_apis_runtime_viewer" {
   count = var.legacy_coverage_pipeline ? 1 : 0
 
-  bucket = google_storage_bucket.coverage.name
+  bucket = google_storage_bucket.coverage[0].name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${module.apis_service.runtime_service_account_email}"
 }
@@ -241,7 +243,7 @@ resource "google_cloud_run_v2_job" "coverage" {
 
         env {
           name  = "COVERAGE_ARTIFACT_URI"
-          value = "gs://${google_storage_bucket.coverage.name}/"
+          value = "gs://${google_storage_bucket.coverage[0].name}/"
         }
 
         # project.location.connection_id, the literal form BigQuery's
