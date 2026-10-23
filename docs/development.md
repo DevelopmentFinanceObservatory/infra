@@ -55,6 +55,10 @@ Both plan workflows run `terraform plan -out=tfplan` and pass the saved plan to 
 
 `google_storage_bucket.datasets_working` and `datasets_pinned` in `infra/stacks/dcp/dfo_datasets.tf` also carry `prevent_destroy`, which stops Terraform generating a destructive plan for them at all. That holds on the break-glass path below, where `check-destroys.sh` does not run.
 
+### Principal addresses
+
+Stacks read group and person addresses from hand-made Secret Manager secrets named `<namespace>-<stack>-principals`, each a JSON object of objects mapping labels to IAM members. Terraform prints a member in the id of every `*_iam_member` resource, `sensitive` or not. Before any terraform step, every plan and apply job runs `scripts/mask-principals.sh`, which masks each member, and its address without the `group:` or `user:` prefix, in the rest of the job's log. Masks cover logs only, so the comment steps strip the same list, through `.github/scripts/redact-principals.js`, from the plan and apply comments and the job summary, and refuse to post Terraform output when the list is missing. The script fails the job if it cannot list the project's secrets or read a principals secret. The applier reads them through `roles/secretmanager.admin`. The planner needs `roles/secretmanager.secretAccessor` on each one, so grant it when you create the secret, or every plan in that environment fails until the grant exists. `scripts/mask-principals.test.sh` and `node --test .github/scripts/redact-principals.test.js` test the two scripts.
+
 ### Re-applying and break-glass
 
 `apply.yml` takes a `workflow_dispatch` with a `stack` input, for re-applying one stack from the head of the branch it is dispatched on (`dev` for dfo-dev, `main` for dfo-prod) without a commit that touches it.
