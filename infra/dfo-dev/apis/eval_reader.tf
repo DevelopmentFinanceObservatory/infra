@@ -79,6 +79,16 @@ resource "google_cloud_run_v2_service_iam_member" "eval_reader_apis_invoker" {
   member   = google_service_account.eval_reader.member
 }
 
+# The eval jobs and the sdmx-live workflow also read the Data Commons service
+# directly, so the account holds run.invoker there as well.
+resource "google_cloud_run_v2_service_iam_member" "eval_reader_dc_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = var.datacommons_service_name
+  role     = "roles/run.invoker"
+  member   = google_service_account.eval_reader.member
+}
+
 # The job's credentials are this account's, reached through WIF
 # impersonation, and minting an ID token through the IAM Credentials
 # generateIdToken call needs iam.serviceAccounts.getOpenIdToken on the
