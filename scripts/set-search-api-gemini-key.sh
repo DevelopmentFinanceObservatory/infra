@@ -93,7 +93,8 @@ for attempt in 1 2 3; do
 done
 
 # Wait for the rollout. Returning before the revision is serving would report
-# success while /api/search/* is still 502ing.
+# success while the service still runs the revision without the key, or while
+# a revision that cannot read the secret is failing to start.
 if [ -n "${operation:-}" ]; then
   for _ in $(seq 1 60); do
     op_json=$(curl -sS -f -H "$auth" "https://run.googleapis.com/v2/${operation}")
