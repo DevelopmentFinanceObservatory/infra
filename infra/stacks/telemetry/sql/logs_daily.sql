@@ -15,12 +15,15 @@
 --
 -- deploys gains a row for each revision it has not seen, timed at the
 -- revision's first request across the whole source, and never changes a row
--- once written. before_source is true when that first request falls on the
--- source's oldest day as of the run that records it. Such a revision was
--- already serving when the source began, so its first request there is not
--- its deploy, and deploy markers read only rows where before_source is false.
--- Recording it anyway keeps it out of later runs, which would otherwise time
--- it at whatever request survives retention and mark a deploy weeks late.
+-- once written. before_source is true, as of the run that records the
+-- revision, when no other revision of its service served a request earlier
+-- in the source. A revision with an earlier sibling was deployed after the
+-- source began. One without was serving when the source began, or is the
+-- first after a service-wide silence longer than retention, or the first of
+-- a new service. Its first request is not a known deploy, so deploy markers
+-- read only rows where before_source is false. Recording it anyway keeps it
+-- out of later runs, which would otherwise time it at whatever request
+-- survives retention and mark a deploy weeks late.
 -- Days are UTC.
 
 DECLARE source_first_day, load_from DATE;
@@ -142,16 +145,25 @@ WHERE timestamp >= TIMESTAMP(load_from)
 GROUP BY 1, 2, 3, 4, 5;
 
 INSERT INTO `${dataset}.deploys`
-SELECT service, revision, first_request, DATE(first_request) = source_first_day
+SELECT service, revision, first_request, before_source
 FROM (
+  -- Every revision in the source, recorded or not, so the earliest sibling
+  -- can be one deploys already holds.
   SELECT
-    JSON_VALUE(resource.labels.service_name) AS service,
-    JSON_VALUE(resource.labels.revision_name) AS revision,
-    MIN(timestamp) AS first_request
-  FROM `${source}`
-  WHERE resource.type = 'cloud_run_revision'
-    AND log_id = 'run.googleapis.com/requests'
-  GROUP BY service, revision
+    service,
+    revision,
+    first_request,
+    first_request = MIN(first_request) OVER (PARTITION BY service) AS before_source
+  FROM (
+    SELECT
+      JSON_VALUE(resource.labels.service_name) AS service,
+      JSON_VALUE(resource.labels.revision_name) AS revision,
+      MIN(timestamp) AS first_request
+    FROM `${source}`
+    WHERE resource.type = 'cloud_run_revision'
+      AND log_id = 'run.googleapis.com/requests'
+    GROUP BY service, revision
+  )
 ) AS seen
 WHERE NOT EXISTS (
   SELECT 1

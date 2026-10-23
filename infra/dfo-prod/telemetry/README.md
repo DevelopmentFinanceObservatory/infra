@@ -23,7 +23,7 @@ The scheduled query `dfo-prod-logs-daily` runs `sql/logs_daily.sql` at 02:00 UTC
 
 The oldest day in `dfo_logs` is partial, because the sink started or retention cut entries part way through it, so the oldest whole day is the one after. The first three tables reload the days from `requests_daily`'s latest loaded day minus one through today, and from the oldest whole day when `requests_daily` is empty. The start never falls before the oldest whole day, so a run deletes only days it reloads in full. `errors_daily` shares the start, so a stretch with no warnings cannot widen its window. A missed run heals on the next one as long as the gap is shorter than the bucket's retention. A longer gap loses the days that aged out of the bucket and keeps every day already loaded.
 
-`deploys` adds each revision it has not seen, timed over the whole of `dfo_logs`, and never changes a row. `before_source` is true when the revision's first request falls on the oldest day in `dfo_logs` at the run that records it. Such a revision was already serving when the source began, so its `first_request` is not its deploy, and deploy markers read only rows where `before_source` is false. Recording it keeps later runs from adding it again once retention trims its early requests, which would time a sparse revision at a request weeks after its deploy. A real deploy on the oldest day gets `before_source` true and so no marker.
+`deploys` adds each revision it has not seen, timed over the whole of `dfo_logs`, and never changes a row. `before_source` is true, as of the run that records the revision, when no other revision of the same service served a request earlier in `dfo_logs`. A revision with an earlier sibling was deployed after the source began. One without was serving when the source began, or is the first after a service-wide silence longer than retention, or the first revision of a new service. Its `first_request` is not a known deploy, so deploy markers read only rows where `before_source` is false. Recording it keeps later runs from adding it again once retention trims its early requests, which would time a sparse revision at a request weeks after its deploy. The rule drops the marker of a new service's first deploy. It invents one in a single case: an old revision that held 0% of traffic, or served only a tag, takes its first request after a newer sibling did.
 
 Days are UTC.
 
@@ -38,13 +38,14 @@ A share id made only of lower-case letters keeps its value, since nothing in its
 
 ## Alerts
 
-Each address in `alert_emails` gets its own Cloud Monitoring email channel, and every alert in this stack notifies all of them. Prod sends to `dfo-alerts@one.org`. Three policies watch the data pipeline the dashboard reads:
+Each address in `alert_emails` gets its own Cloud Monitoring email channel, and every alert in this stack notifies all of them. Prod sends to `dfo-alerts@one.org`. Five policies watch the data pipeline the dashboard reads:
 
 - `logs_daily scheduled query failed` fires when a run logs an error against the config, or when the Data Transfer Service counts a run as `FAILED`. A run that keeps failing for longer than the bucket's retention loses those days for good.
 - `dfo-prod-website-export Job execution failed` fires when an execution of the website's hourly event export Job fails.
 - `dfo-prod-langfuse-export Job execution failed` fires when an execution of the ai stack's hourly Langfuse export Job fails. Langfuse Cloud keeps observations for a limited time, so a long run of failures loses data.
+- `dfo-prod-website-export Job not succeeding` and `dfo-prod-langfuse-export Job not succeeding` fire when a Job has no succeeded execution for three hours. They catch what the failure policies cannot see: a paused or failing Scheduler trigger, a renamed or deleted Job, or every run failing. Each is its own policy with a seven-day auto-close, since a shorter timer would close the incident while no execution succeeds.
 
-The two Job policies read Cloud Run's `run.googleapis.com/job/completed_execution_count` with `result="failed"`, filtered by job name. The Jobs belong to the website and ai stacks, and this stack names them by their fixed names, so a policy for a Job not yet created stays quiet.
+The four Job policies read Cloud Run's `run.googleapis.com/job/completed_execution_count`, with `result="failed"` or `result="succeeded"`, filtered by job name. The Jobs belong to the website and ai stacks, and this stack names them by their fixed names. A Job not yet created has no series, so its policies stay quiet, and the absence policy starts watching after the Job's first succeeded execution, since Cloud Monitoring needs one measurement before a series can go absent.
 
 ## Search Console
 

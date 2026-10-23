@@ -55,3 +55,37 @@ resource "google_monitoring_alert_policy" "export_job_failed" {
     auto_close = "3600s"
   }
 }
+
+# A Job whose trigger stops runs no execution, so the failed-execution policy
+# above stays quiet. This one fires after three missed hourly successes,
+# whatever the cause: a paused or failing Scheduler trigger, a renamed or
+# deleted Job, or every run failing. It is its own policy, as the apis
+# stack's search_catalogue_heartbeat is, because an auto_close timer shorter
+# than the absence would close the incident while no execution succeeds.
+resource "google_monitoring_alert_policy" "export_job_not_succeeding" {
+  for_each = local.export_jobs
+
+  project      = var.project_id
+  display_name = "${each.value} Job not succeeding"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "no succeeded ${each.value} execution for 10800s"
+
+    condition_absent {
+      filter   = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${each.value}\" AND resource.labels.location=\"${var.region}\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"succeeded\""
+      duration = "10800s"
+
+      aggregations {
+        alignment_period   = "900s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
