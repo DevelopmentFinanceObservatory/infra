@@ -16,7 +16,7 @@ variable "namespace" {
 # Prod gives each Gemini caller its own key from its own AI Studio project, so
 # the billing export attributes spend by project. Dev shares one key.
 variable "gemini_api_key_secret_id" {
-  description = "Secret Manager id of the Gemini API key the apis service mounts as GEMINI_API_KEY, such as dfo-prod-apis-gemini-api-key. The secret is created outside Terraform and must hold a version before plan."
+  description = "Secret Manager id of the Gemini API key the apis service mounts as GEMINI_API_KEY, such as dfo-prod-apis-gemini-api-key. The secret is created outside Terraform and must hold a version before apply."
   type        = string
 }
 

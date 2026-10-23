@@ -89,7 +89,7 @@ resource "google_storage_bucket_iam_member" "search_catalogue_job_coverage_viewe
 # The job's own Gemini key, so its spend bills to its own AI Studio project in
 # prod. Created outside Terraform, like the service's key in main.tf.
 variable "search_catalogue_gemini_api_key_secret_id" {
-  description = "Secret Manager id of the Gemini API key the search catalogue Job mounts as GEMINI_API_KEY, such as dfo-prod-search-catalogue-gemini-api-key. Dev names the service's shared key. The secret must hold a version before plan."
+  description = "Secret Manager id of the Gemini API key the search catalogue Job mounts as GEMINI_API_KEY, such as dfo-prod-search-catalogue-gemini-api-key. Dev names the service's shared key. The secret must hold a version before apply."
   type        = string
 }
 

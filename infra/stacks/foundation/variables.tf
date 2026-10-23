@@ -169,6 +169,13 @@ variable "gemini_key_projects" {
     condition     = alltrue([for p in values(var.gemini_key_projects) : can(regex("^[0-9]+$", p.project_number))])
     error_message = "Each gemini_key_projects project_number must be the project's number, digits only."
   }
+
+  # The Budget API caps a display name at 60 characters, and budget.tf names
+  # each budget "Gemini API spend: <key>". Its amount takes whole units.
+  validation {
+    condition     = alltrue([for k, p in var.gemini_key_projects : length(k) <= 42 && floor(p.budget_usd) == p.budget_usd])
+    error_message = "Each gemini_key_projects key must be at most 42 characters, and each budget_usd a whole number of dollars."
+  }
 }
 
 variable "billing_export_dataset_id" {

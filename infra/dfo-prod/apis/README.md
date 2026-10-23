@@ -8,7 +8,7 @@ Apply after `foundation`, `platform`, and `dcp`. Each commented line in `env.aut
 
 ## Hand-made prerequisites
 
-- Secret Manager secrets `dfo-prod-apis-gemini-api-key` (the service's key, `data.google_secret_manager_secret.gemini` in `main.tf`) and `dfo-prod-search-catalogue-gemini-api-key` (the search catalogue Job's key, `data.google_secret_manager_secret.search_catalogue_gemini` in `search_catalogue.tf`). Each holds a key from its own AI Studio project on the DFO billing account, so the billing export attributes spend by caller. Each must exist with a version before plan, since the data sources fail without it.
+- Secret Manager secrets `dfo-prod-apis-gemini-api-key` (the service's key, `data.google_secret_manager_secret.gemini` in `main.tf`) and `dfo-prod-search-catalogue-gemini-api-key` (the search catalogue Job's key, `data.google_secret_manager_secret.search_catalogue_gemini` in `search_catalogue.tf`). Each holds a key from its own AI Studio project on the DFO billing account, so the billing export attributes spend by caller. The data sources fail plan while a secret does not exist, and a secret with no version fails the revision or the Job run at apply.
 - The `dfo-apis-deployer` service account, created by `foundation`.
 
 ## Handoff

@@ -43,7 +43,7 @@ resource "google_billing_budget" "gemini" {
   for_each = local.gemini_budgets
 
   billing_account = var.billing_account_id
-  display_name    = "Gemini API spend: ${each.key} (project ${each.value.project_number})"
+  display_name    = "Gemini API spend: ${each.key}"
 
   budget_filter {
     # The filter takes the project number, so the stack reads no other project.
