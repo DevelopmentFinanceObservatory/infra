@@ -2,8 +2,9 @@
 # back only var.log_retention_days, so trends longer than that come from
 # here, and the reporting views read here rather than from raw entries.
 #
-# Terraform owns the dataset, the route function and the scheduled query. The
-# query creates its own tables on its first run (sql/logs_daily.sql).
+# Terraform owns the dataset, the route function, the backfill table, the
+# entries view and the scheduled query. The query creates its aggregate
+# tables on its first run (sql/logs_daily.sql).
 resource "google_bigquery_dataset" "logs_daily" {
   dataset_id  = "logs_daily"
   location    = local.bigquery_location
@@ -31,6 +32,75 @@ resource "google_bigquery_routine" "normalise_route" {
   arguments {
     name      = "url"
     data_type = jsonencode({ typeKind = "STRING" })
+  }
+}
+
+# The sink routes only entries written after it exists, so the entries
+# before local.logs_backfill_cutoff come from _Default. gcloud logging copy
+# wrote those entries to Cloud Storage, and scripts/load-logs-backfill.sh
+# loads them here through sql/backfill_entries.sql. The schema is the part of
+# dfo_logs._AllLogs that logs_daily.sql reads, so the entries view can union
+# the two.
+resource "google_bigquery_table" "backfill_entries" {
+  dataset_id  = google_bigquery_dataset.logs_daily.dataset_id
+  table_id    = "backfill_entries"
+  description = "Cloud Run entries from _Default before ${local.logs_backfill_cutoff}, when the ${var.namespace}-telemetry sink did not yet route every entry, in the dfo_logs._AllLogs columns logs_daily reads. Written by scripts/load-logs-backfill.sh."
+
+  time_partitioning {
+    type  = "DAY"
+    field = "timestamp"
+  }
+
+  schema = jsonencode([
+    { name = "timestamp", type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "log_id", type = "STRING", mode = "NULLABLE" },
+    { name = "severity", type = "STRING", mode = "NULLABLE" },
+    {
+      name = "resource", type = "RECORD", mode = "NULLABLE", fields = [
+        { name = "type", type = "STRING", mode = "NULLABLE" },
+        { name = "labels", type = "JSON", mode = "NULLABLE" },
+      ]
+    },
+    {
+      name = "http_request", type = "RECORD", mode = "NULLABLE", fields = [
+        { name = "request_method", type = "STRING", mode = "NULLABLE" },
+        { name = "request_url", type = "STRING", mode = "NULLABLE" },
+        { name = "status", type = "INTEGER", mode = "NULLABLE" },
+        {
+          name = "latency", type = "RECORD", mode = "NULLABLE", fields = [
+            { name = "seconds", type = "INTEGER", mode = "NULLABLE" },
+            { name = "nanos", type = "INTEGER", mode = "NULLABLE" },
+          ]
+        },
+      ]
+    },
+    { name = "json_payload", type = "JSON", mode = "NULLABLE", description = "The entry's jsonPayload.logger, as {\"logger\": ...}, and nothing else." },
+  ])
+}
+
+locals {
+  # Where logs_daily's source passes from backfill_entries to dfo_logs. The
+  # sink's first entry is at 2026-10-23 18:48:34.611764 UTC, but it routed
+  # every entry only from about 18:50, so the cut-off sits after that and the
+  # copy into backfill_entries reaches it.
+  logs_backfill_cutoff = "2026-10-23 19:00:00+00"
+}
+
+# The source logs_daily.sql reads: dfo_logs from the cut-off on, and
+# backfill_entries before it. The scheduled query's account reads both
+# through its grants on dfo_logs and logs_daily.
+resource "google_bigquery_table" "entries" {
+  dataset_id  = google_bigquery_dataset.logs_daily.dataset_id
+  table_id    = "entries"
+  description = "Routed Cloud Run entries from dfo_logs from ${local.logs_backfill_cutoff}, and from backfill_entries before it. The source of the ${var.namespace}-logs-daily scheduled query."
+
+  view {
+    use_legacy_sql = false
+    query = templatefile("${path.module}/sql/entries.sql", {
+      logs     = "${var.project_id}.${google_logging_linked_dataset.telemetry.link_id}._AllLogs"
+      backfill = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_table.backfill_entries.table_id}"
+      cutoff   = local.logs_backfill_cutoff
+    })
   }
 }
 
@@ -79,7 +149,9 @@ resource "google_bigquery_data_transfer_config" "logs_daily" {
 
   params = {
     query = templatefile("${path.module}/sql/logs_daily.sql", {
-      source          = "${var.project_id}.${google_logging_linked_dataset.telemetry.link_id}._AllLogs"
+      source          = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_table.entries.table_id}"
+      live_source     = "${var.project_id}.${google_logging_linked_dataset.telemetry.link_id}._AllLogs"
+      cutoff          = local.logs_backfill_cutoff
       dataset         = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}"
       normalise_route = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_routine.normalise_route.routine_id}"
     })
