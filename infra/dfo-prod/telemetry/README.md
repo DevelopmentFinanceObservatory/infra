@@ -127,6 +127,7 @@ scripts/load-search-console-history.sh <site_url> 2026-10-05 <day before the bul
 | `service_errors_daily` | UTC day, resource type, service or job, logger, severity | `day`, `resource_type`, `service`, `logger`, `severity`, `entries` |
 | `deploys` | revision | `service`, `revision`, `deployed_at` |
 | `product_events_daily` | UTC day, event name, page, signed-in state | `day`, `event`, `page`, `signed_in`, `events`, `visitors_sketch`, `users_sketch` |
+| `accounts_daily` | UTC day of account creation, organisation | `day`, `organisation`, `accounts` |
 | `ai_turns` | turn | `day`, `started_at`, `session_sketch`, `latency_seconds`, `time_to_first_token_seconds`, `generations`, `tool_calls`, `input_tokens`, `output_tokens`, `cost_usd`, `errored` |
 | `ai_observations_daily` | UTC day, type, name, model, trace name, level | `day`, `type`, `name`, `model`, `observations`, `errors`, `latency_p50_seconds`, `latency_p95_seconds`, `input_tokens`, `output_tokens`, `cost_usd`, `trace_name`, `level`, `total_tokens` |
 | `ga4_daily` | day in the property's time zone | `day`, `active_users`, `sessions`, `page_views` |
@@ -140,6 +141,8 @@ The `_sketch` columns are HLL++ sketches (`HLL_COUNT.INIT(x, 14)`), so distinct 
 The four service views read `logs_daily`, and `deploys` keeps only the revisions deployed while the logs source ran (`before_source` false), which are the deploy markers.
 
 `product_events_daily` reads `website_export.event`. Its `page` is the path through `normalise_route`, so ids in paths such as `/studio/<id>` read `:id`. `dfo_reporting` holds its own `normalise_route`, built from the same `sql/normalise_route.sql` as the one in `logs_daily`, since readers can run routines in `dfo_reporting` and have no access to `logs_daily`. `visitors_sketch` holds the export's `visitor_hash` values and `users_sketch` its `user_hash` values, which only signed-in events carry.
+
+`accounts_daily` reads `website_export.account_daily`, which the website export writes from a Postgres view and replaces whole on every run. It holds every UTC day from the first account through the day before the run. `organisation` is the lower-cased email domain when that domain holds at least 3 accounts in total, `Personal email` for a webmail domain, and `Other organisations` otherwise, so no address or user id leaves Postgres. A day with no new accounts has one row with `organisation` NULL and `accounts` 0, so the latest day in the view is always the last complete day. The view has its own source group, `accounts`, since BigQuery rejects a view over a table that does not exist and the table exists only from the first export run that writes it; prod lists the group once that run has happened.
 
 `ai_turns` has one row per Langfuse trace named `turn`, from `langfuse_export.observations`. `started_at`, `day` and `latency_seconds` are those of its span named `turn`, and a trace whose turn span was not exported runs from its first observation's start to its last one's end. `time_to_first_token_seconds` is the turn span's when it has one, and otherwise runs from `started_at` to the first token of the turn's first generation. `generations` counts `GENERATION` observations and `tool_calls` `TOOL` ones. `errored` is true when any observation in the trace is at `ERROR`. `ai_observations_daily` covers every trace, and `errors` counts its rows' observations at `ERROR`.
 
@@ -157,6 +160,7 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 | --- | --- | --- |
 | `logs` | the four service views and `deploys` | `logs_daily.requests_daily`, `routes_daily`, `errors_daily` and `deploys`, from the first `dfo-prod-logs-daily` run |
 | `website` | `product_events_daily` | `website_export.event`, from the website export Job's first run |
+| `accounts` | `accounts_daily` | `website_export.account_daily`, from the first website export Job run that writes it |
 | `langfuse` | `ai_turns`, `ai_observations_daily` | `langfuse_export.observations`, from the Langfuse export Job's first run |
 | `ga4` | `ga4_daily`, `ga4_pages_daily` | an `analytics_556773461.events_YYYYMMDD` table, and `web_history.ga4_daily` and `ga4_pages_daily` from `scripts/load-ga4-history.sh` |
 | `search_console` | `search_console_daily`, `search_console_pages` | `searchconsole.searchdata_site_impression` and `searchdata_url_impression`, and `web_history.search_console_daily` and `search_console_pages_daily` from `scripts/load-search-console-history.sh` |

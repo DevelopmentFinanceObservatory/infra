@@ -12,6 +12,7 @@ locals {
   reporting_source_datasets = {
     logs           = [google_bigquery_dataset.logs_daily.dataset_id]
     website        = ["website_export"]
+    accounts       = ["website_export"]
     langfuse       = ["langfuse_export"]
     ga4            = [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
     search_console = [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
@@ -54,6 +55,11 @@ locals {
         events          = "${var.project_id}.website_export.event"
         normalise_route = "${var.project_id}.${google_bigquery_dataset.reporting.dataset_id}.${google_bigquery_routine.reporting_normalise_route.routine_id}"
       })
+    }
+    accounts_daily = {
+      source      = "accounts"
+      description = "Website accounts created per UTC day and organisation: the email domain when it holds at least 3 accounts, Personal email for a webmail domain, and Other organisations otherwise. No address and no user id."
+      query       = templatefile("${path.module}/sql/reporting/accounts_daily.sql", { accounts = "${var.project_id}.website_export.account_daily" })
     }
     ai_turns = {
       source      = "langfuse"
