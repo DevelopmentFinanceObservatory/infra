@@ -12,3 +12,7 @@ Three secrets, each with at least one version:
 
 - `dfo-prod-gemini-api-key`, the Gemini API key, shared with the `dcp` stack.
 - `dfo-prod-langfuse-public-key` and `dfo-prod-langfuse-secret-key`, a Langfuse Cloud EU key pair.
+
+## Langfuse export
+
+`env.auto.tfvars` sets `langfuse_export_enabled = true`, so prod builds the `dfo-prod-langfuse-export` Job, its hourly trigger and the `langfuse_export` dataset (`infra/dfo-dev/ai/README.md`, "Langfuse export"). `scripts/handoff.sh dfo-prod ai` writes the Job name to dfo-ai's `production` GitHub Environment as `JOB_LANGFUSE_EXPORT`, from this stack's `langfuse_export_job_name` output. Run it after the apply that creates the Job. Until the variable is set, dfo-ai's deploy skips the Job's image update and the Job keeps its bootstrap image, and a bootstrap image older than the export module fails every hourly run.

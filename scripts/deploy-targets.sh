@@ -215,18 +215,26 @@ handoff_targets() {
     printf '%s %s %s %s\n' "$DEPLOY_REPO" "$DEPLOY_GH_ENV" "$DEPLOY_BRANCH" "$stack"
 }
 
-# deploy_values <values> prints, one per line, every GitHub variable and
-# secret one environment's workflows read, as
-#   <var|optvar|secret> <NAME> <root> <output>
-# where <root> is the stack whose Terraform root holds <output> in the same
-# Terraform environment. An optvar is a variable whose output is null in an
-# environment that turned its resource off, which handoff.sh then skips;
-# coverage_job_name is null while the apis stack's legacy_coverage_pipeline
-# is false. <values> is a service stack, infra-plan or
-# infra-apply for infra's planner and applier environments, or docs-sync for
-# docs' docsync environment. Names and
-# outputs are the same in dfo-dev and dfo-prod, so the table takes no
-# environment. Returns 1, printing nothing, for anything else.
+# deploy_values <values> <env> prints, one per line, every GitHub variable
+# and secret one environment's workflows read in Terraform environment <env>
+# (dfo-dev or dfo-prod), as
+#   <var|secret> <NAME> <root> <output>
+# where <root> is the stack whose Terraform root holds <output> in <env>.
+# <values> is a service stack, infra-plan or infra-apply for infra's planner
+# and applier environments, or docs-sync for docs' docsync environment.
+# Returns 1, printing nothing, for an unknown <values> or <env>.
+#
+# Names and outputs are the same in both environments, except for rows under
+# a `[ "$2" = dfo-prod ]` guard: values whose resource exists in dfo-prod
+# alone. Terraform stores no null output, so an output whose resource is off
+# is missing from that environment's state exactly as an unapplied output is
+# missing anywhere, and handoff.sh cannot tell the two apart. Naming the
+# environment here keeps every listed output required, so a dfo-prod handoff
+# run before the apply that creates the output still fails. Each guard
+# mirrors a flag in the stack's tfvars, on in dfo-prod and off in dfo-dev:
+#   JOB_COVERAGE         legacy_coverage_pipeline (apis, true by default, false in dfo-dev)
+#   JOB_LANGFUSE_EXPORT  langfuse_export_enabled (ai)
+#   EXPORT_JOB_WEBSITE   event_export_enabled (website)
 #
 # REGION and PROJECT_ID come from foundation, which owns the Artifact
 # Registry repos the image path names, so the image path and AR_REPO cannot
@@ -235,6 +243,10 @@ handoff_targets() {
 # handoff needs the website stack applied first.
 deploy_values() {
     local common
+    case "${2:-}" in
+    dfo-dev | dfo-prod) ;;
+    *) return 1 ;;
+    esac
     common="var REGION foundation region
 var PROJECT_ID foundation project_id
 secret WIF_PROVIDER foundation workload_identity_provider
@@ -259,6 +271,9 @@ secret WIF_SA foundation ${1:-}_deployer_service_account"
         printf '%s\n' "$common" \
             "var AR_REPO foundation artifact_registry_datacommons_repository_id" \
             "var SERVICE_AI ai service_name"
+        if [ "$2" = dfo-prod ]; then
+            printf '%s\n' "var JOB_LANGFUSE_EXPORT ai langfuse_export_job_name"
+        fi
         ;;
     apis)
         printf '%s\n' "$common" \
@@ -268,10 +283,12 @@ secret WIF_SA foundation ${1:-}_deployer_service_account"
             "var JOB_DATASETS_MIGRATE apis datasets_migrate_job_name" \
             "var JOB_DATASETS_MAINTENANCE apis datasets_maintenance_job_name" \
             "var JOB_PRESENTATION_MIGRATE apis presentation_migrate_job_name" \
-            "optvar JOB_COVERAGE apis coverage_job_name" \
             "var JOB_ORIGIN_CATALOGUE apis origin_catalogue_job_name" \
             "var JOB_GRAPH_RELEASE apis graph_release_job_name" \
             "var JOB_SEARCH_CATALOGUE apis search_catalogue_job_name"
+        if [ "$2" = dfo-prod ]; then
+            printf '%s\n' "var JOB_COVERAGE apis coverage_job_name"
+        fi
         ;;
     dcp)
         printf '%s\n' "$common" \
@@ -284,6 +301,9 @@ secret WIF_SA foundation ${1:-}_deployer_service_account"
             "var AR_REPO foundation artifact_registry_website_repository_id" \
             "var SERVICE_WEBSITE website service_name" \
             "var MIGRATE_JOB_WEBSITE website migrate_job_name"
+        if [ "$2" = dfo-prod ]; then
+            printf '%s\n' "var EXPORT_JOB_WEBSITE website export_job_name"
+        fi
         ;;
     *) return 1 ;;
     esac
