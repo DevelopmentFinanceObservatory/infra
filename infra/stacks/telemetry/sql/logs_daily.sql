@@ -1,6 +1,6 @@
 -- The logs_daily scheduled query, a Terraform template (logs_daily.tf). It
 -- reads ${source}, the view logs_daily.entries (sql/entries.sql), and writes
--- five tables in ${dataset}, creating them on the first run. The view joins
+-- six tables in ${dataset}, creating them on the first run. The view joins
 -- two sources at the cut-off ${cutoff}: ${live_source}, the linked dataset
 -- of the telemetry sink's bucket, from the cut-off on, and backfill_entries,
 -- the Cloud Run entries copied from _Default, before it.
@@ -8,16 +8,16 @@
 -- The source's oldest day is partial, since the copy or retention cut
 -- entries part way through it, so the oldest whole day is the one after.
 -- The run's own day is partial too, so requests_daily, routes_daily,
--- errors_daily and mcp_daily read entries before the current UTC day only.
--- Once retention has moved ${live_source}'s oldest entry past the cut-off,
--- the view has a gap between the backfill and that entry, and an empty
--- ${live_source} leaves a gap from the cut-off on. The days from the cut-off
--- day through the day of ${live_source}'s oldest entry are then partial or
--- empty, so the reads skip the days from gap_start, the cut-off day, to
--- before gap_end, the oldest whole day after the gap. The backfill's last
--- whole day is the day before the cut-off day, for a midnight cut-off as for
--- a mid-day one. Without a gap, gap_end is gap_start and the reads skip
--- nothing. Every day the four tables hold is whole.
+-- errors_daily, mcp_daily and website_requests_daily read entries before the
+-- current UTC day only. Once retention has moved ${live_source}'s oldest
+-- entry past the cut-off, the view has a gap between the backfill and that
+-- entry, and an empty ${live_source} leaves a gap from the cut-off on. The
+-- days from the cut-off day through the day of ${live_source}'s oldest entry
+-- are then partial or empty, so the reads skip the days from gap_start, the
+-- cut-off day, to before gap_end, the oldest whole day after the gap. The
+-- backfill's last whole day is the day before the cut-off day, for a
+-- midnight cut-off as for a mid-day one. Without a gap, gap_end is gap_start
+-- and the reads skip nothing. Every day the five tables hold is whole.
 --
 -- They replace the days from requests_daily's latest loaded day minus one
 -- through yesterday, and from the oldest whole day when requests_daily is
@@ -25,8 +25,9 @@
 -- the source's oldest whole day, and with one it is gap_end. Either way
 -- every day a run deletes is a day it reloads in full, even after an outage
 -- longer than retention.
--- errors_daily and mcp_daily share requests_daily's start, so a stretch with
--- no warnings or no MCP calls cannot widen their window. A source with no
+-- errors_daily, mcp_daily and website_requests_daily share requests_daily's
+-- start, so a stretch with no warnings, no MCP calls or no website requests
+-- cannot widen their window. A source with no
 -- entries, or an empty ${live_source} once requests_daily holds days, loads
 -- and deletes nothing, since the start is then NULL.
 --
@@ -63,6 +64,20 @@
 -- "combined mcp " in any other shape counts as request 'unparsed', with
 -- caller kind, client and outcome 'none', so a change of log format shows
 -- as unparsed calls.
+--
+-- website_requests_daily counts the website's request lines, the JSON lines
+-- on ${website_service}'s stdout with message "request", which
+-- src/lib/proxy/requestLog.ts in dfo-website writes when a response
+-- finishes. Other services log lines with that message too, so the service
+-- filter is part of the rule. The query reads kind (page, api, rsc or
+-- prefetch), status (an integer), bot (a boolean), path and caller. A line
+-- counts as kind 'unparsed', with route, bot and status_class NULL, when its
+-- kind is outside the four, its status is not an integer from 100 to 599, or
+-- its bot is not a boolean, so a change of the line shows as unparsed
+-- requests. The route is normalise_route of the path, which carries no query
+-- string. The host never reaches the table, the path reaches it only as the
+-- route, and the caller only inside callers_sketch, an HLL++ sketch of the
+-- caller, NULL for an unparsed row and for a row whose lines name no caller.
 -- Days are UTC.
 
 DECLARE source_first_day, load_from, gap_end DATE;
@@ -133,6 +148,18 @@ CREATE TABLE IF NOT EXISTS `${dataset}.mcp_daily` (
 )
 PARTITION BY day
 OPTIONS (description = 'Combined MCP server tool calls, resource reads, resource lists and initializes per UTC day, caller kind, client, request and outcome, with an HLL++ sketch of the callers. No caller, trace id, URI or other text.');
+
+CREATE TABLE IF NOT EXISTS `${dataset}.website_requests_daily` (
+  day DATE NOT NULL,
+  route STRING,
+  kind STRING NOT NULL,
+  bot BOOL,
+  status_class INT64,
+  requests INT64 NOT NULL,
+  callers_sketch BYTES
+)
+PARTITION BY day
+OPTIONS (description = 'Website request lines per UTC day, route, kind (page, api, rsc, prefetch, or unparsed), bot verdict and status class, with an HLL++ sketch of the callers. No caller, host, user agent or path beyond the route.');
 
 SET source_first_day = (SELECT DATE(MIN(timestamp)) FROM `${source}`);
 SET live_first = (SELECT MIN(timestamp) FROM `${live_source}`);
@@ -272,6 +299,41 @@ FROM (
     )
     -- The server's warnings start "combined mcp: " and are not calls.
     WHERE STARTS_WITH(message, 'combined mcp ')
+  )
+)
+GROUP BY 1, 2, 3, 4, 5;
+
+DELETE FROM `${dataset}.website_requests_daily` WHERE day >= load_from;
+INSERT INTO `${dataset}.website_requests_daily`
+SELECT
+  day,
+  IF(parsed, `${normalise_route}`(path), NULL),
+  IF(parsed, kind, 'unparsed'),
+  IF(parsed, bot, NULL),
+  IF(parsed, DIV(status, 100), NULL),
+  COUNT(*),
+  HLL_COUNT.INIT(IF(parsed, caller, NULL), 14)
+FROM (
+  SELECT
+    *,
+    kind IN ('page', 'api', 'rsc', 'prefetch') AND status BETWEEN 100 AND 599 AND bot IS NOT NULL AS parsed
+  FROM (
+    -- A field of another type gives NULL, so the line is unparsed.
+    SELECT
+      DATE(timestamp) AS day,
+      JSON_VALUE(json_payload.path) AS path,
+      JSON_VALUE(json_payload.kind) AS kind,
+      SAFE.INT64(json_payload.status) AS status,
+      SAFE.BOOL(json_payload.bot) AS bot,
+      JSON_VALUE(json_payload.caller) AS caller
+    FROM `${source}`
+    WHERE timestamp >= TIMESTAMP(load_from)
+      AND timestamp < TIMESTAMP(CURRENT_DATE())
+      AND (timestamp < TIMESTAMP(gap_start) OR timestamp >= TIMESTAMP(gap_end))
+      AND resource.type = 'cloud_run_revision'
+      AND log_id = 'run.googleapis.com/stdout'
+      AND JSON_VALUE(resource.labels.service_name) = '${website_service}'
+      AND JSON_VALUE(json_payload.message) = 'request'
   )
 )
 GROUP BY 1, 2, 3, 4, 5;

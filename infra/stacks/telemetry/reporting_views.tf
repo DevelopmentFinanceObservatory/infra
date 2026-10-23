@@ -10,14 +10,15 @@ locals {
   # dataset by the GA4 BigQuery link, and the billing export dataset by the
   # foundation stack.
   reporting_source_datasets = {
-    logs           = [google_bigquery_dataset.logs_daily.dataset_id]
-    mcp            = [google_bigquery_dataset.logs_daily.dataset_id]
-    website        = ["website_export"]
-    accounts       = ["website_export"]
-    langfuse       = ["langfuse_export"]
-    ga4            = [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
-    search_console = [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
-    billing        = [var.billing_export_dataset]
+    logs             = [google_bigquery_dataset.logs_daily.dataset_id]
+    mcp              = [google_bigquery_dataset.logs_daily.dataset_id]
+    website_requests = [google_bigquery_dataset.logs_daily.dataset_id]
+    website          = ["website_export"]
+    accounts         = ["website_export"]
+    langfuse         = ["langfuse_export"]
+    ga4              = [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
+    search_console   = [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
+    billing          = [var.billing_export_dataset]
   }
 
   logs_daily_ref  = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}"
@@ -48,6 +49,11 @@ locals {
       source      = "mcp"
       description = "Combined MCP server tool calls, resource reads, resource lists and initializes per UTC day, caller kind, client, request and outcome, with an HLL++ sketch of the callers. No caller, trace id, URI or other text."
       query       = templatefile("${path.module}/sql/reporting/mcp_daily.sql", { mcp_daily = "${local.logs_daily_ref}.mcp_daily" })
+    }
+    website_requests_daily = {
+      source      = "website_requests"
+      description = "Website request lines per UTC day, route, kind (page, api, rsc, prefetch, or unparsed), bot verdict and status class, with an HLL++ sketch of the callers. No caller, host, user agent or path beyond the route."
+      query       = templatefile("${path.module}/sql/reporting/website_requests_daily.sql", { website_requests_daily = "${local.logs_daily_ref}.website_requests_daily" })
     }
     deploys = {
       source      = "logs"
