@@ -12,6 +12,10 @@ project_id = "dev-fin-observatory"
 namespace  = "dfo-dev"
 region     = "northamerica-northeast1"
 
+# The Gemini key the DFO prototype app reads (dfo.tf).
+# Dev shares one Gemini key across callers.
+search_api_gemini_api_key_secret_id = "dfo-dev-gemini-api-key"
+
 # Deletion protection for stateful resources holding persistent data. In the
 # upstream module this maps to the Spanner *database* deletion_protection and
 # the artifacts-bucket force_destroy — it does NOT cover the Spanner instance,
@@ -67,11 +71,14 @@ spanner_processing_units = 1000
 # =============================================================================
 # Datacommons Services Module
 # =============================================================================
-# Controls whether the Data Commons API and frontend services are publicly accessible.
-# Set to true to allow unauthenticated public internet traffic to access the service.
-# Set to false (default) to check for access permissions. For more information, see the
-# Data Commons documentation.
-datacommons_services_allow_unauthenticated_access = true
+# Only our own identities may call the service: the apis stack grants
+# roles/run.invoker to each caller (infra/stacks/apis/dcp_access.tf, and
+# the eval reader in infra/dfo-dev/apis/eval_reader.tf), and the callers
+# send a Google ID token in X-Serverless-Authorization. Browsers cannot,
+# so the Data Commons web UI and /prototype are not public. DCP still
+# creates its Maps key: the services image exits at start without
+# MAPS_API_KEY, and with no public page the key is never served.
+datacommons_services_allow_unauthenticated_access = false
 
 # One instance stays warm because a cold start on this service is
 # user-visible. max_instances = 1 caps it at exactly one instance. The

@@ -1,0 +1,15 @@
+{
+  "rows": [
+    {
+      "keys": [
+        "2026-10-05",
+        "https://developmentfinance.org/data?country=UG#chart"
+      ],
+      "clicks": 0,
+      "impressions": 10,
+      "ctr": 0,
+      "position": 20
+    }
+  ],
+  "responseAggregationType": "byPage"
+}

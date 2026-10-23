@@ -70,3 +70,7 @@ legacy_coverage_pipeline = false
 # publish and the deploy after each deploy, so no Scheduler tick or
 # heartbeat alert runs.
 search_catalogue_tick = false
+
+# Dev shares one Gemini key across callers.
+gemini_api_key_secret_id                  = "dfo-dev-gemini-api-key"
+search_catalogue_gemini_api_key_secret_id = "dfo-dev-gemini-api-key"

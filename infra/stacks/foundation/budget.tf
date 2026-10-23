@@ -1,8 +1,10 @@
-# Gemini spend alert. A billing budget notifies; it does not cap spend or stop
-# any request. Every resource here is created only once billing_account_id and
-# gemini_key_project_number are set (budget.auto.tfvars).
+# Gemini spend alerts, one budget per key project. A billing budget notifies.
+# It caps no spend and stops no request. Every resource here is created
+# only once billing_account_id and gemini_key_projects are set
+# (budget.auto.tfvars).
 locals {
-  gemini_budget_enabled = var.billing_account_id != "" && var.gemini_key_project_number != ""
+  gemini_budget_enabled = var.billing_account_id != "" && length(var.gemini_key_projects) > 0
+  gemini_budgets        = local.gemini_budget_enabled ? var.gemini_key_projects : {}
 
   # Billing catalog id of the "Gemini API" service, which Google's billing
   # catalog lists for generativelanguage.googleapis.com. Found with
@@ -38,21 +40,21 @@ resource "google_monitoring_notification_channel" "budget_email" {
 }
 
 resource "google_billing_budget" "gemini" {
-  count = local.gemini_budget_enabled ? 1 : 0
+  for_each = local.gemini_budgets
 
   billing_account = var.billing_account_id
-  display_name    = "Gemini API spend (project ${var.gemini_key_project_number})"
+  display_name    = "Gemini API spend: ${each.key}"
 
   budget_filter {
     # The filter takes the project number, so the stack reads no other project.
-    projects = ["projects/${var.gemini_key_project_number}"]
+    projects = ["projects/${each.value.project_number}"]
     services = [local.gemini_billing_service]
   }
 
   amount {
     specified_amount {
       currency_code = "USD"
-      units         = tostring(var.gemini_budget_usd)
+      units         = tostring(each.value.budget_usd)
     }
   }
 

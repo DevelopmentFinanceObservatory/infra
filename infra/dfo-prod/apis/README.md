@@ -8,7 +8,7 @@ Apply after `foundation`, `platform`, and `dcp`. Each commented line in `env.aut
 
 ## Hand-made prerequisites
 
-- Secret Manager secret `dfo-prod-gemini-api-key`, read by `data.google_secret_manager_secret.gemini` in `main.tf`.
+- Secret Manager secrets `dfo-prod-apis-gemini-api-key` (the service's key, `data.google_secret_manager_secret.gemini` in `main.tf`) and `dfo-prod-search-catalogue-gemini-api-key` (the search catalogue Job's key, `data.google_secret_manager_secret.search_catalogue_gemini` in `search_catalogue.tf`). Each holds a key from its own AI Studio project on the DFO billing account, so the billing export attributes spend by caller. The data sources fail plan while a secret does not exist, and a secret with no version fails the revision or the Job run at apply.
 - The `dfo-apis-deployer` service account, created by `foundation`.
 
 ## Handoff
@@ -17,4 +17,4 @@ Apply after `foundation`, `platform`, and `dcp`. Each commented line in `env.aut
 
 ## Caller authentication
 
-`env.auto.tfvars` sets `allow_unauthenticated = true` and an empty `invoker_members`. The prod `website` and `ai` stacks grant their own runtime service accounts `roles/run.invoker` on `dfo-prod-apis`. Prod has no eval reader. "Caller authentication" in `infra/dfo-dev/apis/README.md` describes the token each caller sends, the staged flip to `allow_unauthenticated = false`, and the break-glass command, which here names `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-observatory`.
+`env.auto.tfvars` sets `allow_unauthenticated = true` and an empty `invoker_members`. The prod `website` and `ai` stacks grant their own runtime service accounts `roles/run.invoker` on `dfo-prod-apis`. Prod has no eval reader. `dcp_access.tf` grants `roles/run.invoker` on `dfo-prod-dc-datacommons-service` to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs, plus the coverage job while `legacy_coverage_pipeline` is true, so the DC service can stop serving `allUsers`. "Caller authentication" in `infra/dfo-dev/apis/README.md` describes the token each caller sends, the staged flip to `allow_unauthenticated = false`, and the break-glass command, which here names `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-observatory`.

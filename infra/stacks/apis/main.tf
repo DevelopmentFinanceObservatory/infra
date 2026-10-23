@@ -41,11 +41,10 @@ resource "google_project_service" "cloudscheduler" {
   disable_on_destroy = false
 }
 
-# Reuse the existing Gemini API key secret (not terraform-managed — see
-# infra/stacks/dcp/dfo.tf and infra/stacks/ai/main.tf for its other
-# consumers) rather than creating a dedicated one for this service.
+# The service's Gemini API key secret, created outside Terraform and only
+# referenced here. See var.gemini_api_key_secret_id.
 data "google_secret_manager_secret" "gemini" {
-  secret_id = "${var.namespace}-gemini-api-key"
+  secret_id = var.gemini_api_key_secret_id
 }
 
 # TypeSafe's API key for the Jev binder, created by hand like the Gemini key.
@@ -190,6 +189,13 @@ module "apis_service" {
     # its email. No new google_sql_user for it.
     PRESENTATION_STORE_INSTANCE_CONNECTION_NAME = var.platform_postgres_connection_name
     PRESENTATION_STORE_RUNTIME_DB_USER          = google_sql_user.datasets_runtime.name
+
+    # Concurrent component reads the Presentation surface runs on each
+    # instance. The website checks every data card of a canvas at once when it
+    # creates a live link, up to its LIVE_SHARE_MAX_DATA_CARDS of 20, and
+    # dfo-apis answers each read past this limit with an immediate 503. The
+    # dfo-apis default is 4.
+    PRESENTATION_COMPONENTS_MAX_CONCURRENCY = "20"
 
     # origin_catalogue.tf's bucket. The service raises at startup when no
     # published catalogue can be loaded.
