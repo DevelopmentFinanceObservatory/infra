@@ -4,4 +4,4 @@
 # null makes main.tf fall back to upstream's image for dcp_version, until the
 # first pin PR merges. Do not add a second variable here: other committed,
 # non-secret dcp config belongs in dfo.auto.tfvars.
-datacommons_services_image = "europe-west1-docker.pkg.dev/prod-fin-observatory/datacommons/dfo-services-image@sha256:a37ffd1ecb3dff6af912592589c57cb48320bb569b1e8cb255edde2b828c6805"
+datacommons_services_image = "europe-west1-docker.pkg.dev/prod-fin-observatory/datacommons/dfo-services-image@sha256:7feb5032d9a437a59aee5bdc0e5f0e807a383fae42c68d38477bd7be6a51eeb6"
