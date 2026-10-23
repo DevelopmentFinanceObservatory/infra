@@ -11,6 +11,7 @@ locals {
   # foundation stack.
   reporting_source_datasets = {
     logs           = [google_bigquery_dataset.logs_daily.dataset_id]
+    mcp            = [google_bigquery_dataset.logs_daily.dataset_id]
     website        = ["website_export"]
     accounts       = ["website_export"]
     langfuse       = ["langfuse_export"]
@@ -42,6 +43,11 @@ locals {
       source      = "logs"
       description = "Cloud Run stdout and stderr entries at WARNING or above per UTC day, service or job, logger and severity. No message text."
       query       = templatefile("${path.module}/sql/reporting/service_errors_daily.sql", { errors_daily = "${local.logs_daily_ref}.errors_daily" })
+    }
+    mcp_daily = {
+      source      = "mcp"
+      description = "Combined MCP server tool calls, resource reads, resource lists and initializes per UTC day, caller kind, client, request and outcome, with an HLL++ sketch of the callers. No caller, trace id, URI or other text."
+      query       = templatefile("${path.module}/sql/reporting/mcp_daily.sql", { mcp_daily = "${local.logs_daily_ref}.mcp_daily" })
     }
     deploys = {
       source      = "logs"
