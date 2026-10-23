@@ -121,3 +121,28 @@ variable "min_instances" {
   type        = number
   default     = 0
 }
+
+variable "ses" {
+  description = "The IAM role in ONE's SES account that this service assumes with its Google identity to send sign-in email through the Amazon SES API: the role's ARN, the account's region, and the ID token audience the role's trust policy requires. Null omits SES_ROLE_ARN, SES_REGION and SES_TOKEN_AUDIENCE, and the app offers no email sign-in. See README, \"Email sign-in\"."
+  type = object({
+    role_arn       = string
+    region         = string
+    token_audience = string
+  })
+  default = null
+
+  validation {
+    condition = var.ses == null ? true : (
+      can(regex("^arn:aws:iam::[0-9]{12}:role/.+$", var.ses.role_arn)) &&
+      can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]$", var.ses.region)) &&
+      can(regex("\\S", var.ses.token_audience))
+    )
+    error_message = "ses must be null or set role_arn to an IAM role ARN such as arn:aws:iam::123456789012:role/name, region to an AWS region such as us-east-1, and token_audience to a non-blank string."
+  }
+}
+
+variable "turnstile_site_key" {
+  description = "Site key of the Cloudflare Turnstile widget on the login page. The login page renders it, so it is public and passed as a plain env var. Null omits TURNSTILE_SITE_KEY, and the app offers no email sign-in. See README, \"Email sign-in\"."
+  type        = string
+  default     = null
+}

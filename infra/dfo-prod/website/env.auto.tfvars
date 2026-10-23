@@ -41,3 +41,15 @@ stateless_deletion_protection = true
 # One warm instance, so no visitor waits for a cold start. cpu_idle bills it
 # at the idle rate between requests.
 min_instances = 1
+
+# The role in ONE's SES account that sends sign-in email. It trusts only
+# dfo-prod-website-run, and only with this token audience.
+ses = {
+  role_arn       = "arn:aws:iam::961128127831:role/development-finance-observatory-ses-sender-production"
+  region         = "us-east-1"
+  token_audience = "development-finance-observatory-production"
+}
+
+# Cloudflare Turnstile widget "DFO website production" in the ONE Campaign
+# account, for developmentfinance.org. Public: the login page renders it.
+turnstile_site_key = "0x4AAAAAAFiLPXQeqPLKYQs9"
