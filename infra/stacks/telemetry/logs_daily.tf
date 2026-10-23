@@ -170,7 +170,7 @@ resource "google_monitoring_alert_policy" "logs_daily_failed" {
     }
   }
 
-  notification_channels = var.logs_daily_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "86400s"

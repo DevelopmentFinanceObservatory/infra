@@ -36,10 +36,12 @@ variable "search_console_export_account" {
   default     = "search-console-data-export@system.gserviceaccount.com"
 }
 
-# No notification channel exists in this repository. An empty list still
-# records incidents in Cloud Monitoring, but notifies no one.
-variable "logs_daily_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify when a logs_daily scheduled query run fails."
+variable "alert_emails" {
+  description = "Addresses notified when the logs_daily scheduled query or an export Job fails, each through its own Cloud Monitoring email channel."
   type        = list(string)
-  default     = []
+
+  validation {
+    condition     = length(var.alert_emails) > 0 && alltrue([for e in var.alert_emails : can(regex("^[^@\\s]+@[^@\\s]+$", e))])
+    error_message = "alert_emails must hold at least one email address."
+  }
 }

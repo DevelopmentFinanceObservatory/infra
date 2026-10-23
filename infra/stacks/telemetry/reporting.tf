@@ -41,9 +41,7 @@ resource "google_project_iam_member" "reporting_readers_job_user" {
 
 # The dashboard reads through Google's managed BigQuery MCP server at
 # https://bigquery.googleapis.com/mcp. A tool call there needs this role on
-# the project, and the query it runs needs the BigQuery grants above. The
-# endpoint itself is enabled by hand (README "Made by hand first"), since the
-# provider has no resource for it.
+# the project, and the query it runs needs the BigQuery grants above.
 resource "google_project_iam_member" "reporting_readers_mcp_tool_user" {
   for_each = toset(var.reporting_readers)
 

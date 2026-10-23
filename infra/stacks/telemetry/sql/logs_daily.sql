@@ -14,10 +14,14 @@
 -- nothing, since the start is then NULL.
 --
 -- deploys gains a row for each revision it has not seen, timed at the
--- revision's first request across the whole source, so a row once written
--- never changes. A revision whose first request falls on the source's oldest
--- day gets no row. It was already serving when the source began, so its
--- first request there is not its deploy. Days are UTC.
+-- revision's first request across the whole source, and never changes a row
+-- once written. before_source is true when that first request falls on the
+-- source's oldest day as of the run that records it. Such a revision was
+-- already serving when the source began, so its first request there is not
+-- its deploy, and deploy markers read only rows where before_source is false.
+-- Recording it anyway keeps it out of later runs, which would otherwise time
+-- it at whatever request survives retention and mark a deploy weeks late.
+-- Days are UTC.
 
 DECLARE source_first_day, load_from DATE;
 
@@ -64,9 +68,10 @@ OPTIONS (description = 'Cloud Run service and job stdout and stderr entries at W
 CREATE TABLE IF NOT EXISTS `${dataset}.deploys` (
   service STRING NOT NULL,
   revision STRING NOT NULL,
-  first_request TIMESTAMP NOT NULL
+  first_request TIMESTAMP NOT NULL,
+  before_source BOOL NOT NULL
 )
-OPTIONS (description = 'Each Cloud Run revision that served a request, with the time of its first request.');
+OPTIONS (description = 'Each Cloud Run revision that served a request, with the time of its first request. before_source is true for a revision already serving when the logs source began, whose first_request is not its deploy.');
 
 SET source_first_day = (SELECT DATE(MIN(timestamp)) FROM `${source}`);
 SET load_from = (
@@ -137,7 +142,7 @@ WHERE timestamp >= TIMESTAMP(load_from)
 GROUP BY 1, 2, 3, 4, 5;
 
 INSERT INTO `${dataset}.deploys`
-SELECT service, revision, first_request
+SELECT service, revision, first_request, DATE(first_request) = source_first_day
 FROM (
   SELECT
     JSON_VALUE(resource.labels.service_name) AS service,
@@ -147,7 +152,6 @@ FROM (
   WHERE resource.type = 'cloud_run_revision'
     AND log_id = 'run.googleapis.com/requests'
   GROUP BY service, revision
-  HAVING DATE(MIN(timestamp)) > source_first_day
 ) AS seen
 WHERE NOT EXISTS (
   SELECT 1
