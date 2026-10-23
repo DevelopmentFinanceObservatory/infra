@@ -1,6 +1,6 @@
 # website (prod)
 
-Prod's copy of the website stack: the `dfo-prod-website` Cloud Run service, its database on the shared Cloud SQL instance, its IAM migrator, and the `dfo-prod-website-migrate` Job. The `.tf` files are symlinks to `infra/stacks/website`; `infra/dfo-dev/website/README.md` describes what they build. This directory holds prod's backend, tfvars, and lock file.
+Prod's copy of the website stack: the `dfo-prod-website` Cloud Run service, its database on the shared Cloud SQL instance, its IAM migrator, the `dfo-prod-website-migrate` Job, and the `dfo-prod-website-export` event export Job with its `website_export` dataset. The `.tf` files are symlinks to `infra/stacks/website`; `infra/dfo-dev/website/README.md` describes what they build. This directory holds prod's backend, tfvars, and lock file.
 
 ## Apply order
 
@@ -33,3 +33,17 @@ gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref m
 ```
 
 `infra/dfo-dev/website/README.md` explains the placeholder and rotation in full.
+
+## Email sign-in
+
+The stack creates `dfo-prod-website-turnstile-secret-key` with a first version holding a single space, which the app reads as blank, so email sign-in stays off. The Turnstile widget is "DFO website production" in the ONE Campaign Cloudflare account, for `developmentfinance.org` and its subdomains. `env.auto.tfvars` holds its site key as `turnstile_site_key`. Add its secret key as a new version with `read -rs KEY; printf '%s' "$KEY" | gcloud secrets versions add dfo-prod-website-turnstile-secret-key --project prod-fin-observatory --data-file=-`. Mail goes through the role `development-finance-observatory-ses-sender-production` in ONE's SES account, which trusts only `dfo-prod-website-run@prod-fin-observatory.iam.gserviceaccount.com` with the token audience `development-finance-observatory-production`. `env.auto.tfvars` sets both in `ses`. The apply for any tfvars change creates a new revision. A new secret version needs a manual roll:
+
+```
+gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main
+```
+
+`infra/dfo-dev/website/README.md` describes all four settings and the role's trust in full.
+
+## Event export
+
+`env.auto.tfvars` sets `event_export_enabled = true` (`infra/dfo-dev/website/README.md`, "Event export"). Apply this stack before the dfo-website deploy that carries the migration granting `SELECT` on `event` to `website_export_reader`, since that migration fails while the role is missing. Then run `scripts/handoff.sh dfo-prod website`, which writes `EXPORT_JOB_WEBSITE`, so the deploy moves the Job to the website image.

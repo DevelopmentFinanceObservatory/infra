@@ -32,11 +32,27 @@ provider "google" {
   region  = var.region
 }
 
+# Every Cloud Scheduler trigger in this stack depends on it: the graph
+# release, origin catalogue, search catalogue, coverage and datasets
+# maintenance ticks.
+resource "google_project_service" "cloudscheduler" {
+  project            = var.project_id
+  service            = "cloudscheduler.googleapis.com"
+  disable_on_destroy = false
+}
+
 # Reuse the existing Gemini API key secret (not terraform-managed — see
 # infra/stacks/dcp/dfo.tf and infra/stacks/ai/main.tf for its other
 # consumers) rather than creating a dedicated one for this service.
 data "google_secret_manager_secret" "gemini" {
   secret_id = "${var.namespace}-gemini-api-key"
+}
+
+# TypeSafe's API key for the Jev binder, created by hand like the Gemini key.
+# Read only when search_binder sends calls to Jev.
+data "google_secret_manager_secret" "typesafe" {
+  count     = var.search_binder == "gemini" ? 0 : 1
+  secret_id = "${var.namespace}-typesafe-api-key"
 }
 
 # The dfo-apis CI image-deployer (provisioned in ../foundation) needs actAs on
@@ -56,7 +72,7 @@ module "apis_service" {
   bootstrap_image     = "gcr.io/cloudrun/hello"
   container_port      = 8080
 
-  secret_env_vars = {
+  secret_env_vars = merge({
     # The engine warm-loads its Gemini client at startup, so a missing or
     # invalid key fails the revision immediately rather than on first request.
     GEMINI_API_KEY = { secret_id = data.google_secret_manager_secret.gemini.secret_id }
@@ -92,9 +108,14 @@ module "apis_service" {
       # same apply.
       version = google_secret_manager_secret_version.live_refresh_principal.version
     }
-  }
+    }, {
+    # Mounted only when search_binder sends calls to Jev, so a gemini
+    # environment needs no TypeSafe secret.
+    for name, secret_id in { TYPESAFE_API_KEY = one(data.google_secret_manager_secret.typesafe[*].secret_id) } :
+    name => { secret_id = secret_id } if var.search_binder != "gemini"
+  })
 
-  env_vars = {
+  env_vars = merge({
     # The project Cloud Logging's trace field names. dfo-apis writes JSON log
     # lines carrying logging.googleapis.com/trace, which needs it, and Cloud
     # Run does not set it.
@@ -103,6 +124,10 @@ module "apis_service" {
     SEARCH_GRAPH_BASE   = var.search_graph_base
     SEARCH_ENGINE_MODEL = var.search_engine_model
     DFO_CORS_ORIGINS    = var.dfo_cors_origins
+
+    # TYPESAFE_API_KEY above is mounted whenever SEARCH_BINDER is not gemini.
+    SEARCH_BINDER          = var.search_binder
+    SEARCH_JEV_TRAFFIC_PCT = tostring(var.search_jev_traffic_pct)
 
     DATASETS_GRAPH_BASE_URL = var.datasets_graph_base_url
     DATASETS_SDMX_BASE_URL  = var.datasets_sdmx_base_url
@@ -166,13 +191,8 @@ module "apis_service" {
     PRESENTATION_STORE_INSTANCE_CONNECTION_NAME = var.platform_postgres_connection_name
     PRESENTATION_STORE_RUNTIME_DB_USER          = google_sql_user.datasets_runtime.name
 
-    # coverage.tf's bucket. Search and the mint door raise at startup when
-    # this artifact can't be loaded, so a missing or unreadable value fails
-    # the revision the same way a bad GEMINI_API_KEY does.
-    COVERAGE_ARTIFACT_URI = "gs://${google_storage_bucket.coverage.name}/"
-
     # origin_catalogue.tf's bucket. The service raises at startup when no
-    # published catalogue can be loaded, as it does for the coverage artifact.
+    # published catalogue can be loaded.
     ORIGIN_CATALOGUE_URI = "gs://${google_storage_bucket.origin_catalogue.name}/"
 
     # search_catalogue.tf's bucket, which GET /api/search/catalogue serves.
@@ -213,7 +233,24 @@ module "apis_service" {
     # The backlog dfo-apis admits, which sets the queue wait inside the
     # operation deadline above.
     DATASETS_OPERATION_BACKLOG_MAX = tostring(local.datasets_operation_backlog_max)
-  }
+    },
+    # coverage.tf's bucket, while var.legacy_coverage_pipeline is true. An
+    # image without graph_release_coverage raises at startup when this
+    # artifact can't be loaded, so a missing or unreadable value fails the
+    # revision the same way a bad GEMINI_API_KEY does.
+    var.legacy_coverage_pipeline ? { COVERAGE_ARTIFACT_URI = "gs://${google_storage_bucket.coverage.name}/" } : {},
+    # graph_release.tf's bucket, once var.graph_release_serving is true. The
+    # service loads the release the pointer names at startup and refuses to
+    # start when none is published, so it stays unset until the builder has
+    # published in this environment.
+    var.graph_release_serving ? { GRAPH_RELEASE_URI = "gs://${google_storage_bucket.graph_release.name}/" } : {},
+    # Serve the code index and coverage from that release, once
+    # var.graph_release_coverage is true.
+    var.graph_release_coverage ? { GRAPH_RELEASE_COVERAGE = "1" } : {},
+    # Read the origin catalogue from that release too, once
+    # var.graph_release_origin is true.
+    var.graph_release_origin ? { GRAPH_RELEASE_ORIGIN = "1" } : {}
+  )
 
   deployer_members = ["serviceAccount:${data.google_service_account.apis_deployer.email}"]
 

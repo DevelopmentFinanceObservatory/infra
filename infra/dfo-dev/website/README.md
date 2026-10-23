@@ -99,6 +99,28 @@ printf '%s' 'https://hooks.slack.com/services/…' | gcloud secrets versions add
 
 `printf` rather than `echo` keeps a trailing newline out of the stored value, and passing the URL via stdin keeps it out of shell history less than an argument would, but not out of this machine's history entirely; run it from a shell with history off if that matters. Running website instances keep the value they started with, so after adding a version roll the service onto a new revision by re-running dfo-website's `deploy.yml` for the `staging` branch, the same gap and fix the `STUDIO_TOKEN` paragraph above describes.
 
+## Email sign-in
+
+`/login` also offers sign-in by emailed code, but only when the app has all four settings: a mail transport (`SES_ROLE_ARN`, `SES_REGION` and `SES_TOKEN_AUDIENCE`), `AUTH_EMAIL_FROM`, `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`. `email_sign_in.tf` sets `AUTH_EMAIL_FROM` to `DFO Studio <studio@developmentfinance.org>`, the one address the SES role's policy lets the service send as, compared case-sensitively. The SES values come from the `ses` object in `env.auto.tfvars`, the Turnstile site key from `turnstile_site_key`, which defaults to null, and the Turnstile secret key from a secret. The app trims every value and treats a blank one as unset, and a transport missing any of the three SES values counts as no transport, so email sign-in stays off until every value exists.
+
+Turnstile guards the form. The widget is "DFO website staging" in the ONE Campaign Cloudflare account (Application security, Turnstile), for this service's run.app host, and `env.auto.tfvars` holds its site key as `turnstile_site_key`. The site key is public, since the login page renders it. A new hostname for the service must be added to the widget, or the check fails there. The secret key is mounted from `dfo-dev-website-staging-turnstile-secret-key`, whose container the stack creates with a placeholder first version holding a single space. Cloud Run refuses a revision whose secret env var can't be read, and the mount tracks `latest`, so the secret must always have a version. A single space reads as blank, so the placeholder keeps email sign-in off whatever else is set. Add the real key as a new version, which then becomes `latest`:
+
+```
+read -rs KEY; printf '%s' "$KEY" | gcloud secrets versions add dfo-dev-website-staging-turnstile-secret-key --project dev-fin-observatory --data-file=-
+```
+
+Mail goes out through the Amazon SES API in ONE's AWS account (`961128127831`, `us-east-1`), whose infrastructure team owns the AWS side. The service trades its runtime service account's Google ID token for temporary AWS credentials, so no AWS key is stored. The role `development-finance-observatory-ses-sender-staging` trusts only `dfo-dev-website-staging-run@dev-fin-observatory.iam.gserviceaccount.com`, and only with the token audience `development-finance-observatory-staging`, which `env.auto.tfvars` sets as `ses.token_audience`. Staging sends real mail from the production address, so sign in there with test inboxes only. Every ONE service shares the account's limit of 20 sends a second, and bounces count against ONE's whole sending reputation. Google ID tokens name a service account by its unique ID, so recreating the runtime service account breaks sending until ONE updates the role's trust policy. Read the ID with:
+
+```
+gcloud iam service-accounts describe dfo-dev-website-staging-run@dev-fin-observatory.iam.gserviceaccount.com --project dev-fin-observatory --format='value(uniqueId)'
+```
+
+Running instances keep the values they started with. A change to `turnstile_site_key` or `ses` reaches the service through `terraform apply`, which creates a new revision. A new secret version needs a manual roll onto a new revision:
+
+```
+gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
+```
+
 ## Tenant databases
 
 `database.tf` holds the website's database on the shared Cloud SQL instance from the `platform` stack: accounts, saved views, share links. ADK agent sessions live in the ai stack's own tenant database instead (#155), because ADK creates its schema over whatever connection it gets and the website runtime should hold DML only.
@@ -106,3 +128,22 @@ printf '%s' 'https://hooks.slack.com/services/…' | gcloud secrets versions add
 The website's database is `website-staging`. Its runtime user holds CONNECT only on that database and no DDL.
 
 Schema management runs through an IAM service account, the migrator: a Job's target database is only an env var its container reads, so the migrator identity is what actually keeps the Job's DDL scoped to the `website-staging` database. The migrator carries no password and nothing sits in Secret Manager. Terraform grants it CONNECT and CREATE on only its own database, plus CREATE and USAGE on that database's public schema, and grants that same schema USAGE to the runtime user too. Nothing else is granted here. USAGE lives in Terraform rather than the app's migration because a migrator-issued `GRANT USAGE ON SCHEMA public` is a no-op (the migrator holds CREATE, not ownership or grant option), so only the applier can actually grant it. The app's `db/migrations/0000_bootstrap_grants.sql` migration issues `ALTER DEFAULT PRIVILEGES` in that schema, which is what gives the runtime user DML on the tables its migrator creates, plus one global default-privileges revoke (no schema clause, by design) that strips PUBLIC's EXECUTE on every routine the migrator ever creates. Runtime and migrator account IDs are operationally fixed. Renaming the runtime account strands its table and sequence ACLs and future default grants. Renaming the migrator strands object ownership and its `pg_default_acl` records. Account rotation is deferred until Cloud SQL's required memberships and administrator path have been live-tested. A Cloud Run Job applies the migrations, driven from the website app's deploy pipeline. Connection details for the runtime user and the migrator are in the outputs. The database resources lean on `sqladmin.googleapis.com`, enabled project-wide by `platform`. This stack declares only the `compute` and `dns` APIs it consumes directly, the same borrowing `apis` records.
+
+## Event export
+
+`event_export.tf` builds the exporter that copies the website database's `event` table into the BigQuery dataset `website_export` (EU multi-region) every hour, as dfo-website's `node dist/export-events.cjs`. Visitor and user ids leave Postgres only as HMAC-SHA256 under `EXPORT_ID_HMAC_KEY`, and no free text leaves at all. The job creates its own `event` table; Terraform owns the dataset and its grants only.
+
+Every tier gets the exporter's identity and database access, because dfo-website's migration that runs `GRANT SELECT ON "event" TO website_export_reader` runs in every tier. The identity is the service account `dfo-dev-website-stg-export` (`dfo-prod-website-export` in prod), its IAM database user, and the same `roles/cloudsql.client` and login-only pair the runtime user holds. Two provision scripts create the NOLOGIN role `website_export_reader` if it is absent, grant it CONNECT on the website database and USAGE on its public schema, and make the exporter user a member. Every privilege sits on the role, so the exporter can read exactly what dfo-website's migrations grant that role. Postgres roles are instance-wide, and each instance hosts one website database, so one role name serves every tier.
+
+Only `infra/dfo-prod/website/env.auto.tfvars` sets `event_export_enabled = true`. In prod it adds:
+
+- the `website_export` dataset, with `WRITER` for the exporter through `google_bigquery_dataset_access` and no `access` blocks, which would drop the grants such resources add here and in the telemetry stack;
+- `roles/bigquery.jobUser` on the project for the exporter;
+- the secret `dfo-prod-website-export-hmac-key`, generated like the caller HMAC key and mounted pinned to its version;
+- the Job `dfo-prod-website-export`, on the service's PSC network with the service's `WEBSITE_DB_*` settings and the exporter as `WEBSITE_DB_USER`, plus `EXPORT_BQ_PROJECT`, `EXPORT_BQ_DATASET` and `EXPORT_ID_HMAC_KEY`;
+- an hourly Cloud Scheduler trigger whose own service account holds `roles/run.invoker` on the Job alone;
+- `roles/run.developer` on the Job and `roles/iam.serviceAccountUser` on the exporter for the website deployer.
+
+The Job bootstraps from `gcr.io/cloudrun/hello`, which has no `node`, so an execution before dfo-website's deploy moves the image fails. The deploy finds the Job through `EXPORT_JOB_WEBSITE`, which `scripts/handoff.sh dfo-prod website` writes from the `export_job_name` output. Executions have a 30-minute timeout and no retry, since the next hourly run replaces the same days.
+
+Rotating the hashing key means bumping `website_export_hmac_key_version`. Every hashed id then changes, and only the days the next run reloads carry the new hashes, so a rotation also needs the `event` table dropped for a full reload.

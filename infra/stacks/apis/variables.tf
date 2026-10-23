@@ -35,6 +35,34 @@ variable "search_engine_model" {
   default     = "gemini-3.5-flash-lite"
 }
 
+# "jev" asks TypeSafe's Jev model to bind on search_jev_traffic_pct of queries,
+# with Gemini as its fallback, and "shadow" serves Gemini while sampling calls
+# to Jev. Either mounts the ${namespace}-typesafe-api-key secret, which no
+# stack manages, and the service refuses to start without it.
+variable "search_binder" {
+  description = "Binder the search engine elects each part's shape with: gemini, jev or shadow."
+  type        = string
+  default     = "gemini"
+
+  validation {
+    condition     = contains(["gemini", "jev", "shadow"], var.search_binder)
+    error_message = "search_binder must be gemini, jev or shadow."
+  }
+}
+
+# Picked by a hash of the normalised query, so a repeated query keeps its
+# binder. Read only when search_binder is "jev".
+variable "search_jev_traffic_pct" {
+  description = "Percent of queries, 0 to 100, the jev binder sends to Jev; the rest go to Gemini."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.search_jev_traffic_pct >= 0 && var.search_jev_traffic_pct <= 100 && floor(var.search_jev_traffic_pct) == var.search_jev_traffic_pct
+    error_message = "search_jev_traffic_pct must be a whole number from 0 to 100."
+  }
+}
+
 # Comma-separated browser-origin allowlist for CORS, applied platform-wide
 # across every surface this service mounts. Empty means no CORS headers
 # are added at all — a wildcard is never used. This stays empty until the
@@ -101,6 +129,34 @@ variable "dfo_public_site_url" {
 
 variable "datacommons_service_name" {
   description = "Cloud Run service name of this environment's Data Commons service, as the IAM member resource and the Cloud Run Admin API resource name take it. Copied from the `dcp` stack's `datacommons_service_name` output. graph_generation_access.tf's grant and main.tf's `DFO_GRAPH_GENERATION_SERVICE` both read it."
+  type        = string
+}
+
+# Produced by dcp's vendored upstream module
+# (git::https://github.com/datacommonsorg/datacommons.git//infra/dcp/modules/stack),
+# not declared in this repo, so it is referenced by id rather than through a
+# Terraform resource or data source this stack owns. The name is
+# "${namespace}_dc_${connection_name}" with "-" replaced by "_"; with
+# namespace "dfo-dev" and the default connection name "spanner_connection"
+# that evaluates to "dfo_dev_dc_spanner_connection".
+variable "dc_spanner_connection_id" {
+  description = "Short id of the BigQuery connection dcp's vendored module creates for Spanner federation (google_bigquery_connection.spanner_connection in that module). The origin catalogue job's EXTERNAL_QUERY reads through it, and the coverage job's while legacy_coverage_pipeline is true."
+  type        = string
+}
+
+# Names dcp's vendored module derives its Spanner instance/database ids from
+# (infra/stacks/dcp/variables.tf's spanner_instance_id/spanner_database_id,
+# both empty by default there, which the module expands to
+# "<instance_name>-dc-instance"/"-dc-db" with instance_name = namespace,
+# "dfo-dev" in dev). Confirmed against the live instance with `gcloud spanner
+# instances list` and `gcloud spanner databases list`.
+variable "dc_spanner_instance_id" {
+  description = "Spanner instance dcp's vendored module creates for Data Commons."
+  type        = string
+}
+
+variable "dc_spanner_database_id" {
+  description = "Spanner database dcp's vendored module creates for Data Commons."
   type        = string
 }
 

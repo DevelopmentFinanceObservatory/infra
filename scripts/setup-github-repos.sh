@@ -18,7 +18,8 @@
 #      and requires `Changed stacks planned`, `terraform fmt check` and
 #      `Prod pin placeholder unchanged`, so dcp's dev pin PRs auto-merge
 #      once planned. dcp's needs a pull request, no approval, and its
-#      `checks / prototypes` check. dev_ruleset sets the other repos' rules.
+#      `checks / prototypes` check, and allows merge commits only.
+#      dev_ruleset sets the other repos' rules.
 #   4. Every environment in REPO_ENVIRONMENTS, with exactly its branch
 #      policy and reviewers (scripts/github-environment.sh,
 #      converge_environment).
@@ -151,8 +152,10 @@ main_ruleset() {
 # with no `dev` branch. apis, ai, website and pipelines require pull requests
 # and their CI checks, with an admin bypass. dcp
 # needs a pull request with no approval and `checks / prototypes`, the one
-# job of checks.yml that ci.yml runs on pull requests into dev. ontology,
-# docs, spec-kit and skills get only the
+# job of checks.yml that ci.yml runs on pull requests into dev. dcp allows
+# merge commits only: its upstream syncs keep history shared with
+# datacommonsorg/website through the merge's second parent, which a squash
+# or rebase drops. ontology, docs, spec-kit and skills get only the
 # deletion and force-push blocks every ruleset carries.
 dev_ruleset() {
     case "$1" in
@@ -176,7 +179,7 @@ dev_ruleset() {
             '["lint","test"]' true
         ;;
     dcp)
-        ruleset dev refs/heads/dev '[]' "$(pr 0 false false false "$ALL_METHODS")" '["checks / prototypes"]' false
+        ruleset dev refs/heads/dev '[]' "$(pr 0 false false false '["merge"]')" '["checks / prototypes"]' false
         ;;
     ontology | docs | spec-kit | skills)
         ruleset dev refs/heads/dev '[]' null '[]' false
@@ -389,7 +392,7 @@ case " $repos " in
                 while read -r _ var _ _; do
                     [ -z "$var" ] && continue
                     printf '%s\n' "$held" | grep -qx "$var" || infra_wif_pending="$infra_wif_pending $env:$var"
-                done <<<"$(deploy_values "$values_key")"
+                done <<<"$(deploy_values "$values_key" "$dfo_env")"
             done <<<"$(handoff_targets "$dfo_env" infra)"
         done
         if [ -n "$infra_wif_pending" ]; then

@@ -36,3 +36,37 @@ allow_unauthenticated = true
 # Principals no stack owns, such as a developers' group. The website and ai
 # stacks grant their own runtime accounts invoker on this service.
 invoker_members = []
+
+# Unpauses the graph release builder's Scheduler trigger and enables its
+# alert policies. The deployed dfo-apis image carries graph_release.job.
+graph_release_enabled = true
+
+# The builder has published in dev, so the apis service and datasets worker
+# load the release.
+graph_release_serving = true
+
+# The apis service, datasets worker and search catalogue job serve the code
+# index and coverage from the release in place of the coverage artifact.
+graph_release_coverage = true
+
+# The origin catalogue is read from the release as well.
+graph_release_origin = true
+
+# The builder publishes without diffing each release against the coverage and
+# origin catalogue builds.
+graph_release_shadow = false
+
+# Jev binds 85 percent of queries, with Gemini as its fallback and on the rest.
+# The key is the hand-made dfo-dev-typesafe-api-key secret.
+search_binder          = "jev"
+search_jev_traffic_pct = 85
+
+# The coverage job, its tick, identities, grants and alerting are gone, and
+# no surface gets COVERAGE_ARTIFACT_URI. The services serve coverage from the
+# graph release; the coverage bucket stays.
+legacy_coverage_pipeline = false
+
+# The graph release builder starts the search catalogue job after each
+# publish and the deploy after each deploy, so no Scheduler tick or
+# heartbeat alert runs.
+search_catalogue_tick = false

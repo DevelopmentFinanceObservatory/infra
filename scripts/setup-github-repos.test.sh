@@ -247,6 +247,7 @@ check "apis dev required checks and review rule" "$(is "$(checks apis dev)|$(rul
 check "website dev required checks" "$(is "$(checks website dev)" '[false,["ci",15368]]')"
 check "pipelines dev required checks, review rule and bypass" "$(is "$(checks pipelines dev)|$(rule pipelines dev '[(.rules[] | select(.type == "pull_request") | .parameters | .required_approving_review_count, .allowed_merge_methods), .bypass_actors[0].actor_type]')" '[true,["lint",15368,"test",15368]]|[1,["squash","rebase"],"RepositoryRole"]')"
 check "dcp dev needs a pull request with no approval and checks / prototypes" "$(is "$(checks dcp dev)|$(rule dcp dev '[(.rules[] | select(.type == "pull_request") | .parameters.required_approving_review_count), .bypass_actors]')" '[false,["checks / prototypes",15368]]|[0,[]]')"
+check "dcp dev allows merge commits only" "$(is "$(rule dcp dev '.rules[] | select(.type == "pull_request") | .parameters.allowed_merge_methods')" '["merge"]')"
 check "ontology dev blocks deletion and force pushes only" "$(is "$(rule ontology dev '[.rules[].type]')" '["deletion","non_fast_forward"]')"
 check "the run touches no site-qa repo" "$(lacks site-qa)"
 envstate() { state "repos/$OWNER/$1/environments/$2" '[([.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.id]), (.deployment_branch_policy != null)]'; }

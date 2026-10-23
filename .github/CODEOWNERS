@@ -1,13 +1,13 @@
 # Code owners for security-sensitive paths.
 
 # Catch-all first, so the specific rules below win under last-match-wins.
-*           @jm-rivera @tillywoodfield
+*           @jm-rivera
 
 # infra/ is applied to GCP by dfo-infra-applier on merge to dev or main, and
 # .github/ defines that workflow. Listed explicitly so a later edit to the
 # catch-all can't loosen review on them by accident.
-/infra/     @jm-rivera @tillywoodfield
-/.github/   @jm-rivera @tillywoodfield
+/infra/     @jm-rivera
+/.github/   @jm-rivera
 
 # Last, so they win over /infra/. dcp's pin PRs are opened by a GitHub App
 # token, which is not a code owner, and merge once their required checks pass.

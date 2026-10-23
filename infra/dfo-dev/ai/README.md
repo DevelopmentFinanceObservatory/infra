@@ -92,9 +92,19 @@ After a rollout, `curl <service-url>/status/telemetry` returns `{"telemetry": "l
 
 A rejected key pair leaves the state `langfuse`. The harness's startup credentials check logs a warning. Traces are accepted once the secret holds a valid pair and the service is rolled. They appear in the Langfuse project under the environment `dfo-dev-ai`.
 
+## Langfuse export
+
+`langfuse_export.tf` builds the Cloud Run Job `<namespace>-langfuse-export`, which runs `python -m harness.langfuse_export` from the dfo-ai image every hour and loads Langfuse observation rows into the BigQuery dataset `langfuse_export` (EU multi-region). Each run replaces one partition per UTC day, from the latest loaded day minus one through today, and an empty table backfills from 2026-10-05. The job creates its own `observations` table; Terraform owns the dataset and its grants only. The dfo-ai repo's `deploy/README.md` describes the job's settings and its `--check-day` mode.
+
+Every resource in the file has count 0 unless `var.langfuse_export_enabled` is true, which only `infra/dfo-prod/ai/env.auto.tfvars` sets, so dfo-dev creates none of it.
+
+The job runs as its own service account, which holds `roles/bigquery.jobUser` on the project, `WRITER` on the dataset through `google_bigquery_dataset_access`, and `roles/secretmanager.secretAccessor` on the two Langfuse secrets the service mounts. The dataset has no `access` blocks, since they would make its ACL authoritative and drop the grants that `google_bigquery_dataset_access` resources add here and in the telemetry stack. `LANGFUSE_EXPORT_ENVIRONMENT` is the service's `LANGFUSE_TRACING_ENVIRONMENT`, so the job reads deployed traces only.
+
+The Job bootstraps from the image the service runs and ignores later image changes. dfo-ai's deploy workflow moves it to each new image with `gcloud run jobs update`, as the deployer, which holds `roles/run.developer` on the Job and `roles/iam.serviceAccountUser` on its service account. That step runs only when the `JOB_LANGFUSE_EXPORT` variable is set in dfo-ai's GitHub Environment, which `scripts/handoff.sh` writes in dfo-prod alone (see "Handoff after `apply`"). A dedicated scheduler account holds `roles/run.invoker` on the Job alone. Executions have a 30-minute timeout, which also keeps one from overlapping the next trigger, and no retry, since the next hourly run reads the same window again.
+
 ## Handoff after `apply`
 
-`ai`'s deploy workflow reads `REGION`, `PROJECT_ID`, `AR_REPO` and `SERVICE_AI` as variables and `WIF_PROVIDER` and `WIF_SA` as secrets from its `dev` GitHub Environment. Each is an output of this stack or `foundation`, and `deploy_values` in `scripts/deploy-targets.sh` maps each name to its output.
+`ai`'s deploy workflow reads `REGION`, `PROJECT_ID`, `AR_REPO` and `SERVICE_AI` as variables and `WIF_PROVIDER` and `WIF_SA` as secrets from its `dev` GitHub Environment. Each is an output of this stack or `foundation`, and `deploy_values` in `scripts/deploy-targets.sh` maps each name to its output. In dfo-prod the `production` environment also gets `JOB_LANGFUSE_EXPORT`, from the `langfuse_export_job_name` output, which dfo-dev's state lacks because the Job does not exist there.
 
 Run **`just handoff ai`** (`scripts/handoff.sh dfo-dev ai`) after applying the `foundation` and `ai` stacks, and again after either renames a resource it hands over. It reads those outputs and sets them on `ai`'s `dev` GitHub Environment with `gh`, using your GitHub login. Nothing else sets them.
 

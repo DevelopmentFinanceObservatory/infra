@@ -7,14 +7,19 @@
 # at it last; it compares a fingerprint of the source data against the
 # published stamp and skips the build when they already agree.
 
-# ─────────────────────────────────────────────────────────────────────────────
-# APIs
-# ─────────────────────────────────────────────────────────────────────────────
+# Every resource here except the bucket exists only while
+# var.legacy_coverage_pipeline is true. The bucket stays either way, so
+# turning the variable off deletes no data.
 
-resource "google_project_service" "cloudscheduler" {
-  project            = var.project_id
-  service            = "cloudscheduler.googleapis.com"
-  disable_on_destroy = false
+variable "legacy_coverage_pipeline" {
+  description = "Whether the coverage job, its Scheduler tick, identities, grants and alerting exist, and whether the apis service, datasets worker and search catalogue job get COVERAGE_ARTIFACT_URI and read access to the coverage bucket. False needs a dfo-apis image that serves coverage from the graph release (graph_release_coverage) and a builder that no longer shadows (graph_release_shadow false). Prod can turn it off once it serves from the graph release. The bucket stays either way."
+  type        = bool
+  default     = true
+
+  validation {
+    condition     = var.legacy_coverage_pipeline || (var.graph_release_coverage && !var.graph_release_shadow)
+    error_message = "legacy_coverage_pipeline false removes COVERAGE_ARTIFACT_URI, which the services read until graph_release_coverage is true and the builder's shadow diff reads while graph_release_shadow is true."
+  }
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -64,6 +69,8 @@ output "coverage_bucket_name" {
 # the job holds BigQuery job-execution and Spanner-connection-read access the
 # public, unauthenticated serving identity has no reason to carry.
 resource "google_service_account" "coverage_job" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   project      = var.project_id
   account_id   = "${var.namespace}-coverage-job"
   display_name = "Coverage index build job"
@@ -76,21 +83,11 @@ resource "google_service_account" "coverage_job" {
 # access to any table or connection; connectionUser and readSessionUser
 # below do that.
 resource "google_project_iam_member" "coverage_job_bigquery_job_user" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   project = var.project_id
   role    = "roles/bigquery.jobUser"
-  member  = google_service_account.coverage_job.member
-}
-
-# Produced by dcp's vendored upstream module
-# (git::https://github.com/datacommonsorg/datacommons.git//infra/dcp/modules/stack),
-# not declared in this repo, so it is referenced by id rather than through a
-# Terraform resource or data source this stack owns. The name is
-# "${namespace}_dc_${connection_name}" with "-" replaced by "_"; with
-# namespace "dfo-dev" and the default connection name "spanner_connection"
-# that evaluates to "dfo_dev_dc_spanner_connection".
-variable "dc_spanner_connection_id" {
-  description = "Short id of the BigQuery connection dcp's vendored module creates for Spanner federation (google_bigquery_connection.spanner_connection in that module). The coverage job's EXTERNAL_QUERY reads through it."
-  type        = string
+  member  = google_service_account.coverage_job[0].member
 }
 
 # roles/bigquery.connectionUser on the connection resource itself, not the
@@ -103,30 +100,13 @@ variable "dc_spanner_connection_id" {
 # grants a non-FGAC caller needs: bigquery.connectionUser here, plus
 # spanner.databaseReader on the database itself (below).
 resource "google_bigquery_connection_iam_member" "coverage_job_connection_user" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   project       = var.project_id
   location      = var.region
   connection_id = var.dc_spanner_connection_id
   role          = "roles/bigquery.connectionUser"
-  member        = google_service_account.coverage_job.member
-}
-
-# Names dcp's vendored module derives its Spanner instance/database ids from
-# (infra/stacks/dcp/variables.tf's spanner_instance_id/spanner_database_id,
-# both empty by default there, which the module expands to
-# "<instance_name>-dc-instance"/"-dc-db" with instance_name = namespace,
-# "dfo-dev" in dev). Plain values in env.auto.tfvars rather than a
-# remote-state read, the same
-# rationale variables.tf records for this stack's other cross-stack values;
-# confirmed against the live instance with `gcloud spanner instances list`
-# and `gcloud spanner databases list`.
-variable "dc_spanner_instance_id" {
-  description = "Spanner instance dcp's vendored module creates for Data Commons."
-  type        = string
-}
-
-variable "dc_spanner_database_id" {
-  description = "Spanner database dcp's vendored module creates for Data Commons."
-  type        = string
+  member        = google_service_account.coverage_job[0].member
 }
 
 # The second grant docs.cloud.google.com/bigquery/docs/spanner-federated-queries
@@ -140,10 +120,12 @@ variable "dc_spanner_database_id" {
 # roles describe roles/spanner.databaseReader`, nothing broader (no write,
 # no schema, no instance-level admin).
 resource "google_spanner_database_iam_member" "coverage_job_spanner_reader" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   instance = var.dc_spanner_instance_id
   database = var.dc_spanner_database_id
   role     = "roles/spanner.databaseReader"
-  member   = google_service_account.coverage_job.member
+  member   = google_service_account.coverage_job[0].member
 }
 
 # The database-level grant above is not enough on its own: BigQuery's read
@@ -151,18 +133,22 @@ resource "google_spanner_database_iam_member" "coverage_job_spanner_reader" {
 # database-scoped binding does not grant. roles/spanner.viewer is the
 # read-only predefined role that carries it.
 resource "google_spanner_instance_iam_member" "coverage_job_spanner_instance_viewer" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   instance = var.dc_spanner_instance_id
   role     = "roles/spanner.viewer"
-  member   = google_service_account.coverage_job.member
+  member   = google_service_account.coverage_job[0].member
 }
 
 # The BigQuery Storage Read API session the outer aggregation query opens
 # over the EXTERNAL_QUERY's root-partitioned result. Project-scoped, like
 # jobUser above — the API has no finer grain.
 resource "google_project_iam_member" "coverage_job_read_session_user" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   project = var.project_id
   role    = "roles/bigquery.readSessionUser"
-  member  = google_service_account.coverage_job.member
+  member  = google_service_account.coverage_job[0].member
 }
 
 # The job overwrites "current.json" on every successful publish, so it needs
@@ -172,14 +158,18 @@ resource "google_project_iam_member" "coverage_job_read_session_user" {
 # also covers the job's own prune of old "versions/" prefixes (see the
 # bucket resource above), so this grant needs no widening for that.
 resource "google_storage_bucket_iam_member" "coverage_job_object_user" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   bucket = google_storage_bucket.coverage.name
   role   = "roles/storage.objectUser"
-  member = google_service_account.coverage_job.member
+  member = google_service_account.coverage_job[0].member
 }
 
 # Read-only for the serving identity: it loads the artifact at startup and
 # on the recheck interval, and never writes to this bucket.
 resource "google_storage_bucket_iam_member" "coverage_apis_runtime_viewer" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   bucket = google_storage_bucket.coverage.name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${module.apis_service.runtime_service_account_email}"
@@ -188,7 +178,9 @@ resource "google_storage_bucket_iam_member" "coverage_apis_runtime_viewer" {
 # actAs so the deployer can attach this identity to the Job below, the same
 # grant datasets_access.tf makes for the migration runner.
 resource "google_service_account_iam_member" "coverage_job_deployer_act_as" {
-  service_account_id = google_service_account.coverage_job.name
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
+  service_account_id = google_service_account.coverage_job[0].name
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${data.google_service_account.apis_deployer.email}"
 }
@@ -212,6 +204,8 @@ variable "coverage_job_bootstrap_image" {
 }
 
 resource "google_cloud_run_v2_job" "coverage" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   name     = "${var.namespace}-coverage"
   location = var.region
   project  = var.project_id
@@ -220,7 +214,7 @@ resource "google_cloud_run_v2_job" "coverage" {
 
   template {
     template {
-      service_account = google_service_account.coverage_job.email
+      service_account = google_service_account.coverage_job[0].email
 
       # Idempotent by design (fingerprint no-op, IngestionLock check,
       # discard-on-mismatch at publish), unlike the migrate job's
@@ -297,16 +291,18 @@ resource "google_cloud_run_v2_job" "coverage" {
 # CI updates the image and executes with --wait, the same run.developer
 # grant datasets_migrate_job.tf makes for the migrate Job.
 resource "google_cloud_run_v2_job_iam_member" "coverage_deployer_run_developer" {
-  project  = google_cloud_run_v2_job.coverage.project
-  location = google_cloud_run_v2_job.coverage.location
-  name     = google_cloud_run_v2_job.coverage.name
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
+  project  = google_cloud_run_v2_job.coverage[0].project
+  location = google_cloud_run_v2_job.coverage[0].location
+  name     = google_cloud_run_v2_job.coverage[0].name
   role     = "roles/run.developer"
   member   = "serviceAccount:${data.google_service_account.apis_deployer.email}"
 }
 
 output "coverage_job_name" {
-  description = "Name of the coverage Job. The deploy workflow runs `gcloud run jobs update --image` then `gcloud run jobs execute --wait` against it before deploying the apis service, the same order the migrate Job's own note describes."
-  value       = google_cloud_run_v2_job.coverage.name
+  description = "Name of the coverage Job, null while legacy_coverage_pipeline is false. The deploy workflow runs `gcloud run jobs update --image` then `gcloud run jobs execute --wait` against it before deploying the apis service, the same order the migrate Job's own note describes."
+  value       = one(google_cloud_run_v2_job.coverage[*].name)
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -316,6 +312,8 @@ output "coverage_job_name" {
 # A dedicated identity purely to authenticate the Scheduler->Cloud Run Admin
 # API call; it never runs as anything and holds no other grant.
 resource "google_service_account" "coverage_scheduler" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   project      = var.project_id
   account_id   = "${var.namespace}-coverage-scheduler"
   display_name = "Coverage job Cloud Scheduler trigger"
@@ -325,11 +323,13 @@ resource "google_service_account" "coverage_scheduler" {
 # resource — never project-wide, and never able to reach any other Job or
 # service.
 resource "google_cloud_run_v2_job_iam_member" "coverage_scheduler_invoker" {
-  project  = google_cloud_run_v2_job.coverage.project
-  location = google_cloud_run_v2_job.coverage.location
-  name     = google_cloud_run_v2_job.coverage.name
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
+  project  = google_cloud_run_v2_job.coverage[0].project
+  location = google_cloud_run_v2_job.coverage[0].location
+  name     = google_cloud_run_v2_job.coverage[0].name
   role     = "roles/run.invoker"
-  member   = google_service_account.coverage_scheduler.member
+  member   = google_service_account.coverage_scheduler[0].member
 }
 
 # Triggers via the Cloud Run Admin API's execute call, not an HTTPS call to
@@ -337,6 +337,8 @@ resource "google_cloud_run_v2_job_iam_member" "coverage_scheduler_invoker" {
 # the target is a Google API (run.googleapis.com), which authenticates
 # OAuth access tokens, unlike the worker's HTTPS target below.
 resource "google_cloud_scheduler_job" "coverage" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   name      = "${var.namespace}-coverage-tick"
   project   = var.project_id
   region    = var.region
@@ -345,10 +347,10 @@ resource "google_cloud_scheduler_job" "coverage" {
 
   http_target {
     http_method = "POST"
-    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.coverage.name}:run"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.coverage[0].name}:run"
 
     oauth_token {
-      service_account_email = google_service_account.coverage_scheduler.email
+      service_account_email = google_service_account.coverage_scheduler[0].email
       scope                 = "https://www.googleapis.com/auth/cloud-platform"
     }
   }
@@ -371,11 +373,13 @@ resource "google_cloud_scheduler_job" "coverage" {
 # same mismatch — the job's own state to keep, since Terraform has no view
 # into it.
 resource "google_logging_metric" "coverage_stale" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   name    = "${var.namespace}-coverage-publish-stale"
   project = var.project_id
   filter  = <<-EOT
     resource.type="cloud_run_job"
-    resource.labels.job_name="${google_cloud_run_v2_job.coverage.name}"
+    resource.labels.job_name="${google_cloud_run_v2_job.coverage[0].name}"
     resource.labels.location="${var.region}"
     jsonPayload.event="coverage_publish_stale"
   EOT
@@ -410,11 +414,15 @@ variable "coverage_notification_channels" {
 # condition_prometheus_query_language in the current provider), so this
 # waits out the propagation window explicitly instead.
 resource "time_sleep" "coverage_stale_metric_propagation" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   depends_on      = [google_logging_metric.coverage_stale]
   create_duration = "120s"
 }
 
 resource "google_monitoring_alert_policy" "coverage_stale" {
+  count = var.legacy_coverage_pipeline ? 1 : 0
+
   project      = var.project_id
   display_name = "Coverage build failed or publish behind fingerprint"
   combiner     = "OR"
@@ -425,7 +433,7 @@ resource "google_monitoring_alert_policy" "coverage_stale" {
     display_name = "coverage_publish_stale logged"
 
     condition_threshold {
-      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.coverage_stale.name}\""
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.coverage_stale[0].name}\""
       comparison      = "COMPARISON_GT"
       threshold_value = 0
       duration        = "0s"
@@ -446,7 +454,7 @@ resource "google_monitoring_alert_policy" "coverage_stale" {
     display_name = "coverage Job execution failed"
 
     condition_threshold {
-      filter          = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${google_cloud_run_v2_job.coverage.name}\" AND resource.labels.location=\"${var.region}\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"failed\""
+      filter          = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${google_cloud_run_v2_job.coverage[0].name}\" AND resource.labels.location=\"${var.region}\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"failed\""
       comparison      = "COMPARISON_GT"
       threshold_value = 0
       duration        = "0s"
