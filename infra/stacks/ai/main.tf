@@ -21,46 +21,19 @@ provider "google" {
   region  = var.region
 }
 
-# The studio and MCP token readers (studio_token.tf, mcp_token.tf) come from
-# this hand-made secret, so no address sits in the repository or in plan
-# output. It holds
-#   {"studio_token_readers": {"<label>": "<member>"}, "mcp_token_readers": {"<label>": "<member>"}}
-# with either object empty, and scripts/bootstrap-principals.sh writes it.
-# Resources are keyed by label, since Terraform rejects sensitive for_each keys
-# and an address in a key would print in every plan, so a label may hold only
-# lower-case letters, digits, hyphens and underscores.
-data "google_secret_manager_secret_version" "principals" {
-  secret = "projects/${var.project_id}/secrets/${var.namespace}-ai-principals"
+# The studio and MCP token readers (studio_token.tf, mcp_token.tf), read from a
+# hand-made secret. The module holds the rules and this stack's schema, and
+# scripts/bootstrap-principals.sh writes it.
+module "principals" {
+  source = "../../modules/principals-secret"
 
-  lifecycle {
-    postcondition {
-      condition = try(alltrue(concat(
-        [for label in keys(jsondecode(self.secret_data).studio_token_readers) : can(regex("^[a-z0-9_-]+$", label))],
-        [for label in keys(jsondecode(self.secret_data).mcp_token_readers) : can(regex("^[a-z0-9_-]+$", label))],
-      )), false)
-      error_message = "The ai principals secret must be a JSON object with studio_token_readers and mcp_token_readers objects, each keyed by labels of lower-case letters, digits, hyphens and underscores."
-    }
-    postcondition {
-      condition = try(alltrue([
-        for m in concat(
-          values(jsondecode(self.secret_data).studio_token_readers),
-          values(jsondecode(self.secret_data).mcp_token_readers),
-        ) : can(regex("^(group|user|serviceAccount|domain):[^:]+$", m))
-      ]), false)
-      error_message = "Each value in the ai principals secret must be group:, user:, serviceAccount: or domain: followed by an address."
-    }
-    postcondition {
-      condition = try(alltrue([
-        for obj in [jsondecode(self.secret_data).studio_token_readers, jsondecode(self.secret_data).mcp_token_readers] :
-        length(distinct(values(obj))) == length(obj)
-      ]), false)
-      error_message = "An object in the ai principals secret holds the same member under two labels, so removing either label would revoke both."
-    }
-  }
+  project_id = var.project_id
+  namespace  = var.namespace
+  stack      = "ai"
 }
 
 locals {
-  principals = jsondecode(data.google_secret_manager_secret_version.principals.secret_data)
+  principals = module.principals.principals
 }
 
 # Reuse the existing, already-created Gemini API key secret (not

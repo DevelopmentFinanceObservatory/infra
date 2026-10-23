@@ -42,43 +42,17 @@ locals {
   bigquery_location = "EU"
 }
 
-# The reporting readers (reporting.tf) and alert recipients (alerts.tf) come
-# from this hand-made secret, so no address sits in the repository or in plan
-# output. It holds
-#   {"readers": {"<label>": "group:<address>"}, "alerts": {"<label>": "<address>"}}
-# and scripts/bootstrap-principals.sh writes it. Resources are keyed by label,
-# since Terraform rejects sensitive for_each keys and an address in a key
-# would print in every plan, so a label may hold only lower-case letters,
-# digits, hyphens and underscores.
-data "google_secret_manager_secret_version" "principals" {
-  secret = "projects/${var.project_id}/secrets/${var.namespace}-telemetry-principals"
+# The reporting readers (reporting.tf) and alert recipients (alerts.tf), read
+# from a hand-made secret. The module holds the rules and this stack's schema,
+# and scripts/bootstrap-principals.sh writes it.
+module "principals" {
+  source = "../../modules/principals-secret"
 
-  lifecycle {
-    postcondition {
-      condition = try(alltrue(concat(
-        [for label in keys(jsondecode(self.secret_data).readers) : can(regex("^[a-z0-9_-]+$", label))],
-        [for label in keys(jsondecode(self.secret_data).alerts) : can(regex("^[a-z0-9_-]+$", label))],
-      )), false)
-      error_message = "The principals secret must be a JSON object with readers and alerts objects, each keyed by labels of lower-case letters, digits, hyphens and underscores."
-    }
-    postcondition {
-      condition     = try(alltrue([for m in values(jsondecode(self.secret_data).readers) : can(regex("^(group|user|serviceAccount|domain):[^:]+$", m))]), false)
-      error_message = "Each readers value in the principals secret must be group:, user:, serviceAccount: or domain: followed by an address."
-    }
-    postcondition {
-      condition     = try(length(jsondecode(self.secret_data).alerts) > 0 && alltrue([for e in values(jsondecode(self.secret_data).alerts) : can(regex("^[^@:\\s]+@[^@:\\s]+$", e))]), false)
-      error_message = "The principals secret's alerts object must hold at least one bare email address, with no member prefix."
-    }
-    postcondition {
-      condition = try(alltrue([
-        for obj in [jsondecode(self.secret_data).readers, jsondecode(self.secret_data).alerts] :
-        length(distinct(values(obj))) == length(obj)
-      ]), false)
-      error_message = "An object in the principals secret holds the same value under two labels, so removing either label would revoke or unsubscribe both."
-    }
-  }
+  project_id = var.project_id
+  namespace  = var.namespace
+  stack      = "telemetry"
 }
 
 locals {
-  principals = jsondecode(data.google_secret_manager_secret_version.principals.secret_data)
+  principals = module.principals.principals
 }

@@ -421,56 +421,18 @@ resource "google_secret_manager_secret_iam_member" "principals_planner" {
 
 # This stack's own principals: the applier impersonators, the ingestion
 # operators and the Gemini budget alert recipients (budget.tf), read from a
-# hand-made secret so no address sits in the repository or in plan output. It
-# holds
-#   {"applier_impersonators": {"<label>": "<member>"},
-#    "ingestion_operators": {"<label>": "<member>"},
-#    "budget_alerts": {"<label>": "<address>"}}
-# with any object empty, and scripts/bootstrap-principals.sh writes it.
-# Resources are keyed by label, since Terraform rejects sensitive for_each keys
-# and an address in a key would print in every plan, so a label may hold only
-# lower-case letters, digits, hyphens and underscores.
-data "google_secret_manager_secret_version" "principals" {
-  secret = "projects/${var.project_id}/secrets/${var.namespace}-foundation-principals"
+# hand-made secret. The module holds the rules and this stack's schema, and
+# scripts/bootstrap-principals.sh writes it.
+module "principals" {
+  source = "../../modules/principals-secret"
 
-  lifecycle {
-    postcondition {
-      condition = try(alltrue(concat(
-        [for label in keys(jsondecode(self.secret_data).applier_impersonators) : can(regex("^[a-z0-9_-]+$", label))],
-        [for label in keys(jsondecode(self.secret_data).ingestion_operators) : can(regex("^[a-z0-9_-]+$", label))],
-        [for label in keys(jsondecode(self.secret_data).budget_alerts) : can(regex("^[a-z0-9_-]+$", label))],
-      )), false)
-      error_message = "The foundation principals secret must be a JSON object with applier_impersonators, ingestion_operators and budget_alerts objects, each keyed by labels of lower-case letters, digits, hyphens and underscores."
-    }
-    postcondition {
-      condition = try(alltrue([
-        for m in concat(
-          values(jsondecode(self.secret_data).applier_impersonators),
-          values(jsondecode(self.secret_data).ingestion_operators),
-        ) : can(regex("^(group|user|serviceAccount|domain):[^:]+$", m))
-      ]), false)
-      error_message = "Each applier_impersonators and ingestion_operators value in the foundation principals secret must be group:, user:, serviceAccount: or domain: followed by an address."
-    }
-    postcondition {
-      condition     = try(alltrue([for e in values(jsondecode(self.secret_data).budget_alerts) : can(regex("^[^@:\\s]+@[^@:\\s]+$", e))]), false)
-      error_message = "Each budget_alerts value in the foundation principals secret must be a bare email address, with no member prefix."
-    }
-    postcondition {
-      condition = try(alltrue([
-        for obj in [
-          jsondecode(self.secret_data).applier_impersonators,
-          jsondecode(self.secret_data).ingestion_operators,
-          jsondecode(self.secret_data).budget_alerts,
-        ] :
-        length(distinct(values(obj))) == length(obj)
-      ]), false)
-      error_message = "An object in the foundation principals secret holds the same value under two labels, so removing either label would revoke or unsubscribe both."
-    }
-  }
+  project_id = var.project_id
+  namespace  = var.namespace
+  stack      = "foundation"
 }
 
 locals {
-  principals = jsondecode(data.google_secret_manager_secret_version.principals.secret_data)
+  principals = module.principals.principals
 }
 
 # Applies this environment's stacks on a push to its branch. No separate

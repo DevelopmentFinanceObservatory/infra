@@ -1,0 +1,15 @@
+{
+  "ai": {
+    "mcp_token_readers": {"form": "member", "min": 0},
+    "studio_token_readers": {"form": "member", "min": 0}
+  },
+  "foundation": {
+    "applier_impersonators": {"form": "member", "min": 0},
+    "budget_alerts": {"form": "email", "min": 0},
+    "ingestion_operators": {"form": "member", "min": 0}
+  },
+  "telemetry": {
+    "alerts": {"form": "email", "min": 1},
+    "readers": {"form": "member", "min": 0}
+  }
+}
