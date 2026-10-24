@@ -56,10 +56,9 @@ graph_release_origin = true
 # origin catalogue builds.
 graph_release_shadow = false
 
-# Jev binds 85 percent of queries, with Gemini as its fallback and on the rest.
+# Jev binds every query, with Gemini as its fallback.
 # The key is the hand-made dfo-dev-typesafe-api-key secret.
-search_binder          = "jev"
-search_jev_traffic_pct = 85
+search_binder = "jev"
 
 # The coverage job, its tick, identities, grants and alerting are gone, and
 # no surface gets COVERAGE_ARTIFACT_URI. The services serve coverage from the
