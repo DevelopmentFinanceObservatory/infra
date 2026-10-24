@@ -8,7 +8,7 @@
 resource "google_bigquery_dataset" "logs_daily" {
   dataset_id  = "logs_daily"
   location    = local.bigquery_location
-  description = "Daily Cloud Run request, route, error, deploy and MCP call aggregates, written by the ${var.namespace}-logs-daily scheduled query."
+  description = "Daily Cloud Run request, route, error, deploy, MCP call and website request aggregates, written by the ${var.namespace}-logs-daily scheduled query."
 
   # No access blocks: every grant on this dataset is a
   # google_bigquery_dataset_access, which authoritative access blocks would
@@ -155,6 +155,7 @@ resource "google_bigquery_data_transfer_config" "logs_daily" {
       cutoff          = local.logs_backfill_cutoff
       dataset         = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}"
       normalise_route = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_routine.normalise_route.routine_id}"
+      website_service = "${var.namespace}-website"
     })
   }
 
