@@ -74,16 +74,6 @@ SCRIPT="${SCRIPT//'`${source}`'/$SOURCE}"
 # shellcheck disable=SC2016
 SCRIPT="${SCRIPT//'`${dataset}.mcp_daily`'/mcp_daily}"
 
-# script_rows <query>: runs $SCRIPT and then <query>, whose one column is a
-# JSON row named row, and prints each row. bq prints each statement of a
-# script and its result, so the rows are those after the last header.
-script_rows() {
-    bq --quiet query --project_id="$PROJECT" --location=EU --use_legacy_sql=false \
-        --format=csv --max_rows=1000 <<<"$SCRIPT
-$1" | awk '$0 == "row" { n = 0; next } { rows[++n] = $0 } END { for (i = 1; i <= n; i++) print rows[i] }' |
-        sed 's/^"//;s/"$//;s/""/"/g'
-}
-
 # Each row, with its sketch's distinct callers in place of the sketch, or
 # null for no sketch.
 # Two lines from one caller count once. The line with no caller has no
