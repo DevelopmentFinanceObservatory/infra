@@ -210,7 +210,10 @@ resource "google_cloud_run_v2_job" "coverage" {
   location = var.region
   project  = var.project_id
 
-  deletion_protection = var.stateless_deletion_protection
+  # The coverage job is being retired. The provider refuses to destroy a job
+  # whose stored deletion_protection is true, so the job drops it while still
+  # declared, and a later apply with legacy_coverage_pipeline false destroys it.
+  deletion_protection = false
 
   template {
     template {
@@ -391,16 +394,6 @@ resource "google_logging_metric" "coverage_stale" {
   }
 }
 
-# There is no notification channel in this repository yet. Callers can pass
-# existing channel resource names without Terraform taking ownership of
-# their destination or verification flow. An empty list still records
-# incidents in Cloud Monitoring, but does not notify an operator.
-variable "coverage_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for coverage build failures or stale publication."
-  type        = list(string)
-  default     = []
-}
-
 # google_monitoring_alert_policy.coverage_stale's first condition filters on
 # this metric's type, created in the same apply. The Terraform google
 # provider's create call for google_logging_metric returns as soon as the
@@ -466,7 +459,7 @@ resource "google_monitoring_alert_policy" "coverage_stale" {
     }
   }
 
-  notification_channels = var.coverage_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"

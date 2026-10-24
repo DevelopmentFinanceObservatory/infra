@@ -6,8 +6,8 @@
 # "format-<n>/versions/<build id>/" and moves "format-<n>/current.json" to
 # point at it last, the same publication order coverage.tf describes for the
 # coverage index. It shares variables.tf's Spanner connection, main.tf's
-# google_project_service.cloudscheduler and coverage.tf's notification
-# channel conventions, and has its own identities and bucket.
+# google_project_service.cloudscheduler and alert notification channel, and
+# has its own identities and bucket.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bucket
@@ -308,12 +308,6 @@ resource "google_logging_metric" "origin_catalogue_heartbeat" {
   }
 }
 
-variable "origin_catalogue_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for origin catalogue build failures, stale publication or a job that stopped running."
-  type        = list(string)
-  default     = []
-}
-
 # Waits out the log-based metrics' propagation to Cloud Monitoring before
 # the alert policy names them; coverage.tf explains the failure this avoids.
 resource "time_sleep" "origin_catalogue_metric_propagation" {
@@ -365,7 +359,7 @@ resource "google_monitoring_alert_policy" "origin_catalogue_stale" {
     }
   }
 
-  notification_channels = var.origin_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -400,7 +394,7 @@ resource "google_monitoring_alert_policy" "origin_catalogue_heartbeat" {
     }
   }
 
-  notification_channels = var.origin_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "604800s"
