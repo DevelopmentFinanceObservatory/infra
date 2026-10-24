@@ -1,0 +1,110 @@
+# The ga4-user-ranges workflow (ga4_user_ranges.tf), a Terraform template, so
+# the workflow's own expressions are written $${...}. It asks the GA4 Data API
+# for unique users over each range sql/ga4_user_ranges_requests.sql lists and
+# replaces web_history.ga4_user_ranges with the replies, read through
+# sql/ga4_user_ranges_rows.sql. Any API or query error fails the execution
+# before the replacing statement runs, and that statement fails whole when a
+# range has no row, so a failed run leaves the table as it was.
+main:
+  steps:
+    - init:
+        assign:
+          - report_url: "https://analyticsdata.googleapis.com/v1beta/properties/${ga4_property}:runReport"
+          - batches: []
+    # The property's time zone, which sets today, and its days with data
+    # through yesterday, in date order.
+    - read_property:
+        try:
+          call: http.post
+          args:
+            url: $${report_url}
+            auth:
+              type: OAuth2
+              scopes: ["https://www.googleapis.com/auth/analytics.readonly"]
+            body:
+              dateRanges: [{ startDate: "${floor}", endDate: "yesterday" }]
+              dimensions: [{ name: "date" }]
+              metrics: [{ name: "activeUsers" }]
+              orderBys: [{ dimension: { dimensionName: "date" } }]
+          result: property
+        retry: $${http.default_retry}
+    - list_requests:
+        call: googleapis.bigquery.v2.jobs.query
+        args:
+          projectId: "${project}"
+          body:
+            query: ${jsonencode(requests_sql)}
+            useLegacySql: false
+            location: "${location}"
+            timeoutMs: 60000
+            parameterMode: NAMED
+            queryParameters:
+              - name: floor
+                parameterType: { type: DATE }
+                parameterValue: { value: "${floor}" }
+              - name: today
+                parameterType: { type: DATE }
+                parameterValue:
+                  value: $${text.substring(time.format(sys.now(), property.body.metadata.timeZone), 0, 10)}
+              - name: first_data_day
+                parameterType: { type: STRING }
+                parameterValue:
+                  value: $${property.body.rows[0].dimensionValues[0].value}
+              - name: last_data_day
+                parameterType: { type: STRING }
+                parameterValue:
+                  value: $${property.body.rows[len(property.body.rows) - 1].dimensionValues[0].value}
+        result: requests
+    - check_requests:
+        switch:
+          - condition: $${not requests.jobComplete}
+            raise: "the range list query did not finish within its timeout"
+    - fetch:
+        for:
+          value: row
+          in: $${requests.rows}
+          steps:
+            - report:
+                try:
+                  call: http.post
+                  args:
+                    url: $${report_url}
+                    auth:
+                      type: OAuth2
+                      scopes: ["https://www.googleapis.com/auth/analytics.readonly"]
+                    body: $${json.decode(row.f[2].v)}
+                  result: report
+                retry: $${http.default_retry}
+            - keep:
+                assign:
+                  - batch:
+                      ranges: $${json.decode(row.f[1].v)}
+                      response: $${report.body}
+                  - batches: $${list.concat(batches, batch)}
+    # A query job, which the connector waits on until it is done.
+    - replace_table:
+        call: googleapis.bigquery.v2.jobs.insert
+        args:
+          projectId: "${project}"
+          body:
+            jobReference:
+              location: "${location}"
+            configuration:
+              query:
+                query: ${jsonencode(replace_sql)}
+                useLegacySql: false
+                parameterMode: NAMED
+                queryParameters:
+                  - name: batches
+                    parameterType: { type: STRING }
+                    parameterValue:
+                      value: $${json.encode_to_string(batches)}
+        result: job
+    - check_job:
+        switch:
+          - condition: '$${"errorResult" in job.status}'
+            raise: $${job.status.errorResult}
+    - done:
+        return:
+          requests: $${len(batches)}
+          job: $${job.jobReference.jobId}
