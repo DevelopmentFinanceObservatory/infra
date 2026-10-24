@@ -20,7 +20,8 @@
 # The replies to the six ranges asked for in the second case put the first
 # request's rows out of order, and give the second request, cut to one
 # range, no dateRange dimension, as the Data API does. A missing or repeated
-# row stops the rows query.
+# row stops the rows query, and a row of zeros, which the Data API returns for
+# a range with no users since the requests set keepEmptyRows, loads as zeros.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,7 +47,8 @@ ranges_listed() {
     param_query "SELECT line FROM (
   SELECT batch, n, IF(
     JSON_VALUE(d, '\$.startDate') = JSON_VALUE(r, '\$.range_start') AND JSON_VALUE(d, '\$.endDate') = JSON_VALUE(r, '\$.range_end')
-      AND JSON_QUERY(request, '\$.metrics') = '[{\"name\":\"activeUsers\"},{\"name\":\"totalUsers\"},{\"name\":\"newUsers\"}]',
+      AND JSON_QUERY(request, '\$.metrics') = '[{\"name\":\"activeUsers\"},{\"name\":\"totalUsers\"},{\"name\":\"newUsers\"}]'
+      AND JSON_VALUE(request, '\$.keepEmptyRows') = 'true',
     FORMAT('%d %s %s %s', batch, JSON_VALUE(r, '\$.range_kind'), JSON_VALUE(r, '\$.range_start'), JSON_VALUE(r, '\$.range_end')),
     FORMAT('%d request differs at %d', batch, n)) AS line
   FROM ($REQUESTS),
@@ -125,6 +127,10 @@ check rows \
 {"range_kind":"since_floor","range_start":"2026-10-05","range_end":"2026-10-23","active_users":1113,"total_users":1115,"new_users":1061}
 {"range_kind":"week","range_start":"2026-10-12","range_end":"2026-10-18","active_users":891,"total_users":892,"new_users":847}' \
     "$(rows_written "$(batches "$FIRST" "$(reply '' 1113 1115 1061)")")"
+
+check rows_zero \
+    '{"range_kind":"week","range_start":"2026-10-12","range_end":"2026-10-18","active_users":0,"total_users":0,"new_users":0}' \
+    "$(rows_written "$(batches "$(reply date_range_0 1113 1115 1061),$(reply date_range_3 0 0 0),$(reply date_range_2 1113 1115 1061),$(reply date_range_1 355 411 270)" "$(reply '' 1113 1115 1061)")" | grep '"week"')"
 
 # check_refused <name> <batches>: the rows query fails with the range_rows code.
 check_refused() {

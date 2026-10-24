@@ -21,7 +21,9 @@
 -- One row per request, at most four ranges each, the Data API's limit:
 -- `ranges` lists each range's kind, start and end, and `request` is the
 -- runReport body with their dateRanges in the same order, unnamed, so the
--- Data API labels them date_range_0 to date_range_3.
+-- Data API labels them date_range_0 to date_range_3. The body sets
+-- keepEmptyRows, since the Data API leaves out a row whose metrics are all
+-- zero, and a range with no users still gets its row.
 WITH
   bounds AS (
     SELECT
@@ -54,7 +56,8 @@ SELECT
   TO_JSON_STRING(ARRAY_AGG(STRUCT(range_kind, range_start, range_end) ORDER BY kind_order, range_start)) AS ranges,
   TO_JSON_STRING(STRUCT(
     ARRAY_AGG(STRUCT(CAST(range_start AS STRING) AS startDate, CAST(range_end AS STRING) AS endDate) ORDER BY kind_order, range_start) AS dateRanges,
-    [STRUCT('activeUsers' AS name), STRUCT('totalUsers' AS name), STRUCT('newUsers' AS name)] AS metrics
+    [STRUCT('activeUsers' AS name), STRUCT('totalUsers' AS name), STRUCT('newUsers' AS name)] AS metrics,
+    TRUE AS keepEmptyRows
   )) AS request
 FROM requested
 GROUP BY batch
