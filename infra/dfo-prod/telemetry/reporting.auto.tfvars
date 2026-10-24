@@ -2,7 +2,7 @@
 # Add a group to reporting_sources once the table the README's "Reporting
 # views" names for it exists. The next apply creates the group's views and
 # their authorised-view entries.
-reporting_sources = ["logs", "mcp", "website_requests", "website", "accounts", "langfuse", "billing", "ga4", "search_console"]
+reporting_sources = ["logs", "mcp", "website_requests", "website", "accounts", "langfuse", "billing", "ga4", "search_console", "cloudflare"]
 
 ga4_export_dataset     = "analytics_556773461"
 billing_export_dataset = "billing_export"
