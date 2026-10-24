@@ -71,3 +71,7 @@ graph_release_shadow = false
 # publish and the deploy after each deploy, so no Scheduler tick or
 # heartbeat alert runs.
 search_catalogue_tick = false
+
+# The telemetry stack's email channel, built from the alerts object in
+# dfo-prod-telemetry-principals. Every apis alert policy notifies it.
+alert_notification_channel = "Telemetry pipeline alerts: team"
