@@ -32,7 +32,7 @@ SOURCES="WITH
       TIMESTAMP(CURRENT_DATE() - 2) + INTERVAL 5 HOUR, 0.5, 'USD', ARRAY<STRUCT<amount FLOAT64>>[]),
     (STRUCT('prod-fin-observatory'), STRUCT('Cloud Run'), STRUCT('CPU Allocation Time'),
       TIMESTAMP(CURRENT_DATE() - 2) + INTERVAL 8 HOUR, 0.25, 'USD', ARRAY<STRUCT<amount FLOAT64>>[]),
-    (STRUCT('gen-lang-client-0530528735'), STRUCT('Gemini API'), STRUCT('Gemini 3.8 Flash input tokens'),
+    (STRUCT('gen-lang-client-0000000000'), STRUCT('Gemini API'), STRUCT('Gemini 3.8 Flash input tokens'),
       TIMESTAMP(CURRENT_DATE() - 3) + INTERVAL 12 HOUR, 2.0, 'USD', [STRUCT(-0.25), STRUCT(-0.25)]),
     (STRUCT('one-website'), STRUCT('Cloud Run'), STRUCT('CPU Allocation Time'),
       TIMESTAMP(CURRENT_DATE() - 3) + INTERVAL 12 HOUR, 100.0, 'USD', ARRAY<STRUCT<amount FLOAT64>>[]),
@@ -41,7 +41,7 @@ SOURCES="WITH
     (STRUCT('prod-fin-observatory'), STRUCT('Cloud Run'), STRUCT('CPU Allocation Time'),
       TIMESTAMP(CURRENT_DATE()), 8.0, 'USD', ARRAY<STRUCT<amount FLOAT64>>[])])
   )"
-CALLERS="('gen-lang-client-0530528735', 'gemini-shared-key'), ('prod-fin-observatory', 'platform')"
+CALLERS="('gen-lang-client-0000000000', 'gemini-shared-key'), ('prod-fin-observatory', 'platform')"
 
 check model_spend_daily \
     '{"day":"'"$D3"'","caller":"gemini-shared-key","service":"Gemini API","sku":"Gemini 3.8 Flash input tokens","cost":2,"credits":-0.5,"net_cost":1.5,"currency":"USD"}

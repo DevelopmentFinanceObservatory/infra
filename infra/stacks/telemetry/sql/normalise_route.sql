@@ -8,7 +8,9 @@
 -- 1.0.0, hex digests, sha256:<hex> file ids, prefixed ids such as spec_<hex>
 -- and cmp_<ULID>, share ids, and dcids. API versions such as v1 stay, and so
 -- do lower-case words, hyphenated slugs and file names.
--- tests/normalise_route.test.sh runs this file against recorded prod URLs.
+-- tests/normalise_route.test.sh runs this file against recorded prod request
+-- paths, whose hosts carry a synthetic project number, and a few hand-written
+-- cases.
 (
   SELECT
     CASE
