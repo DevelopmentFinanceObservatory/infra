@@ -20,7 +20,9 @@ resource "google_bigquery_dataset" "logs_daily" {
 
 # The route rule is a pinned function so the scheduled query and anyone
 # querying logs_daily by hand normalise URLs the same way.
-# tests/normalise_route.test.sh checks the body against recorded prod URLs.
+# tests/normalise_route.test.sh checks the body against recorded prod request
+# paths, whose hosts carry a synthetic project number, and a few hand-written
+# cases.
 resource "google_bigquery_routine" "normalise_route" {
   dataset_id      = google_bigquery_dataset.logs_daily.dataset_id
   routine_id      = "normalise_route"

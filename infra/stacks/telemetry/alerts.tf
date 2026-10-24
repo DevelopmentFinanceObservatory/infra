@@ -91,3 +91,37 @@ resource "google_monitoring_alert_policy" "export_job_not_succeeding" {
     auto_close = "604800s"
   }
 }
+
+# A scheduled query that is paused, disabled, or deleted completes no run, so
+# logs_daily_failed (logs_daily.tf) stays quiet. This policy fires when the
+# config has no succeeded run in the last 26 hours of stored data, one day's
+# schedule plus two hours' slack, whatever the run cause. A condition_absent
+# cannot watch a once-a-day success, since it caps the absence at 23.5 hours,
+# so the policy uses a PromQL condition. The transfer service writes
+# zero-valued SUCCEEDED points, so the query returns 1 when the window's
+# succeeded runs sum to less than one, and also when the series is absent. It
+# is evaluated every 5 minutes over stored data, so a config with no success
+# in the 26 hours before the policy exists, such as a newly created config,
+# alerts within minutes, and the incident closes after its first success. It is
+# its own policy, as export_job_not_succeeding is, with a seven-day auto_close.
+resource "google_monitoring_alert_policy" "logs_daily_not_succeeding" {
+  project      = var.project_id
+  display_name = "logs_daily scheduled query not succeeding"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "no succeeded logs_daily run in 26 hours"
+
+    condition_prometheus_query_language {
+      query               = "(sum(sum_over_time(bigquerydatatransfer_googleapis_com:transfer_config_completed_runs{monitored_resource=\"bigquery_dts_config\",config_id=\"${local.logs_daily_config_id}\",completion_state=\"SUCCEEDED\"}[26h])) < 1) or absent_over_time(bigquerydatatransfer_googleapis_com:transfer_config_completed_runs{monitored_resource=\"bigquery_dts_config\",config_id=\"${local.logs_daily_config_id}\",completion_state=\"SUCCEEDED\"}[26h])"
+      duration            = "0s"
+      evaluation_interval = "300s"
+    }
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
