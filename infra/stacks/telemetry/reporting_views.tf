@@ -18,6 +18,7 @@ locals {
     langfuse         = ["langfuse_export"]
     ga4              = [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
     search_console   = [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
+    cloudflare       = [google_bigquery_dataset.web_history.dataset_id]
     billing          = [var.billing_export_dataset]
   }
 
@@ -90,7 +91,7 @@ locals {
     }
     ga4_daily = {
       source      = "ga4"
-      description = "GA4 active users, sessions and page views per day in the property's time zone, from the Data API history before the export's first day and the export from then on."
+      description = "GA4 active users, sessions, page views and declined page views per day in the property's time zone, from the Data API history before the export's first day and the export from then on. Users and sessions count visitors who accepted analytics storage. Export days' page views include declined ones, and history days hold accepted ones with declined_page_views NULL."
       query = templatefile("${path.module}/sql/reporting/ga4_daily.sql", {
         events  = local.ga4_events_ref
         history = "${local.web_history_ref}.ga4_daily"
@@ -98,7 +99,7 @@ locals {
     }
     ga4_pages_daily = {
       source      = "ga4"
-      description = "GA4 page views and sessions per day in the property's time zone and page path. Sessions do not sum across pages."
+      description = "GA4 page views, sessions and declined page views per day in the property's time zone and page path, split by consent as in ga4_daily. Sessions do not sum across pages."
       query = templatefile("${path.module}/sql/reporting/ga4_pages_daily.sql", {
         events  = local.ga4_events_ref
         history = "${local.web_history_ref}.ga4_pages_daily"
@@ -119,6 +120,11 @@ locals {
         url_impressions = "${var.project_id}.${google_bigquery_dataset.searchconsole.dataset_id}.searchdata_url_impression"
         history         = "${local.web_history_ref}.search_console_pages_daily"
       })
+    }
+    cloudflare_daily = {
+      source      = "cloudflare"
+      description = "Cloudflare page loads per UTC day: eyeball GET requests answered 200 with HTML on the website's hosts, from no verified bot and from verified bots, for the days scripts/load-cloudflare-history.sh loaded."
+      query       = templatefile("${path.module}/sql/reporting/cloudflare_daily.sql", { history = "${local.web_history_ref}.cloudflare_daily" })
     }
     model_spend_daily = {
       source      = "billing"

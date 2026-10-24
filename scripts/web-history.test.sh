@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end tests for load-ga4-history.sh and load-search-console-history.sh
-# against stub `curl`, `gcloud`, `terraform` and `sleep` commands, so nothing
+# End-to-end tests for load-ga4-history.sh, load-search-console-history.sh and
+# load-cloudflare-history.sh against stub `curl`, `gcloud`, `terraform` and `sleep` commands, so nothing
 # reaches Google. The curl stub answers the GA4 and Search Console calls with
 # the hand-written responses in testdata/web-history, written to the shape the
 # APIs document, and answers every BigQuery call with a job. It keeps each
@@ -19,7 +19,8 @@ mkdir "$WORK/bin"
 
 REPO="$WORK/repo"
 mkdir -p "$REPO/scripts" "$REPO/infra/dfo-prod/telemetry"
-cp "$SCRIPT_DIR"/web-history-lib.sh "$SCRIPT_DIR"/load-ga4-history.sh "$SCRIPT_DIR"/load-search-console-history.sh "$REPO/scripts/"
+cp "$SCRIPT_DIR"/web-history-lib.sh "$SCRIPT_DIR"/load-ga4-history.sh "$SCRIPT_DIR"/load-search-console-history.sh \
+    "$SCRIPT_DIR"/load-cloudflare-history.sh "$REPO/scripts/"
 export STUB_LOG="$WORK/calls.log" STUB_STATE="$WORK/state" STUB_FIXTURES="$FIXTURES"
 export WEB_HISTORY_PAGE_SIZE=2
 
@@ -287,6 +288,61 @@ STUB_QUERY_FAILS=1 run load-ga4-history.sh 123456789 2026-10-05 2026-10-07
 check "failed job exits non-zero" "$(is "$status" 1)"
 check "failed job prints its errors" "$(says "Syntax error")"
 check "failed job prints no rows per day" "$(is "$(says "Rows per day")" false)"
+
+# 10. Cloudflare: the file's rows are staged sorted and cut to the table's
+# three fields, with a BigQuery-only token. Cloudflare's figures are final once
+# the UTC day ends, so an end date of yesterday loads and one of today is
+# refused.
+run load-cloudflare-history.sh "$FIXTURES/cloudflare.jsonl" 2026-10-05 2026-10-07
+check "cloudflare load exits 0" "$(is "$status" 0)"
+check "cloudflare impersonates with the BigQuery scope alone" "$(has "--impersonate-service-account=web-history@test-project.iam.gserviceaccount.com --scopes=https://www.googleapis.com/auth/bigquery")"
+check "cloudflare stages the rows cut to the table's fields" "$(is "$(staged cloudflare_daily)" "$(printf '%s\n' \
+    '{"date":"2026-10-05","page_loads":483,"verified_bot_page_loads":6}' \
+    '{"date":"2026-10-07","page_loads":213,"verified_bot_page_loads":5}')")"
+check "cloudflare creates the table with its schema, partitioned by day" "$(query_has 'CREATE TABLE IF NOT EXISTS `test-project.web_history.cloudflare_daily` (date DATE NOT NULL OPTIONS(description = "UTC day, as Cloudflare reports it."), page_loads INT64 NOT NULL')"
+check "cloudflare replaces the range in one transaction" "$(is "$(grep -E '^(BEGIN|DELETE|INSERT|COMMIT|DROP)' "$STUB_STATE/query.sql" | cut -d' ' -f1-3 | tr '\n' '|')" 'BEGIN TRANSACTION;|DELETE FROM `test-project.web_history.cloudflare_daily`|INSERT INTO `test-project.web_history.cloudflare_daily`|COMMIT TRANSACTION;|DROP TABLE `test-project.web_history._staging_cloudflare_daily`;|')"
+check "cloudflare deletes the whole range" "$(query_has "DELETE FROM \`test-project.web_history.cloudflare_daily\` WHERE date BETWEEN DATE '2026-10-05' AND DATE '2026-10-07';")"
+check "cloudflare prints the rows it loaded" "$(says "$(printf 'date\tpage_loads\tverified_bot_page_loads\n2026-10-05\t483\t6\n2026-10-07\t213\t5')")"
+yesterday="$(jq -rn 'now - 86400 | todate[0:10]')"
+today="$(jq -rn 'now | todate[0:10]')"
+printf '{"date":"%s","page_loads":1,"verified_bot_page_loads":0}\n' "$yesterday" >"$WORK/yesterday.jsonl"
+run load-cloudflare-history.sh "$WORK/yesterday.jsonl" "$yesterday" "$yesterday"
+check "cloudflare loads an end date of yesterday" "$(is "$status" 0)"
+printf '{"date":"%s","page_loads":1,"verified_bot_page_loads":0}\n' "$today" >"$WORK/today.jsonl"
+run load-cloudflare-history.sh "$WORK/today.jsonl" "$today" "$today"
+check "cloudflare refuses an end date of today with no calls" "$(is "$status/$calls" "2/")"
+check "the refusal names yesterday as the latest end date" "$(says "the latest end date today is $yesterday")"
+
+# 11. A file that cannot load as given is refused before any Terraform,
+# gcloud or BigQuery call, naming what is wrong.
+bad_file() { printf '%s\n' "$@" >"$WORK/bad.jsonl"; }
+day5='{"date":"2026-10-05","page_loads":1,"verified_bot_page_loads":0}'
+bad_file "$day5" '{"date":"2026-10-08","page_loads":1,"verified_bot_page_loads":0}'
+run load-cloudflare-history.sh "$WORK/bad.jsonl" 2026-10-05 2026-10-07
+check "cloudflare refuses a date outside the range with no calls" "$(is "$status/$calls" "2/")"
+check "the refusal names the date outside the range" "$(says "$(printf 'dates outside 2026-10-05 to 2026-10-07:\n2026-10-08')")"
+bad_file "$day5" "$day5"
+run load-cloudflare-history.sh "$WORK/bad.jsonl" 2026-10-05 2026-10-07
+check "cloudflare refuses a repeated date with no calls" "$(is "$status/$calls" "2/")"
+check "the refusal names the repeated date" "$(says "$(printf 'dates on more than one row:\n2026-10-05')")"
+for row in '{"date":"2026-10-05","page_loads":1}' '{"date":"2026-10-05","page_loads":-1,"verified_bot_page_loads":0}' \
+    '{"date":"2026-10-05","page_loads":1.5,"verified_bot_page_loads":0}' '{"date":"2026-02-30","page_loads":1,"verified_bot_page_loads":0}' \
+    '{"date":"20261005","page_loads":1,"verified_bot_page_loads":0}' '[1]'; do
+    bad_file "$row"
+    run load-cloudflare-history.sh "$WORK/bad.jsonl" 2026-01-01 2026-12-31
+    check "cloudflare refuses the row $row with no calls" "$(is "$status/$calls" "2/")"
+done
+: >"$WORK/bad.jsonl"
+run load-cloudflare-history.sh "$WORK/bad.jsonl" 2026-10-05 2026-10-07
+check "cloudflare refuses an empty file with no calls" "$(is "$status/$calls" "2/")"
+bad_file '{"date":'
+run load-cloudflare-history.sh "$WORK/bad.jsonl" 2026-10-05 2026-10-07
+check "cloudflare refuses a file that is not JSON with no calls" "$(is "$status/$calls" "2/")"
+for args in "$FIXTURES/cloudflare.jsonl 2026-10-05" "$WORK/missing.jsonl 2026-10-05 2026-10-07" "$FIXTURES/cloudflare.jsonl 2026-10-07 2026-10-05"; do
+    # shellcheck disable=SC2086 # split the case into its arguments
+    run load-cloudflare-history.sh $args
+    check "cloudflare refuses [${args#"$WORK"/}] with no calls" "$(is "$status/$calls" "2/")"
+done
 
 [ "$checked" -gt 0 ] || { echo "no checks ran" >&2; exit 1; }
 if [ "$failures" -gt 0 ]; then
