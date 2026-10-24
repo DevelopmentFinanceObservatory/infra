@@ -237,7 +237,7 @@ resource "google_cloud_run_v2_job" "langfuse_export" {
 }
 
 # The deploy workflow's `gcloud run jobs update --image`, and a manual
-# `gcloud run jobs execute` with `--args=--check-day,YYYY-MM-DD`.
+# `gcloud run jobs execute` with `--args=-m,harness.langfuse_export,--check-day,YYYY-MM-DD`.
 resource "google_cloud_run_v2_job_iam_member" "langfuse_export_deployer_run_developer" {
   count = local.langfuse_export_count
 
