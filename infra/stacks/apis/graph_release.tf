@@ -568,12 +568,6 @@ resource "google_logging_metric" "graph_release_recheck_failed" {
   }
 }
 
-variable "graph_release_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for a stale or gate-failed graph release, an unavailable dependency, a failed catalogue trigger, a failed builder execution, a builder that stopped running, a release a serving instance refused, a pointer recheck that keeps failing, a serving instance near its memory limit, or a release published with blind spots."
-  type        = list(string)
-  default     = []
-}
-
 # Waits out the log-based metrics' propagation to Cloud Monitoring before
 # the alert policies name them; coverage.tf explains the failure this avoids.
 resource "time_sleep" "graph_release_metric_propagation" {
@@ -704,7 +698,7 @@ resource "google_monitoring_alert_policy" "graph_release_stale" {
     }
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -740,7 +734,7 @@ resource "google_monitoring_alert_policy" "graph_release_heartbeat" {
     }
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "604800s"
@@ -794,7 +788,7 @@ resource "google_monitoring_alert_policy" "graph_release_serving" {
     }
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -832,7 +826,7 @@ resource "google_monitoring_alert_policy" "graph_release_memory" {
     }
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -871,7 +865,7 @@ resource "google_monitoring_alert_policy" "graph_release_blind_spots" {
     content   = "A release published with variables outside it in its own families: serving may miss members if the origin catalogue does not list them. See deploy/graph-release.md step 6 in dfo-apis."
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"

@@ -41,6 +41,22 @@ resource "google_project_service" "cloudscheduler" {
   disable_on_destroy = false
 }
 
+# Every alert policy in this stack notifies the one channel
+# var.alert_notification_channel names. The channel belongs to the telemetry
+# stack, which builds it from its principals secret, so this stack holds no
+# address. With the variable null, as in dev, the policies record incidents
+# in Cloud Monitoring and notify no one.
+data "google_monitoring_notification_channel" "alerts" {
+  count = var.alert_notification_channel == null ? 0 : 1
+
+  project      = var.project_id
+  display_name = var.alert_notification_channel
+}
+
+locals {
+  alert_notification_channels = data.google_monitoring_notification_channel.alerts[*].name
+}
+
 # The service's Gemini API key secret, created outside Terraform and only
 # referenced here. See var.gemini_api_key_secret_id.
 data "google_secret_manager_secret" "gemini" {

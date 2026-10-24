@@ -62,3 +62,7 @@ graph_release_coverage = true
 
 # The origin catalogue is read from the release as well.
 graph_release_origin = true
+
+# The telemetry stack's email channel, built from the alerts object in
+# dfo-prod-telemetry-principals. Every apis alert policy notifies it.
+alert_notification_channel = "Telemetry pipeline alerts: team"

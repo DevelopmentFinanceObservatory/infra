@@ -15,6 +15,12 @@ variable "namespace" {
 
 # Prod gives each Gemini caller its own key from its own AI Studio project, so
 # the billing export attributes spend by project. Dev shares one key.
+variable "alert_notification_channel" {
+  description = "Display name of an existing Cloud Monitoring notification channel in this project that every alert policy in the stack notifies. Plan fails unless exactly one channel has that name. Null leaves the policies with no channel."
+  type        = string
+  default     = null
+}
+
 variable "gemini_api_key_secret_id" {
   description = "Secret Manager id of the Gemini API key the apis service mounts as GEMINI_API_KEY, such as dfo-prod-apis-gemini-api-key. The secret is created outside Terraform and must hold a version before apply."
   type        = string

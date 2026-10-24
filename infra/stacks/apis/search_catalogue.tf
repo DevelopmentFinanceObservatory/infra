@@ -388,12 +388,6 @@ resource "google_logging_metric" "search_catalogue_heartbeat" {
   }
 }
 
-variable "search_catalogue_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for search catalogue build failures, dropped example lines or a job that stopped running."
-  type        = list(string)
-  default     = []
-}
-
 # Waits out the log-based metrics' propagation to Cloud Monitoring before
 # the alert policies name them; coverage.tf explains the failure this avoids.
 resource "time_sleep" "search_catalogue_metric_propagation" {
@@ -430,7 +424,7 @@ resource "google_monitoring_alert_policy" "search_catalogue_failed" {
     }
   }
 
-  notification_channels = var.search_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -462,7 +456,7 @@ resource "google_monitoring_alert_policy" "search_catalogue_line_dropped" {
     }
   }
 
-  notification_channels = var.search_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -498,7 +492,7 @@ resource "google_monitoring_alert_policy" "search_catalogue_heartbeat" {
     }
   }
 
-  notification_channels = var.search_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "604800s"
