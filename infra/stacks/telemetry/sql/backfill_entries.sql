@@ -4,8 +4,12 @@
 -- names, types and nesting of dfo_logs._AllLogs for the columns
 -- logs_daily.sql reads, and keeps only the entries the telemetry sink's
 -- filter (logs.tf) routes. That filter drops the website's usage-event
--- lines, which it finds by message, and json_payload keeps only the logger
--- field, so no message text reaches the table.
+-- lines, which it finds by message. json_payload keeps only the logger
+-- field, and the message is a column of its own, which backfill_entries
+-- lacks. The loader's MERGE writes the table's columns only, so no message
+-- text reaches the table. sql/mcp_daily_history.sql reads the message to
+-- write mcp_daily's days through the cut-off day. The "Backfill" section of
+-- infra/dfo-prod/telemetry/README.md explains that split.
 SELECT
   timestamp,
   log_id,
@@ -33,7 +37,8 @@ SELECT
     jsonPayload.logger IS NULL,
     NULL,
     JSON_OBJECT('logger', jsonPayload.logger)
-  ) AS json_payload
+  ) AS json_payload,
+  jsonPayload.message AS message
 FROM (
   SELECT
     * REPLACE (
