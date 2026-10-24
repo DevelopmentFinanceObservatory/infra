@@ -68,6 +68,11 @@ locals {
         normalise_route = "${var.project_id}.${google_bigquery_dataset.reporting.dataset_id}.${google_bigquery_routine.reporting_normalise_route.routine_id}"
       })
     }
+    account_returns_daily = {
+      source      = "website"
+      description = "Signed-in website accounts per UTC day: HLL++ sketches of the accounts active that day and of those whose first signed-in event in the export falls on an earlier day. Merged over a window they count the accounts active in it and the accounts active on a day after their first signed-in event in the export. No id."
+      query       = templatefile("${path.module}/sql/reporting/account_returns_daily.sql", { events = "${var.project_id}.website_export.event" })
+    }
     accounts_daily = {
       source      = "accounts"
       description = "Website accounts created per UTC day and organisation: the email domain when it holds at least 3 accounts, Personal email for a webmail domain, and Other organisations otherwise. No address and no user id."
