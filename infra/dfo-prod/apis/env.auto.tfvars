@@ -47,6 +47,10 @@ invoker_members = []
 gemini_api_key_secret_id                  = "dfo-prod-apis-gemini-api-key"
 search_catalogue_gemini_api_key_secret_id = "dfo-prod-search-catalogue-gemini-api-key"
 
+# Jev binds every query, with Gemini as its fallback.
+# The key is the hand-made dfo-prod-typesafe-api-key secret.
+search_binder = "jev"
+
 # Unpauses the graph release builder's Scheduler trigger and enables its
 # alert policies. The deployed dfo-apis image carries graph_release.job.
 graph_release_enabled = true
