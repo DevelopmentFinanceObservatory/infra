@@ -2,13 +2,14 @@
 # back only var.log_retention_days, so trends longer than that come from
 # here, and the reporting views read here rather than from raw entries.
 #
-# Terraform owns the dataset, the route function, the backfill table, the
-# entries view and the scheduled query. The query creates its aggregate
-# tables on its first run (sql/logs_daily.sql).
+# Terraform owns the dataset, the route function, the MCP line parse function
+# (parse_mcp_line), the backfill table, the entries view and the scheduled
+# query. The query creates its aggregate tables on its first run
+# (sql/logs_daily.sql).
 resource "google_bigquery_dataset" "logs_daily" {
   dataset_id  = "logs_daily"
   location    = local.bigquery_location
-  description = "Daily Cloud Run request, route, error, deploy, MCP call and website request aggregates, written by the ${var.namespace}-logs-daily scheduled query."
+  description = "Daily Cloud Run request, route, error, deploy, MCP call and website request aggregates, written by the ${var.namespace}-logs-daily scheduled query, and for MCP calls through the cut-off day by scripts/load-logs-backfill.sh."
 
   # No access blocks: every grant on this dataset is a
   # google_bigquery_dataset_access, which authoritative access blocks would
@@ -19,7 +20,9 @@ resource "google_bigquery_dataset" "logs_daily" {
 
 # The route rule is a pinned function so the scheduled query and anyone
 # querying logs_daily by hand normalise URLs the same way.
-# tests/normalise_route.test.sh checks the body against recorded prod URLs.
+# tests/normalise_route.test.sh checks the body against recorded prod request
+# paths, whose hosts carry a synthetic project number, and a few hand-written
+# cases.
 resource "google_bigquery_routine" "normalise_route" {
   dataset_id      = google_bigquery_dataset.logs_daily.dataset_id
   routine_id      = "normalise_route"
@@ -35,12 +38,39 @@ resource "google_bigquery_routine" "normalise_route" {
   }
 }
 
+# The parse of the combined MCP server's call lines, which every writer of
+# mcp_daily calls. tests/mcp_daily.test.sh runs the body over literal lines.
+resource "google_bigquery_routine" "parse_mcp_line" {
+  dataset_id      = google_bigquery_dataset.logs_daily.dataset_id
+  routine_id      = "parse_mcp_line"
+  routine_type    = "SCALAR_FUNCTION"
+  language        = "SQL"
+  description     = "mcp_daily's request, outcome, caller kind and client of a combined MCP call line, and its raw caller; NULL for any other message."
+  definition_body = file("${path.module}/sql/parse_mcp_line.sql")
+  return_type = jsonencode({
+    typeKind = "STRUCT"
+    structType = {
+      fields = [
+        for name in ["request", "outcome", "caller_kind", "client", "caller"] :
+        { name = name, type = { typeKind = "STRING" } }
+      ]
+    }
+  })
+
+  arguments {
+    name      = "message"
+    data_type = jsonencode({ typeKind = "STRING" })
+  }
+}
+
 # The sink routes only entries written after it exists, so the entries
 # before local.logs_backfill_cutoff come from _Default. gcloud logging copy
 # wrote those entries to Cloud Storage, and scripts/load-logs-backfill.sh
 # loads them here through sql/backfill_entries.sql. The schema is the part of
 # dfo_logs._AllLogs that logs_daily.sql reads, so the entries view can union
-# the two.
+# the two. It holds no message text, so the loader also writes mcp_daily's
+# days through the cut-off day. The "Backfill" section of
+# infra/dfo-prod/telemetry/README.md explains that split.
 resource "google_bigquery_table" "backfill_entries" {
   dataset_id  = google_bigquery_dataset.logs_daily.dataset_id
   table_id    = "backfill_entries"
@@ -82,8 +112,10 @@ locals {
   # Where logs_daily's source passes from backfill_entries to dfo_logs. The
   # sink's first entry is at 2026-10-23 18:48:34.611764 UTC, but it routed
   # every entry only from about 18:50, so the cut-off sits after that and the
-  # copy into backfill_entries reaches it.
-  logs_backfill_cutoff = "2026-10-23 19:00:00+00"
+  # copy into backfill_entries reaches it. scripts/load-logs-backfill.sh reads
+  # the same file. regex() fails the plan on a value that is not a UTC
+  # timestamp in this form.
+  logs_backfill_cutoff = regex("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\+00$", trimspace(file("${path.module}/logs_backfill_cutoff.txt")))
 }
 
 # The source logs_daily.sql reads: dfo_logs from the cut-off on, and
@@ -153,6 +185,7 @@ resource "google_bigquery_data_transfer_config" "logs_daily" {
       source          = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_table.entries.table_id}"
       live_source     = "${var.project_id}.${google_logging_linked_dataset.telemetry.link_id}._AllLogs"
       cutoff          = local.logs_backfill_cutoff
+      parse_mcp_line  = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_routine.parse_mcp_line.routine_id}"
       dataset         = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}"
       normalise_route = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_routine.normalise_route.routine_id}"
       website_service = "${var.namespace}-website"

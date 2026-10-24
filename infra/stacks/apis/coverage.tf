@@ -210,7 +210,10 @@ resource "google_cloud_run_v2_job" "coverage" {
   location = var.region
   project  = var.project_id
 
-  deletion_protection = var.stateless_deletion_protection
+  # The coverage job is being retired. The provider refuses to destroy a job
+  # whose stored deletion_protection is true, so the job drops it while still
+  # declared, and a later apply with legacy_coverage_pipeline false destroys it.
+  deletion_protection = false
 
   template {
     template {

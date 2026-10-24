@@ -63,6 +63,15 @@ graph_release_coverage = true
 # The origin catalogue is read from the release as well.
 graph_release_origin = true
 
+# The builder publishes without diffing each release against the coverage and
+# origin catalogue builds.
+graph_release_shadow = false
+
+# The graph release builder starts the search catalogue job after each
+# publish and the deploy after each deploy, so no Scheduler tick or
+# heartbeat alert runs.
+search_catalogue_tick = false
+
 # The telemetry stack's email channel, built from the alerts object in
 # dfo-prod-telemetry-principals. Every apis alert policy notifies it.
 alert_notification_channel = "Telemetry pipeline alerts: team"

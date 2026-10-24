@@ -7,7 +7,9 @@
 # The staging table is a CTE of literal rows, so the query reads no table and
 # scans no bytes. The project (default prod-fin-observatory) only bills and
 # runs the job, and the caller needs bigquery.jobs.create on it. Each output
-# row prints as JSON in timestamp order and must match WANT exactly.
+# row prints as JSON in timestamp order and must match WANT exactly. The
+# message column is the one the loader's mcp_daily step reads and its MERGE
+# leaves out of backfill_entries, so json_payload must hold logger alone.
 set -euo pipefail
 
 PROJECT="${1:-prod-fin-observatory}"
@@ -23,7 +25,7 @@ SELECT="${SELECT//'${namespace}'/dfo-prod}"
 #   req-dup: the same entry copied twice, kept once.
 #   req-whole: a whole-second latency, kept.
 #   req-nolatency: a request with no latency, kept with a NULL latency.
-#   stdout-default: no severity, kept as DEFAULT, message dropped.
+#   stdout-default: no severity, kept as DEFAULT, message only in its column.
 #   job-warning: a job's stderr with no logger, kept with a NULL json_payload.
 #   website-event: the website's usage-event line, dropped.
 #   website-plain: a website stdout line with no message field, kept.
@@ -78,13 +80,13 @@ $SELECT
 ) AS t
 ORDER BY t.timestamp"
 
-WANT='{"timestamp":"2026-10-01T10:00:00.123456Z","log_id":"run.googleapis.com/requests","severity":"INFO","resource":{"type":"cloud_run_revision","labels":{"revision_name":"dfo-prod-api-00001-abc","service_name":"dfo-prod-api"}},"http_request":{"request_method":"GET","request_url":"https://api.example.org/v1/x?q=1","status":200,"latency":{"seconds":0,"nanos":123456789}},"json_payload":null}
-{"timestamp":"2026-10-01T10:00:01Z","log_id":"run.googleapis.com/requests","severity":"ERROR","resource":{"type":"cloud_run_revision","labels":{"service_name":"dfo-prod-api"}},"http_request":{"request_method":"POST","request_url":"https://api.example.org/v1/y","status":503,"latency":{"seconds":12,"nanos":0}},"json_payload":null}
-{"timestamp":"2026-10-01T10:00:02Z","log_id":"run.googleapis.com/requests","severity":"INFO","resource":{"type":"cloud_run_revision","labels":{"service_name":"dfo-prod-api"}},"http_request":{"request_method":"GET","request_url":"https://api.example.org/","status":302,"latency":null},"json_payload":null}
-{"timestamp":"2026-10-01T10:00:03Z","log_id":"run.googleapis.com/stdout","severity":"DEFAULT","resource":{"type":"cloud_run_revision","labels":{"service_name":"dfo-prod-api"}},"http_request":null,"json_payload":{"logger":"uvicorn"}}
-{"timestamp":"2026-10-01T10:00:04Z","log_id":"run.googleapis.com/stderr","severity":"WARNING","resource":{"type":"cloud_run_job","labels":{"job_name":"dfo-prod-export"}},"http_request":null,"json_payload":null}
-{"timestamp":"2026-10-01T10:00:06Z","log_id":"run.googleapis.com/stdout","severity":"INFO","resource":{"type":"cloud_run_revision","labels":{"service_name":"dfo-prod-website"}},"http_request":null,"json_payload":null}
-{"timestamp":"2026-10-01T10:00:07Z","log_id":"run.googleapis.com/stdout","severity":"INFO","resource":{"type":"cloud_run_revision","labels":{"service_name":"dfo-prod-api"}},"http_request":null,"json_payload":{"logger":"app"}}'
+WANT='{"timestamp":"2026-10-01T10:00:00.123456Z","log_id":"run.googleapis.com/requests","severity":"INFO","resource":{"type":"cloud_run_revision","labels":{"revision_name":"dfo-prod-api-00001-abc","service_name":"dfo-prod-api"}},"http_request":{"request_method":"GET","request_url":"https://api.example.org/v1/x?q=1","status":200,"latency":{"seconds":0,"nanos":123456789}},"json_payload":null,"message":null}
+{"timestamp":"2026-10-01T10:00:01Z","log_id":"run.googleapis.com/requests","severity":"ERROR","resource":{"type":"cloud_run_revision","labels":{"service_name":"dfo-prod-api"}},"http_request":{"request_method":"POST","request_url":"https://api.example.org/v1/y","status":503,"latency":{"seconds":12,"nanos":0}},"json_payload":null,"message":null}
+{"timestamp":"2026-10-01T10:00:02Z","log_id":"run.googleapis.com/requests","severity":"INFO","resource":{"type":"cloud_run_revision","labels":{"service_name":"dfo-prod-api"}},"http_request":{"request_method":"GET","request_url":"https://api.example.org/","status":302,"latency":null},"json_payload":null,"message":null}
+{"timestamp":"2026-10-01T10:00:03Z","log_id":"run.googleapis.com/stdout","severity":"DEFAULT","resource":{"type":"cloud_run_revision","labels":{"service_name":"dfo-prod-api"}},"http_request":null,"json_payload":{"logger":"uvicorn"},"message":"secret text"}
+{"timestamp":"2026-10-01T10:00:04Z","log_id":"run.googleapis.com/stderr","severity":"WARNING","resource":{"type":"cloud_run_job","labels":{"job_name":"dfo-prod-export"}},"http_request":null,"json_payload":null,"message":"slow"}
+{"timestamp":"2026-10-01T10:00:06Z","log_id":"run.googleapis.com/stdout","severity":"INFO","resource":{"type":"cloud_run_revision","labels":{"service_name":"dfo-prod-website"}},"http_request":null,"json_payload":null,"message":null}
+{"timestamp":"2026-10-01T10:00:07Z","log_id":"run.googleapis.com/stdout","severity":"INFO","resource":{"type":"cloud_run_revision","labels":{"service_name":"dfo-prod-api"}},"http_request":null,"json_payload":{"logger":"app"},"message":"event"}'
 
 GOT="$(bq query --project_id="$PROJECT" --location=EU --use_legacy_sql=false \
     --format=csv --max_rows=1000 "$QUERY" | tail -n +2 | sed 's/^"//;s/"$//;s/""/"/g')"
