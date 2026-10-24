@@ -23,6 +23,11 @@
 -- days, and declined_page_views is the export days' declined part, NULL on
 -- history days, where the Data API cannot report it. Accepted page views are
 -- page_views - IFNULL(declined_page_views, 0) on every day.
+--
+-- users_sketch is HLL_COUNT.INIT(user_pseudo_id, 14) over the users that
+-- active_users counts, so HLL_COUNT.MERGE over a window's export days gives
+-- its active users. It is NULL on history days, whose users the Data API
+-- reports only as a count.
 WITH
   events AS (
     SELECT
@@ -43,13 +48,15 @@ WITH
       COUNT(DISTINCT active_user) AS active_users,
       COUNT(DISTINCT session) AS sessions,
       COUNTIF(event_name IN ('page_view', 'screen_view')) AS page_views,
-      COUNTIF(event_name IN ('page_view', 'screen_view') AND declined) AS declined_page_views
+      COUNTIF(event_name IN ('page_view', 'screen_view') AND declined) AS declined_page_views,
+      HLL_COUNT.INIT(active_user, 14) AS users_sketch
     FROM events
     GROUP BY day
   )
-SELECT date AS day, active_users, sessions, screen_page_views AS page_views, CAST(NULL AS INT64) AS declined_page_views
+SELECT date AS day, active_users, sessions, screen_page_views AS page_views, CAST(NULL AS INT64) AS declined_page_views,
+  CAST(NULL AS BYTES) AS users_sketch
 FROM `${history}`
 WHERE date < IFNULL((SELECT MIN(day) FROM export), DATE '9999-12-31')
 UNION ALL
-SELECT day, active_users, sessions, page_views, declined_page_views
+SELECT day, active_users, sessions, page_views, declined_page_views, users_sketch
 FROM export

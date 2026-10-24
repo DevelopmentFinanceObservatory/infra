@@ -91,7 +91,7 @@ locals {
     }
     ga4_daily = {
       source      = "ga4"
-      description = "GA4 active users, sessions, page views and declined page views per day in the property's time zone, from the Data API history before the export's first day and the export from then on. Users and sessions count visitors who accepted analytics storage. Export days' page views include declined ones, and history days hold accepted ones with declined_page_views NULL."
+      description = "GA4 active users, sessions, page views and declined page views per day in the property's time zone, from the Data API history before the export's first day and the export from then on, with an HLL++ sketch of the active users on export days. Users and sessions count visitors who accepted analytics storage. Export days' page views include declined ones, and history days hold accepted ones with declined_page_views and users_sketch NULL."
       query = templatefile("${path.module}/sql/reporting/ga4_daily.sql", {
         events  = local.ga4_events_ref
         history = "${local.web_history_ref}.ga4_daily"
@@ -104,6 +104,11 @@ locals {
         events  = local.ga4_events_ref
         history = "${local.web_history_ref}.ga4_pages_daily"
       })
+    }
+    ga4_user_ranges = {
+      source      = "ga4"
+      description = "GA4 Data API active, total and new users over each range the ga4-user-ranges workflow lists: since 2026-10-05, the last 7 and 28 days, and each ISO week and calendar month, all ending no later than yesterday in the property's time zone. Users count once per range, and only visitors who accepted analytics storage."
+      query       = templatefile("${path.module}/sql/reporting/ga4_user_ranges.sql", { ranges = "${local.web_history_ref}.${google_bigquery_table.ga4_user_ranges.table_id}" })
     }
     search_console_daily = {
       source      = "search_console"
