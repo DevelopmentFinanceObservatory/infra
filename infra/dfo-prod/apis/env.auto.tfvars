@@ -46,3 +46,19 @@ invoker_members = []
 # One Gemini key per caller, each from its own AI Studio project.
 gemini_api_key_secret_id                  = "dfo-prod-apis-gemini-api-key"
 search_catalogue_gemini_api_key_secret_id = "dfo-prod-search-catalogue-gemini-api-key"
+
+# Unpauses the graph release builder's Scheduler trigger and enables its
+# alert policies. The deployed dfo-apis image carries graph_release.job.
+graph_release_enabled = true
+
+# The builder has published in prod, so the apis service, the datasets worker,
+# the maintenance job and the search catalogue job get GRAPH_RELEASE_URI,
+# which dfo-apis needs to start.
+graph_release_serving = true
+
+# The apis service, datasets worker and search catalogue job serve the code
+# index and coverage from the release in place of the coverage artifact.
+graph_release_coverage = true
+
+# The origin catalogue is read from the release as well.
+graph_release_origin = true
