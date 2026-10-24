@@ -10,7 +10,9 @@
 -- the turn span's when it has one, and otherwise runs from started_at to the
 -- first token of the turn's first generation that records one. Counts,
 -- tokens and cost cover every observation of the trace, and errored is true
--- when any of them is at level ERROR. tool_calls counts observations of type
+-- when any of them is at level ERROR. cached_input_tokens is the part of
+-- input_tokens served from the model's cache, NULL when no observation of the
+-- trace records one. tool_calls counts observations of type
 -- TOOL. session_sketch is an HLL++ sketch of the turn's Langfuse session id,
 -- so HLL_COUNT.MERGE over any range of rows counts conversations while the
 -- session id itself stays out.
@@ -33,7 +35,8 @@ SELECT
   input_tokens,
   output_tokens,
   cost_usd,
-  errored
+  errored,
+  cached_input_tokens
 FROM (
   SELECT
     *,
@@ -63,7 +66,8 @@ FROM (
       SUM(input_tokens) AS input_tokens,
       SUM(output_tokens) AS output_tokens,
       SUM(total_cost_usd) AS cost_usd,
-      LOGICAL_OR(level = 'ERROR') AS errored
+      LOGICAL_OR(level = 'ERROR') AS errored,
+      SUM(cached_input_tokens) AS cached_input_tokens
     FROM `${observations}`
     WHERE trace_name = 'turn'
     GROUP BY trace_id
