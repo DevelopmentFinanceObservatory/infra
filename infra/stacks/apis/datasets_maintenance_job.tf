@@ -185,7 +185,7 @@ locals {
 }
 
 # Cloud Run Admin API's run call with a container args override, the same
-# oauth_token target coverage.tf uses.
+# oauth_token target graph_release.tf uses.
 resource "google_cloud_scheduler_job" "datasets_maintenance" {
   for_each = local.datasets_maintenance_schedules
 

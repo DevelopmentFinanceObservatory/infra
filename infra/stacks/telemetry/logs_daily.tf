@@ -229,7 +229,7 @@ resource "google_logging_metric" "logs_daily_failed" {
 # A new log-based metric takes a few minutes to reach Cloud Monitoring's
 # alerting backend, and an alert policy created before then fails with
 # "Cannot find metric(s) that match type". depends_on orders the API calls
-# only, so this waits out the propagation, as apis/coverage.tf does.
+# only, so this waits out the propagation, as apis/graph_release.tf does.
 resource "time_sleep" "logs_daily_failed_metric_propagation" {
   depends_on      = [google_logging_metric.logs_daily_failed]
   create_duration = "120s"

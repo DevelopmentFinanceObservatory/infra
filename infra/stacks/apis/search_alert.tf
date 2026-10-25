@@ -51,7 +51,7 @@ resource "google_logging_metric" "search_resolve_5xx" {
 }
 
 # Waits out the log-based metrics' propagation to Cloud Monitoring before
-# the alert policy names them; coverage.tf explains the failure this avoids.
+# the alert policy names them; graph_release.tf explains the failure this avoids.
 resource "time_sleep" "search_metric_propagation" {
   depends_on = [
     google_logging_metric.search_engine_infra_error,
