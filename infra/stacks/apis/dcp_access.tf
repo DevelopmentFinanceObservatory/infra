@@ -43,13 +43,3 @@ resource "google_cloud_run_v2_service_iam_member" "dc_invoker_search_catalogue_j
   role     = "roles/run.invoker"
   member   = google_service_account.search_catalogue_job.member
 }
-
-# The coverage job's account exists only while the legacy coverage pipeline does.
-resource "google_cloud_run_v2_service_iam_member" "dc_invoker_coverage_job" {
-  count    = var.legacy_coverage_pipeline ? 1 : 0
-  project  = var.project_id
-  location = var.region
-  name     = var.datacommons_service_name
-  role     = "roles/run.invoker"
-  member   = google_service_account.coverage_job[0].member
-}

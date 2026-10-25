@@ -379,7 +379,7 @@ resource "google_cloud_run_v2_job_iam_member" "website_export_scheduler_invoker"
 }
 
 # The Cloud Run Admin API's run call, the same oauth_token target the apis
-# stack's coverage.tf uses.
+# stack's graph_release.tf uses.
 resource "google_cloud_scheduler_job" "website_export" {
   count = local.event_export_count
 
