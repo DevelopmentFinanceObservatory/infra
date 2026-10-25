@@ -333,9 +333,9 @@ locals {
     "roles/certificatemanager.editor",            # DNS authorization, managed certificate, certificate map + entries (edge)
     "roles/dns.admin",                            # consumer PSC DNS zone + record set (apis, website)
     "roles/cloudtasks.queueAdmin",                # google_cloud_tasks_queue (apis datasets worker dispatch)
-    "roles/cloudscheduler.admin",                 # google_cloud_scheduler_job (apis coverage tick)
-    "roles/logging.configWriter",                 # google_logging_metric (apis coverage staleness alert)
-    "roles/monitoring.alertPolicyEditor",         # google_monitoring_alert_policy (apis coverage staleness alert)
+    "roles/cloudscheduler.admin",                 # google_cloud_scheduler_job (apis graph release tick)
+    "roles/logging.configWriter",                 # google_logging_metric (apis graph release alerts)
+    "roles/monitoring.alertPolicyEditor",         # google_monitoring_alert_policy (apis graph release alerts)
     "roles/monitoring.notificationChannelEditor", # google_monitoring_notification_channel (foundation Gemini budget)
   ]
 }

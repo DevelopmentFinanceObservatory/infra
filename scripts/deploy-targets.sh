@@ -232,7 +232,6 @@ handoff_targets() {
 # environment here keeps every listed output required, so a dfo-prod handoff
 # run before the apply that creates the output still fails. Each guard
 # mirrors a flag in the stack's tfvars, on in dfo-prod and off in dfo-dev:
-#   JOB_COVERAGE         legacy_coverage_pipeline (apis, true by default, false in dfo-dev)
 #   JOB_LANGFUSE_EXPORT  langfuse_export_enabled (ai)
 #   EXPORT_JOB_WEBSITE   event_export_enabled (website)
 #
@@ -286,9 +285,6 @@ secret WIF_SA foundation ${1:-}_deployer_service_account"
             "var JOB_ORIGIN_CATALOGUE apis origin_catalogue_job_name" \
             "var JOB_GRAPH_RELEASE apis graph_release_job_name" \
             "var JOB_SEARCH_CATALOGUE apis search_catalogue_job_name"
-        if [ "$2" = dfo-prod ]; then
-            printf '%s\n' "var JOB_COVERAGE apis coverage_job_name"
-        fi
         ;;
     dcp)
         printf '%s\n' "$common" \

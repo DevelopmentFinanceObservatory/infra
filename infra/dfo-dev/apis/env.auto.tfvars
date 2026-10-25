@@ -46,24 +46,15 @@ graph_release_enabled = true
 graph_release_serving = true
 
 # The apis service, datasets worker and search catalogue job serve the code
-# index and coverage from the release in place of the coverage artifact.
+# index and coverage from the release.
 graph_release_coverage = true
 
 # The origin catalogue is read from the release as well.
 graph_release_origin = true
 
-# The builder publishes without diffing each release against the coverage and
-# origin catalogue builds.
-graph_release_shadow = false
-
 # Jev binds every query, with Gemini as its fallback.
 # The key is the hand-made dfo-dev-typesafe-api-key secret.
 search_binder = "jev"
-
-# The coverage job, its tick, identities, grants and alerting are gone, and
-# no surface gets COVERAGE_ARTIFACT_URI. The services serve coverage from the
-# graph release; the coverage bucket stays.
-legacy_coverage_pipeline = false
 
 # The graph release builder starts the search catalogue job after each
 # publish and the deploy after each deploy, so no Scheduler tick or

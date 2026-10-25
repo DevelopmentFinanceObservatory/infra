@@ -18,7 +18,8 @@ terraform {
       version = ">= 3.7.0"
     }
     time = {
-      # time_sleep in coverage.tf, closing the gap between a freshly created
+      # time_sleep in graph_release.tf, origin_catalogue.tf, search_alert.tf
+      # and search_catalogue.tf, closing the gap between a freshly created
       # log-based metric and Cloud Monitoring's own propagation of its
       # descriptor. No specific version feature needed; floored at latest.
       source  = "hashicorp/time"
@@ -33,8 +34,7 @@ provider "google" {
 }
 
 # Every Cloud Scheduler trigger in this stack depends on it: the graph
-# release, origin catalogue, search catalogue, coverage and datasets
-# maintenance ticks.
+# release, origin catalogue, search catalogue and datasets maintenance ticks.
 resource "google_project_service" "cloudscheduler" {
   project            = var.project_id
   service            = "cloudscheduler.googleapis.com"
@@ -256,11 +256,6 @@ module "apis_service" {
     # operation deadline above.
     DATASETS_OPERATION_BACKLOG_MAX = tostring(local.datasets_operation_backlog_max)
     },
-    # coverage.tf's bucket, while var.legacy_coverage_pipeline is true. An
-    # image without graph_release_coverage raises at startup when this
-    # artifact can't be loaded, so a missing or unreadable value fails the
-    # revision the same way a bad GEMINI_API_KEY does.
-    var.legacy_coverage_pipeline ? { COVERAGE_ARTIFACT_URI = "gs://${google_storage_bucket.coverage.name}/" } : {},
     # graph_release.tf's bucket, once var.graph_release_serving is true. The
     # service loads the release the pointer names at startup and refuses to
     # start when none is published, so it stays unset until the builder has
@@ -319,12 +314,12 @@ resource "google_cloud_run_v2_service_iam_member" "apis_invoker" {
 }
 
 # The tag the apis service is running, read fresh on every plan and
-# apply rather than embedded as a literal. This is what coverage.tf,
+# apply rather than embedded as a literal. This is what graph_release.tf,
 # datasets_worker.tf, datasets_migrate_job.tf, and presentation_migrate_job.tf
 # bootstrap their own resources from instead of each carrying a tag of its
 # own: the deploy pipeline always builds one image per commit for the whole
 # app, so whatever tag apis is currently serving already carries
-# dataset_store, presentation_store, and series_coverage.job alike, and is
+# dataset_store, presentation_store, and graph_release.job alike, and is
 # guaranteed to still be in Artifact Registry (Cloud Run couldn't be serving
 # it otherwise). A stack that has never seen a real deploy reads this as
 # module.apis_service's own "gcr.io/cloudrun/hello" bootstrap placeholder,

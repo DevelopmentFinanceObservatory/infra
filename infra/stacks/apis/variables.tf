@@ -153,7 +153,7 @@ variable "datacommons_service_name" {
 # namespace "dfo-dev" and the default connection name "spanner_connection"
 # that evaluates to "dfo_dev_dc_spanner_connection".
 variable "dc_spanner_connection_id" {
-  description = "Short id of the BigQuery connection dcp's vendored module creates for Spanner federation (google_bigquery_connection.spanner_connection in that module). The origin catalogue job's EXTERNAL_QUERY reads through it, and the coverage job's while legacy_coverage_pipeline is true."
+  description = "Short id of the BigQuery connection dcp's vendored module creates for Spanner federation (google_bigquery_connection.spanner_connection in that module). The origin catalogue job's EXTERNAL_QUERY reads through it."
   type        = string
 }
 
