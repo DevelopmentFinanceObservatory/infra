@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# End-to-end tests for load-ga4-history.sh, load-search-console-history.sh and
-# load-cloudflare-history.sh against stub `curl`, `gcloud`, `terraform` and `sleep` commands, so nothing
-# reaches Google. The curl stub answers the GA4 and Search Console calls with
+# End-to-end tests for load-ga4-history.sh, load-search-console-history.sh,
+# load-cloudflare-history.sh and load-website-page-history.sh against stub
+# `curl`, `gcloud`, `terraform` and `sleep` commands, so nothing reaches
+# Google. The curl stub answers the GA4 and Search Console calls with
 # the hand-written responses in testdata/web-history, written to the shape the
 # APIs document, and answers every BigQuery call with a job. It keeps each
 # request body and each staged upload, so the cases assert what was asked
@@ -20,7 +21,7 @@ mkdir "$WORK/bin"
 REPO="$WORK/repo"
 mkdir -p "$REPO/scripts" "$REPO/infra/dfo-prod/telemetry"
 cp "$SCRIPT_DIR"/web-history-lib.sh "$SCRIPT_DIR"/load-ga4-history.sh "$SCRIPT_DIR"/load-search-console-history.sh \
-    "$SCRIPT_DIR"/load-cloudflare-history.sh "$REPO/scripts/"
+    "$SCRIPT_DIR"/load-cloudflare-history.sh "$SCRIPT_DIR"/load-website-page-history.sh "$REPO/scripts/"
 export STUB_LOG="$WORK/calls.log" STUB_STATE="$WORK/state" STUB_FIXTURES="$FIXTURES"
 export WEB_HISTORY_PAGE_SIZE=2
 
@@ -342,6 +343,55 @@ for args in "$FIXTURES/cloudflare.jsonl 2026-10-05" "$WORK/missing.jsonl 2026-10
     # shellcheck disable=SC2086 # split the case into its arguments
     run load-cloudflare-history.sh $args
     check "cloudflare refuses [${args#"$WORK"/}] with no calls" "$(is "$status/$calls" "2/")"
+done
+
+# 12. Website page views. The file's rows are staged sorted and cut to the
+# table's three fields, with a BigQuery-only token. The start may not be before
+# the day the public domain reached the service, and yesterday is the latest
+# end date.
+run load-website-page-history.sh "$FIXTURES/website-page-history.jsonl" 2026-10-14 2026-10-16
+check "website page views load exits 0" "$(is "$status" 0)"
+check "website page views impersonate with the BigQuery scope alone" "$(has "--impersonate-service-account=web-history@test-project.iam.gserviceaccount.com --scopes=https://www.googleapis.com/auth/bigquery")"
+check "website page views stage the rows cut to the table's fields" "$(is "$(staged website_page_history)" "$(printf '%s\n' \
+    '{"bot_page_views":14,"date":"2026-10-14","page_views":120}' \
+    '{"bot_page_views":59,"date":"2026-10-16","page_views":674}')")"
+check "website page views create the table with its schema, partitioned by day" "$(query_has 'CREATE TABLE IF NOT EXISTS `test-project.web_history.website_page_history` (date DATE NOT NULL OPTIONS(description = "UTC day of the request, as Cloud Run logged it."), page_views INT64 NOT NULL')"
+check "website page views replace the range in one transaction" "$(is "$(grep -E '^(BEGIN|DELETE|INSERT|COMMIT|DROP)' "$STUB_STATE/query.sql" | cut -d' ' -f1-3 | tr '\n' '|')" 'BEGIN TRANSACTION;|DELETE FROM `test-project.web_history.website_page_history`|INSERT INTO `test-project.web_history.website_page_history`|COMMIT TRANSACTION;|DROP TABLE `test-project.web_history._staging_website_page_history`;|')"
+check "website page views delete the whole range" "$(query_has "DELETE FROM \`test-project.web_history.website_page_history\` WHERE date BETWEEN DATE '2026-10-14' AND DATE '2026-10-16';")"
+check "website page views print the rows they loaded" "$(says "$(printf 'date\tpage_views\tbot_page_views\n2026-10-14\t120\t14\n2026-10-16\t674\t59')")"
+printf '{"date":"2026-10-13","page_views":1,"bot_page_views":0}\n' >"$WORK/before.jsonl"
+run load-website-page-history.sh "$WORK/before.jsonl" 2026-10-13 2026-10-14
+check "website page views refuse a start before 2026-10-14 with no calls" "$(is "$status/$calls" "2/")"
+check "the refusal names the first day" "$(says "is before 2026-10-14")"
+printf '{"date":"%s","page_views":1,"bot_page_views":0}\n' "$yesterday" >"$WORK/yesterday.jsonl"
+run load-website-page-history.sh "$WORK/yesterday.jsonl" "$yesterday" "$yesterday"
+check "website page views load an end date of yesterday" "$(is "$status" 0)"
+printf '{"date":"%s","page_views":1,"bot_page_views":0}\n' "$today" >"$WORK/today.jsonl"
+run load-website-page-history.sh "$WORK/today.jsonl" "$today" "$today"
+check "website page views refuse an end date of today with no calls" "$(is "$status/$calls" "2/")"
+day14='{"date":"2026-10-14","page_views":1,"bot_page_views":0}'
+bad_file "$day14" '{"date":"2026-10-17","page_views":1,"bot_page_views":0}'
+run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-10-16
+check "website page views refuse a date outside the range with no calls" "$(is "$status/$calls" "2/")"
+bad_file "$day14" "$day14"
+run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-10-16
+check "website page views refuse a repeated date with no calls" "$(is "$status/$calls" "2/")"
+for row in '{"date":"2026-10-14","page_views":1}' '{"date":"2026-10-14","page_views":1,"bot_page_views":-1}' \
+    '{"date":"2026-10-14","page_views":1.5,"bot_page_views":0}' '{"date":"2026-11-31","page_views":1,"bot_page_views":0}' '[1]'; do
+    bad_file "$row"
+    run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-12-31
+    check "website page views refuse the row $row with no calls" "$(is "$status/$calls" "2/")"
+done
+: >"$WORK/bad.jsonl"
+run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-10-16
+check "website page views refuse an empty file with no calls" "$(is "$status/$calls" "2/")"
+bad_file '{"date":'
+run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-10-16
+check "website page views refuse a file that is not JSON with no calls" "$(is "$status/$calls" "2/")"
+for args in "$FIXTURES/website-page-history.jsonl 2026-10-14" "$WORK/missing.jsonl 2026-10-14 2026-10-16" "$FIXTURES/website-page-history.jsonl 2026-10-16 2026-10-14"; do
+    # shellcheck disable=SC2086 # split the case into its arguments
+    run load-website-page-history.sh $args
+    check "website page views refuse [${args#"$WORK"/}] with no calls" "$(is "$status/$calls" "2/")"
 done
 
 [ "$checked" -gt 0 ] || { echo "no checks ran" >&2; exit 1; }

@@ -1,0 +1,8 @@
+{
+  "name": "website-page-history",
+  "private": true,
+  "description": "Pins the bot rule that scripts/capture-website-page-history.sh runs, so an install resolves to the reviewed isbot release.",
+  "dependencies": {
+    "isbot": "5.2.2"
+  }
+}
