@@ -5,7 +5,8 @@
 # tables here, creating each table with its schema on first load. The README's
 # "Web history before the exports" lists the grants they need in GA4 and
 # Search Console. scripts/load-cloudflare-history.sh writes Cloudflare page
-# loads from a captured file here the same way.
+# loads, and scripts/load-website-page-history.sh the website's page history
+# rebuilt from Cloud Run's request log, from captured files here the same way.
 resource "google_project_service" "web_history_apis" {
   for_each = toset([
     "analyticsdata.googleapis.com",
@@ -18,7 +19,7 @@ resource "google_project_service" "web_history_apis" {
 resource "google_bigquery_dataset" "web_history" {
   dataset_id  = "web_history"
   location    = local.bigquery_location
-  description = "GA4 and Search Console daily history from their APIs, for the days before each BigQuery export starts, and Cloudflare page loads from a captured file. Written by ${google_service_account.web_history.email}."
+  description = "GA4 and Search Console daily history from their APIs, for the days before each BigQuery export starts, and Cloudflare page loads and the website's page history from captured files. Written by ${google_service_account.web_history.email}."
 
   depends_on = [google_project_service.apis]
 }
