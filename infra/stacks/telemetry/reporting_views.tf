@@ -13,6 +13,7 @@ locals {
     logs             = [google_bigquery_dataset.logs_daily.dataset_id]
     mcp              = [google_bigquery_dataset.logs_daily.dataset_id]
     website_requests = [google_bigquery_dataset.logs_daily.dataset_id]
+    website_pages    = [google_bigquery_dataset.logs_daily.dataset_id, google_bigquery_dataset.web_history.dataset_id]
     website          = ["website_export"]
     accounts         = ["website_export"]
     langfuse         = ["langfuse_export"]
@@ -55,6 +56,14 @@ locals {
       source      = "website_requests"
       description = "Website request lines per UTC day, route, kind (page, api, rsc, prefetch, or unparsed), bot verdict and status class, with an HLL++ sketch of the callers. No caller, host, user agent or path beyond the route."
       query       = templatefile("${path.module}/sql/reporting/website_requests_daily.sql", { website_requests_daily = "${local.logs_daily_ref}.website_requests_daily" })
+    }
+    website_page_views_daily = {
+      source      = "website_pages"
+      description = "Website page views per UTC day, as page requests answered 2xx from visitors the website did not judge to be bots and from bots. Days before the request log's first parsed day come from the rebuilt Cloud Run history."
+      query = templatefile("${path.module}/sql/reporting/website_page_views_daily.sql", {
+        website_requests_daily = "${local.logs_daily_ref}.website_requests_daily"
+        history                = "${local.web_history_ref}.website_page_history"
+      })
     }
     deploys = {
       source      = "logs"
