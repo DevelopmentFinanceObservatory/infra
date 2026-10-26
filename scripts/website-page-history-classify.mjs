@@ -5,7 +5,8 @@
 //
 // Usage: node website-page-history-classify.mjs <isbot_dir> <date>
 //
-// <isbot_dir> is an npm prefix holding isbot 5.2.2, the version the website
+// <isbot_dir> is an npm prefix holding isbot 5.2.2, installed from the
+// lockfile in scripts/website-page-history/ and the version the website
 // pins; any other version is refused, since the bot rule must be the
 // website's own. stdin holds one entry per line, as `gcloud logging read
 // --format='value(httpRequest.status,httpRequest.requestUrl,httpRequest.userAgent)'`

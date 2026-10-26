@@ -196,7 +196,7 @@ The website's request log carries the status and bot fields that `website_reques
 - a URL with an `_rsc` query parameter, with or without a value, is an RSC request, and left out;
 - any other request is a page.
 
-`bot_page_views` counts the page views whose user agent isbot matches or that carry no user agent, and `page_views` the rest. 2026-10-14 counts from 06:21 UTC, when the public domain first reached the service, and holds 1,513 page views and 2,396 bot page views. The host filter leaves out the earlier preview-host traffic, including a crawler burst on the `run.app` host that day. 2026-10-15 to 2026-10-23 hold from 370 page views (2026-10-18) to 2,077 (2026-10-15), and 862 to 2,073 bot page views. The capture writes nothing, so it can be rerun at any time within retention. It refuses a start date older than today minus 29 days, whose first entries the bucket has already dropped, and fails a day that reads no entries. It needs `roles/logging.viewer` on the project, jq, and node with npm, which installs isbot 5.2.2 into a temporary directory.
+`bot_page_views` counts the page views whose user agent isbot matches or that carry no user agent, and `page_views` the rest. 2026-10-14 counts from 06:21 UTC, when the public domain first reached the service, and holds 1,513 page views and 2,396 bot page views. The host filter leaves out the earlier preview-host traffic, including a crawler burst on the `run.app` host that day. 2026-10-15 to 2026-10-23 hold from 370 page views (2026-10-18) to 2,077 (2026-10-15), and 862 to 2,073 bot page views. The capture writes nothing, so it can be rerun at any time within retention. It refuses a start date older than today minus 29 days, whose first entries the bucket has already dropped, and fails a day that reads no entries. It needs `roles/logging.viewer` on the project, jq, and node with npm, which installs isbot 5.2.2 into a temporary directory with `npm ci`, from the lockfile in `scripts/website-page-history/` that pins it by integrity hash.
 
 From the repository root, capture the range and load it:
 
@@ -213,6 +213,7 @@ On the days both logs cover, the rebuild gives 437 and 672 page views from peopl
 - A document request with `Sec-Purpose: prefetch` and no `prerender` counts as a page in the rebuild and as `prefetch` in the website's log.
 - The rebuild finds RSC requests by the `_rsc` query parameter, and the website by the `rsc: 1` header.
 - Cloud Run times a request when it arrives and the website when its response finishes, so a request that crosses midnight can fall on different days.
+- The request log's parsed lines start at 00:04 UTC on 24 October 2026, so one page request answered between 00:00 and 00:04 UTC that day is in neither count.
 
 ## GA4 unique users
 

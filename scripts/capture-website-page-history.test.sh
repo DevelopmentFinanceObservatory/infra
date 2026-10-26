@@ -4,7 +4,7 @@
 # reaches Google. The stub answers each day's `gcloud logging read` with the
 # synthetic entries below, written in the tab-separated shape the script asks
 # gcloud for. The user agents are generic browser and crawler strings, and
-# the URLs hold no ids. The script installs isbot 5.2.2 with npm, so the run
+# the URLs hold no ids. The script installs isbot 5.2.2 with `npm ci`, so the run
 # needs npm's cache or the registry. Not wired into CI or pre-commit. Run by
 # hand after touching either file:
 #   scripts/capture-website-page-history.test.sh
@@ -19,6 +19,7 @@ REPO="$WORK/repo"
 mkdir -p "$REPO/scripts"
 cp "$SCRIPT_DIR"/web-history-lib.sh "$SCRIPT_DIR"/capture-website-page-history.sh \
     "$SCRIPT_DIR"/website-page-history-classify.mjs "$REPO/scripts/"
+cp -R "$SCRIPT_DIR"/website-page-history "$REPO/scripts/"
 export STUB_LOG="$WORK/calls.log" STUB_FILTERS="$WORK/filters.log" STUB_DAYS="$WORK/days"
 
 # gcloud: logs `gcloud <day> <arguments>`, where <day> is the filter's first
@@ -160,7 +161,18 @@ check "capture refuses a start older than 29 days with no reads, naming the rete
 WEB_HISTORY_TODAY=2026-11-14 run 2026-10-16 2026-10-16
 check "capture accepts a start exactly 29 days old" "$(is "$status/$out" '0/{"date":"2026-10-16","page_views":0,"bot_page_views":0}')"
 
-# 6. The classifier refuses any isbot other than 5.2.2.
+# 6. A lockfile whose integrity hash does not match the registry's tarball
+# stops the run before any day is read.
+lock="$REPO/scripts/website-page-history/package-lock.json"
+cp "$lock" "$WORK/package-lock.good"
+sed 's|"integrity": "sha512-[^"]*"|"integrity": "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="|' \
+    "$WORK/package-lock.good" >"$lock"
+run 2026-10-14 2026-10-14
+check "capture refuses to run when npm ci fails the integrity check" \
+    "$(is "$status/$out/$calls/$(says 'npm ci failed')" "1///true")"
+cp "$WORK/package-lock.good" "$lock"
+
+# 7. The classifier refuses any isbot other than 5.2.2.
 mkdir -p "$WORK/isbot/node_modules/isbot"
 echo '{"name": "isbot", "version": "5.2.1"}' >"$WORK/isbot/node_modules/isbot/package.json"
 set +e

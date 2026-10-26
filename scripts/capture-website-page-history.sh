@@ -24,7 +24,9 @@
 # fails the run, since a public day always has some.
 #
 # Needs gcloud signed in with logging read access to prod-fin-observatory, jq,
-# node and npm, which installs isbot 5.2.2 into a temporary directory.
+# node and npm, which installs isbot 5.2.2 into a temporary directory with
+# `npm ci --ignore-scripts` from scripts/website-page-history/package-lock.json,
+# where it is pinned by integrity hash.
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/web-history-lib.sh
@@ -62,8 +64,14 @@ oldest="$(jq -rn --arg d "$today" '$d | strptime("%Y-%m-%d") | mktime - 29 * 864
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-npm install --prefix "$work" --no-save --no-package-lock --no-audit --no-fund --ignore-scripts \
-    --loglevel=error isbot@5.2.2 >/dev/null
+# Install the pinned classifier dependency from the committed lockfile into a
+# temporary copy, so nothing lands in the repository and a registry that hands
+# back other code fails the integrity check.
+mkdir "$work/isbot"
+cp "$repo_root/scripts/website-page-history/package.json" \
+    "$repo_root/scripts/website-page-history/package-lock.json" "$work/isbot/"
+npm ci --prefix "$work/isbot" --ignore-scripts --no-audit --no-fund --loglevel=error >/dev/null ||
+    { echo "npm ci failed, so the isbot pin in scripts/website-page-history/package-lock.json could not be installed" >&2; exit 1; }
 
 rows=()
 day="$start"
@@ -76,7 +84,7 @@ while [[ ! "$day" > "$end" ]]; do
         AND timestamp>=\"${day}T00:00:00Z\" AND timestamp<\"${next}T00:00:00Z\""
     if ! row="$(gcloud logging read "$filter" --project="$project" --order=asc \
         --format='value(httpRequest.status,httpRequest.requestUrl,httpRequest.userAgent)' 2>"$work/gcloud.err" |
-        node "$repo_root/scripts/website-page-history-classify.mjs" "$work" "$day")"; then
+        node "$repo_root/scripts/website-page-history-classify.mjs" "$work/isbot" "$day")"; then
         echo "reading $day failed:" >&2
         cat "$work/gcloud.err" >&2
         exit 1
