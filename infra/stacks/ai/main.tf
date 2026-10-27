@@ -125,6 +125,10 @@ module "ai_service" {
     # uses "graph" when this is unset.
     STUDIO_ENGINE = "orchestrator"
 
+    # data-mcp sends Search the user's message and the scope entries the
+    # conversation carries, so a choice switched on one turn holds on the next.
+    SEARCH_SENDS_CONVERSATION_CONTEXT = "true"
+
     # ADK's session store, defined in session_store.tf. The harness resolves
     # the instance through the Cloud SQL connector from these three. The
     # connector authenticates this identity over IAM, so there is no
