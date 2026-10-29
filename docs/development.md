@@ -92,7 +92,7 @@ cd infra/dfo-dev/dcp
 terraform init && terraform apply
 ```
 
-After `apply` completes, grant the operator `roles/spanner.databaseAdmin` and `roles/spanner.databaseUser` on the dcp database for `init-db` and `migrate-db`, and `roles/iam.serviceAccountTokenCreator` on the ingestion workflow service account (printed in the Terraform outputs) so the pipelines repository's ingestion assets can impersonate it:
+After `apply` completes, grant the operator `roles/spanner.databaseAdmin` and `roles/spanner.databaseUser` on the dcp database for `init-db` and `migrate-db`, and `roles/iam.serviceAccountTokenCreator` on the ingestion workflow service account (printed in the Terraform outputs) so the operator can start ingestions as it:
 
 ```bash
 gcloud iam service-accounts add-iam-policy-binding \

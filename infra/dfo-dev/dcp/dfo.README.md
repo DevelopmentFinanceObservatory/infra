@@ -43,7 +43,7 @@ The `just` recipes below touch the dcp database. Terraform grants none of the IA
 | `just init-db`    | Creates the schema on a brand-new database | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` | no                                    |
 | `just migrate-db` | Applies pending Spanner schema migrations  | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` | no                                    |
 
-Terraform grants the workflow account `roles/workflows.viewer` (`ingestion_workflow_sa_viewer` in `dfo.tf`) on top of the stack module's `roles/workflows.invoker`. The pipelines repository's ingestion assets need it to read the workflow definition before they start an execution.
+Terraform grants the workflow account `roles/workflows.viewer` (`ingestion_workflow_sa_viewer` in `dfo.tf`) on top of the stack module's `roles/workflows.invoker`. Starting an ingestion reads the workflow definition first, which needs this role.
 
 A permission error from any of these names the resource it denied rather than the principal it denied, which sends you to the wrong service account. Read the principal off the table first.
 
