@@ -131,11 +131,8 @@ module "website_service" {
       # signing key during a rotation. See README.
       version = google_secret_manager_secret_version.website_better_auth_secret.version
     }
-    # Key the /mcp proxy HMACs the client IP with to form the x-dfo-caller header it sends upstream. Pinned like BETTER_AUTH_SECRET. See README and caller_hmac_key.tf.
-    CALLER_HMAC_KEY = {
-      secret_id = google_secret_manager_secret.website_caller_hmac_key.secret_id
-      version   = google_secret_manager_secret_version.website_caller_hmac_key.version
-    }
+    # Key the /mcp proxy HMACs the client IP with to form the x-dfo-caller header it sends upstream. The apis stack owns and pins the secret and mounts it as DFO_CALLER_HMAC_KEY. This mount reads latest, as for DFO_PRINCIPAL below. See README.
+    CALLER_HMAC_KEY = { secret_id = var.caller_hmac_key_secret_id }
     # Bearer token the studio proxy sends to the harness. Not version-pinned.
     # See README.
     STUDIO_TOKEN = { secret_id = data.google_secret_manager_secret.studio_api_token.secret_id }
@@ -155,6 +152,11 @@ module "website_service" {
     # website offers no Live Data option. The apis stack owns and pins the secret.
     # This mount reads latest, as for DFO_PRINCIPAL above. See README.
     LIVE_REFRESH_PRINCIPAL = { secret_id = var.live_refresh_principal_secret_id }
+    # Value the app sends as x-dfo-caller-principal on every dfo-apis call, so
+    # dfo-apis trusts the x-dfo-caller beside it. Unset, neither header is sent.
+    # The apis stack owns and pins the secret. This mount reads latest, as for
+    # DFO_PRINCIPAL above. See README.
+    DFO_CALLER_PRINCIPAL = { secret_id = var.caller_principal_secret_id }
   }, local.sign_in_secret_env_vars, local.email_sign_in_secret_env_vars)
 
   deployer_members = ["serviceAccount:${data.google_service_account.website_deployer.email}"]

@@ -178,7 +178,7 @@ locals {
   website_export_hmac_key_version = 1
 }
 
-# Alphanumeric only, following the caller HMAC key pattern.
+# Alphanumeric only, following the better-auth secret pattern.
 ephemeral "random_password" "website_export_hmac_key" {
   count = local.event_export_count
 

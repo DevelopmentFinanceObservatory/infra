@@ -93,6 +93,12 @@ module "ai_service" {
     # owns and pins the secret. This mount reads latest, as for the principal
     # above. See the `ai` stack README's "Live-refresh principal" section.
     LIVE_REFRESH_PRINCIPAL = { secret_id = var.live_refresh_principal_secret_id }
+    # Value analysis-mcp and presentation-mcp send as x-dfo-caller-principal
+    # beside the x-dfo-caller of an external `/mcp` client, so dfo-apis counts
+    # that client's own allowance. The `apis` stack owns and pins the secret.
+    # This mount reads latest, as for the principals above. See the `ai` stack
+    # README's "Caller principal" section.
+    DFO_CALLER_PRINCIPAL = { secret_id = var.caller_principal_secret_id }
     STUDIO_API_TOKEN = {
       secret_id = google_secret_manager_secret.studio_api_token.secret_id
       # Pinned rather than latest so warm and new instances can never disagree during a rotation; the pin moves with the version resource, rolling the service in the same apply.

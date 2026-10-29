@@ -101,6 +101,12 @@ The secret is created and rotated in the `apis` stack, as `dfo-dev-live-refresh-
 
 The mount reads `latest`, so a rotation in `apis` reaches a running instance only on a new revision, which an image-only deploy or a `terraform apply` here that changes the service creates.
 
+## Caller principal
+
+`DFO_CALLER_PRINCIPAL` is the value analysis-mcp sends as `x-dfo-caller-principal` on each analysis runner call, and presentation-mcp on each card an external `/mcp` client creates or revises, beside the `x-dfo-caller` the website names that client by. `dfo-apis` then counts the client's own allowance. Unset, neither header is sent, runner calls carry no client, and every external client's cards spend the one allowance of this service's address.
+
+The secret is created and rotated in the `apis` stack, as `dfo-dev-caller-principal`. This stack reads it through `var.caller_principal_secret_id`, the same plain-value pattern as `var.live_refresh_principal_secret_id` above, and the mount reads `latest` with the same rollout caveat.
+
 ## Langfuse tracing
 
 The harness exports traces to Langfuse Cloud EU when `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` are all set. This stack mounts the first two from the existing `dfo-dev-langfuse-public-key` and `dfo-dev-langfuse-secret-key` Secret Manager secrets, which are not terraform-managed and are referenced through `data "google_secret_manager_secret"` sources like the Gemini key. `LANGFUSE_BASE_URL` is set to `https://cloud.langfuse.com`, the region the keys belong to. `LANGFUSE_TRACING_ENVIRONMENT` is set to `dfo-dev-ai`, so deployed traces filter apart from a local harness's, which export under Langfuse's default environment. The module grants the runtime service account `roles/secretmanager.secretAccessor` on each of the two secrets, in the same project as the service.

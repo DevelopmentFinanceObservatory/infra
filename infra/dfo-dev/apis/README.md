@@ -158,6 +158,22 @@ This value carries the same caveat as the principals above: while `allow_unauthe
 
 Humans who need to read the value directly are granted read on this one secret through `var.live_refresh_principal_readers`; empty by default. Rotation is a bump of `live_refresh_principal_version` in `live_refresh_principal.tf`. The replacement version is created before the old one is destroyed, and this stack's own mount pins the version number, so the same apply rolls a revision onto the new value here. The `ai` and `website` stacks' mounts read `latest`, since they do not own the version resource. Their READMEs say what rolling a new revision after a rotation requires.
 
+## Caller principal
+
+`caller_principal.tf` generates the shared value that lets this service trust the `x-dfo-caller` header. The website and `dfo-dev-ai` send it as `x-dfo-caller-principal` beside that header, and `dfo_platform.caller.resolve_caller` names the caller by `x-dfo-caller` only when the two match, so the pin door and the per-caller allowances count each website visitor or `/mcp` client on its own. It stores the value as `dfo-dev-caller-principal` and mounts it on this service as `DFO_CALLER_PRINCIPAL`. Unset or empty, the service trusts no `x-dfo-caller` header. It is distinct from the three principals above, because it grants no route by itself, only trust in a caller name, and the allowlists rotate independently.
+
+Its consumers are `dfo-dev-ai` and `dfo-dev-website-staging`, which mount it as `DFO_CALLER_PRINCIPAL`; see those stacks' READMEs. Apply this stack first, for the reason the live-refresh principal gives. While `allow_unauthenticated` is true, an internet caller who learns the value can name itself as any visitor and spend that visitor's allowances.
+
+Readers, rotation and the `latest` mounts in `ai` and `website` work as for the live-refresh principal, through `var.caller_principal_readers` and a bump of `caller_principal_version` in `caller_principal.tf`.
+
+## Caller HMAC key
+
+`caller_hmac_key.tf` generates the key that names a client by a keyed digest of its address, stores it as `dfo-dev-caller-hmac-key`, and mounts it on this service as `DFO_CALLER_HMAC_KEY`, pinned to its version. The website mounts the same secret as `CALLER_HMAC_KEY` and sends the digest as `x-dfo-caller`, so this service and the website name a client by one digest. The digest is the `ip:` caller in the combined MCP server's request log lines, the frame `writer` data-mcp and analysis-mcp record, and the key of each per-caller allowance here. This stack owns the key because it applies before `website`.
+
+The key moved here from the `website` stack, whose `dfo-dev-website-staging-caller-hmac-key` that move destroyed. The new key is a fresh value, so every visitor's `ip:` caller id changed once on that apply, and allowance rows keyed by the old digest stopped matching anyone.
+
+Rotation changes every visitor's caller id the same way. Bump `caller_hmac_key_version` in `caller_hmac_key.tf`. This stack's pinned mount rolls `dfo-dev-apis` onto the new key in the same apply. The website's mount reads `latest`, so it keeps the old key until a new revision: run a `dfo-website` deploy of the `staging` branch, or `gcloud run services update dfo-dev-website-staging --region northamerica-northeast1 --update-labels=caller-hmac-key-rotated=<n>`. Until then the two services name the same visitor by different digests. Humans who need the value read it through `var.caller_hmac_key_readers`, empty by default.
+
 ## Origin catalogue
 
 `origin_catalogue.tf` declares the catalogue's own bucket (`dfo-dev-origin-catalogue-<project>`), a Cloud Run Job (`dfo-dev-origin-catalogue`) running `python -m origin_catalogue.job` from the dfo-apis image, a Cloud Scheduler trigger (`dfo-dev-origin-catalogue-tick`) every 15 minutes, and an alert policy for a stale publish, a failed execution, or a job that stopped running. The job builds the table of every provenance (DFO, base Data Commons and the UN System Data Commons) with its variables and topics, publishes each build under `format-<n>/versions/<build id>/`, and moves `format-<n>/current.json` to point at it last. The operator page is `deploy/origin-catalogue.md` in dfo-apis.

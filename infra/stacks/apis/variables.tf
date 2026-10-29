@@ -237,6 +237,18 @@ variable "live_refresh_principal_readers" {
   default     = []
 }
 
+variable "caller_principal_readers" {
+  description = "IAM members granted secretAccessor on the caller principal secret alone, for humans who need to read the value directly. Empty by default, because the `apis` service mounts it directly and the `ai` and `website` stacks' services carry it through their own secret_env_vars grants, so no human needs read access until one does."
+  type        = list(string)
+  default     = []
+}
+
+variable "caller_hmac_key_readers" {
+  description = "IAM members granted secretAccessor on the caller HMAC key secret alone, for humans who need to read the value directly. Empty by default, because the `apis` service mounts it directly and the `website` stack's service carries it through its own secret_env_vars grant, so no human needs read access until one does."
+  type        = list(string)
+  default     = []
+}
+
 # The UN System Data Commons is a stock Custom Data Commons federated with
 # base Data Commons. The job reads its provenances and agency root groups
 # over the public internet. It serves GET and POST to /v2/node anonymously.
