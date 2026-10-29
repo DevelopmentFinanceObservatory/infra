@@ -4,7 +4,7 @@ Prod's copy of the website stack: the `dfo-prod-website` Cloud Run service, its 
 
 ## Apply order
 
-Website applies last, after `foundation`, `platform`, `dcp`, `apis`, and `ai`. It reads the `apis` stack's `dfo-prod-datasets-pin-principal` secret and the `ai` stack's `dfo-prod-studio-api-token` and `dfo-prod-mcp-api-token` secrets, and plan fails until they exist. It also grants its runtime account `roles/run.invoker` on `dfo-prod-apis`, so apply fails until that service exists. The commented lines in `env.auto.tfvars` take values from those stacks' outputs.
+Website applies last, after `foundation`, `platform`, `dcp`, `apis`, and `ai`. It reads the `apis` stack's `dfo-prod-datasets-pin-principal` secret and the `ai` stack's `dfo-prod-studio-api-token` and `dfo-prod-mcp-api-token` secrets, and plan fails until they exist. It also grants its runtime account `roles/run.invoker` on `dfo-prod-apis`, so apply fails until that service exists. The service also mounts the `apis` stack's `dfo-prod-live-refresh-principal`, `dfo-prod-caller-principal`, and `dfo-prod-caller-hmac-key`, and a revision fails to start until they exist. The caller HMAC key was this stack's `dfo-prod-website-caller-hmac-key` until it moved to `apis`, and the apply that destroys the old secret here needs the `allow-destroy` label on its pull request. The new key is a fresh value, so every visitor's `ip:` caller id changes once. After a rotation in `apis`, this service keeps the old key until it takes a new revision. The commented lines in `env.auto.tfvars` take values from those stacks' outputs.
 
 ## Made by hand first
 

@@ -4,7 +4,7 @@ Prod's copy of the ai stack: the `dfo-prod-ai` Cloud Run service, its definition
 
 ## Apply order
 
-Ai applies after `foundation`, `platform`, `dcp`, and `apis`, and before `website`, which reads this stack's token secrets. The service mounts the `apis` stack's `dfo-prod-datasets-first-party-principal` secret, so `apis` must have created it, and grants its runtime account `roles/run.invoker` on `dfo-prod-apis`, so that service must exist. The commented lines in `env.auto.tfvars` take values from those stacks' outputs.
+Ai applies after `foundation`, `platform`, `dcp`, and `apis`, and before `website`, which reads this stack's token secrets. The service mounts the `apis` stack's `dfo-prod-datasets-first-party-principal`, `dfo-prod-live-refresh-principal`, and `dfo-prod-caller-principal` secrets, so `apis` must have created them, and grants its runtime account `roles/run.invoker` on `dfo-prod-apis`, so that service must exist. The commented lines in `env.auto.tfvars` take values from those stacks' outputs.
 
 ## Made by hand first
 
