@@ -296,7 +296,8 @@ secret WIF_SA foundation ${1:-}_deployer_service_account"
         printf '%s\n' "$common" \
             "var AR_REPO foundation artifact_registry_website_repository_id" \
             "var SERVICE_WEBSITE website service_name" \
-            "var MIGRATE_JOB_WEBSITE website migrate_job_name"
+            "var MIGRATE_JOB_WEBSITE website migrate_job_name" \
+            "var SHARE_MIGRATE_JOB_WEBSITE website share_migrate_job_name"
         if [ "$2" = dfo-prod ]; then
             printf '%s\n' "var EXPORT_JOB_WEBSITE website export_job_name"
         fi

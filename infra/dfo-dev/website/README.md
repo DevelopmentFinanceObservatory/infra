@@ -151,3 +151,18 @@ Only `infra/dfo-prod/website/env.auto.tfvars` sets `event_export_enabled = true`
 The Job bootstraps from `gcr.io/cloudrun/hello`, which has no `node`, so an execution before dfo-website's deploy moves the image fails. The deploy finds the Job through `EXPORT_JOB_WEBSITE`, which `scripts/handoff.sh dfo-prod website` writes from the `export_job_name` output. Executions have a 30-minute timeout and no retry, since the next hourly run replaces the same days.
 
 Rotating the hashing key means bumping `website_export_hmac_key_version`. Every hashed id then changes, and only the days the next run reloads carry the new hashes, so a rotation also needs the `event` table dropped for a full reload.
+
+## Share migration
+
+`share_migrate_job.tf` builds the Job `dfo-dev-website-staging-share-migrate`, which runs dfo-website's `node dist/migrate-shares.cjs` once to move the website's `share` rows into dfo-apis's Presentation store. For each owned share it mints or reuses the owner's write token in `share_token` and calls dfo-apis's share import route with the token's SHA-256. Guest shares go with no digest. A share it cannot import prints `share <id>: <code> <detail>` and the run carries on, then exits 1. A re-run reuses stored tokens and dfo-apis answers an imported share as unchanged, so running it again after a fix is safe.
+
+The Job runs as the service's runtime account with the service's `WEBSITE_DB_*` settings, since it writes `share_token` with the same DML the service holds. It reads the apis base URL from `SEARCH_API_BASE` and calls dfo-apis with an ID token minted as that account, which `website_apis_invoker` already allows. `PRESENTATION_SHARE_IMPORT_PRINCIPAL` reads `latest` of the `apis` stack's `dfo-dev-share-import-principal` through `var.share_import_principal_secret_id`, and the runtime account holds `roles/secretmanager.secretAccessor` on that secret alone. The Job uses the service's PSC network, a one-hour timeout and no retry. The deployer holds `roles/run.developer` on it.
+
+The Job bootstraps from `gcr.io/cloudrun/hello`, which has no `node`, so an execution before dfo-website's deploy moves the image fails. The deploy finds the Job through `SHARE_MIGRATE_JOB_WEBSITE`, which `scripts/handoff.sh dfo-dev website` writes from the `share_migrate_job_name` output. Once dfo-apis serves the import route and the deploy has moved the image, run:
+
+```bash
+gcloud run jobs execute dfo-dev-website-staging-share-migrate \
+  --region=northamerica-northeast1 --project=dev-fin-observatory --wait
+```
+
+On exit 1, read the `share <id>:` lines in the execution's logs, fix the cause, and run it again. Then run `normalise-recipes` on `dfo-dev-datasets-maintenance` (see the `apis` stack's README). The Job, the import route and its principal are removed once prod's shares are migrated.
