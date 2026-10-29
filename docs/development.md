@@ -129,10 +129,10 @@ The recipe only stages files. Read the diff, then run `terraform init` in that d
 
 ### Verify
 
-Once ingestion completes, query the service to confirm data is available. Replace `<service-url>` with the value from `terraform output`:
+After `init-db`, query the service for a node from Base DC's seeds to confirm it is up and reading the database. Replace `<service-url>` with the value from `terraform output`:
 
 ```bash
-curl -sS -X POST <service-url>/core/api/v2/observation \
+curl -sS -X POST <service-url>/core/api/v2/node \
   -H 'Content-Type: application/json' \
-  -d '{"select":["date","value","variable","entity"],"entity":{"dcids":["country/BEL"]},"variable":{"dcids":["ValueAdded_EconomicProduction_IncludingProductTaxes_GrossOfFixedCapitalConsumption_Nominal"]}}'
+  -d '{"nodes":["country/BEL"],"property":"->name"}'
 ```
