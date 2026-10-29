@@ -57,10 +57,6 @@ Take a Spanner backup. Migrations are forward-only, the framework has no `downgr
 
 Then wait for a `terraform apply` on this stack to finish. `apply.yml` runs asynchronously, so a merged PR leaves the apply still in flight. These commands read their targets from `terraform output -json`, which stays empty until the apply populates state. `migrate-db` takes the ingestion lock in Spanner and fails while an ingestion holds it.
 
-### Ingestion merges dcids across imports
-
-Ingestion's preprocessing step always runs with `forceCombineNodes` set to true. A Node dcid declared by two imports merges into one node, whether those imports run separately or are reprocessed together later. Check for dcid collisions with what is already ingested before adding a new import.
-
 ## Migrator password rotation and recovery
 
 `datasets_migrator_password_version` in `dfo_datasets.tf` and `presentation_migrator_password_version` in `dfo_presentation.tf` each control the write-only password for a Secret Manager version and Cloud SQL migrator user. For normal rotation, increment the relevant counter in a PR. After the PR merges, CI applies the whole dcp stack.
