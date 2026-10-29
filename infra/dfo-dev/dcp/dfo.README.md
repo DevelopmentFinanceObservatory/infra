@@ -43,7 +43,7 @@ Two `just` recipes touch the dcp database. Terraform grants none of the IAM they
 | `just init-db`    | Creates the schema on a brand-new database | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` | no                                    |
 | `just migrate-db` | Applies pending Spanner schema migrations  | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` | no                                    |
 
-Terraform grants the workflow account `roles/workflows.viewer` (`ingestion_workflow_sa_viewer` in `dfo.tf`) on top of the stack module's `roles/workflows.invoker`. `load` needs it to read the workflow definition before it starts an execution.
+Terraform grants the workflow account `roles/workflows.viewer` (`ingestion_workflow_sa_viewer` in `dfo.tf`) on top of the stack module's `roles/workflows.invoker`. The pipelines repository's ingestion assets need it to read the workflow definition before they start an execution.
 
 A permission error from any of these names the resource it denied rather than the principal it denied, which sends you to the wrong service account. Read the principal off the table first.
 
@@ -59,7 +59,7 @@ Then wait for a `terraform apply` on this stack to finish. `apply.yml` runs asyn
 
 ### Ingestion merges dcids across imports
 
-Ingestion's preprocessing step always runs with `forceCombineNodes` set to true. A Node dcid declared by two imports merges into one node, whether those imports run separately or are reprocessed together later. Check for dcid collisions with what is already ingested before loading a new dataset by hand.
+Ingestion's preprocessing step always runs with `forceCombineNodes` set to true. A Node dcid declared by two imports merges into one node, whether those imports run separately or are reprocessed together later. Check for dcid collisions with what is already ingested before adding a new import.
 
 ## Migrator password rotation and recovery
 

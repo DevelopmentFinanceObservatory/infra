@@ -92,7 +92,7 @@ cd infra/dfo-dev/dcp
 terraform init && terraform apply
 ```
 
-After `apply` completes, grant the operator `roles/spanner.databaseAdmin` and `roles/spanner.databaseUser` on the dcp database for `init-db` and `migrate-db`, and `roles/iam.serviceAccountTokenCreator` on the ingestion workflow service account (printed in the Terraform outputs) so the CLI can impersonate it for `ingest`:
+After `apply` completes, grant the operator `roles/spanner.databaseAdmin` and `roles/spanner.databaseUser` on the dcp database for `init-db` and `migrate-db`, and `roles/iam.serviceAccountTokenCreator` on the ingestion workflow service account (printed in the Terraform outputs) so the pipelines repository's ingestion assets can impersonate it:
 
 ```bash
 gcloud iam service-accounts add-iam-policy-binding \
@@ -134,5 +134,5 @@ Once ingestion completes, query the service to confirm data is available. Replac
 ```bash
 curl -sS -X POST <service-url>/core/api/v2/observation \
   -H 'Content-Type: application/json' \
-  -d '{"select":["date","value","variable","entity"],"entity":{"dcids":["country/BEL"]},"variable":{"dcids":["average_annual_wage"]}}'
+  -d '{"select":["date","value","variable","entity"],"entity":{"dcids":["country/BEL"]},"variable":{"dcids":["ValueAdded_EconomicProduction_IncludingProductTaxes_GrossOfFixedCapitalConsumption_Nominal"]}}'
 ```
