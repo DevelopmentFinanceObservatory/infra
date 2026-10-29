@@ -12,6 +12,7 @@ platform_postgres_connection_name = "prod-fin-observatory:europe-west1:dfo-prod-
 datasets_pin_principal_secret_id  = "dfo-prod-datasets-pin-principal"
 live_refresh_principal_secret_id  = "dfo-prod-live-refresh-principal"
 caller_principal_secret_id        = "dfo-prod-caller-principal"
+share_import_principal_secret_id  = "dfo-prod-share-import-principal"
 caller_hmac_key_secret_id         = "dfo-prod-caller-hmac-key"
 # One PostHog project serves every environment; events carry an environment property.
 posthog_key = "phc_nNtsVfPvZAKPJ5JagTFzvGsndUddT3PNXguGQsMCnSAt"

@@ -75,6 +75,21 @@ resource "google_cloud_run_v2_job" "datasets_maintenance" {
           value = google_sql_user.datasets_runtime.name
         }
 
+        # The Presentation store connection main.tf gives the service:
+        # normalise-recipes and take-down-share read and write that store.
+        # The same instance and the same runtime Postgres role, which the
+        # Job already logs in as because it runs as the apis runtime
+        # identity, so no further grant.
+        env {
+          name  = "PRESENTATION_STORE_INSTANCE_CONNECTION_NAME"
+          value = var.platform_postgres_connection_name
+        }
+
+        env {
+          name  = "PRESENTATION_STORE_RUNTIME_DB_USER"
+          value = google_sql_user.datasets_runtime.name
+        }
+
         # The deadline age-operations judges an abandoned operation by, the
         # value the apis service and the worker read.
         env {

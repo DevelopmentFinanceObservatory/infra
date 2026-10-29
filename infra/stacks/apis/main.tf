@@ -1,7 +1,7 @@
 terraform {
   # 1.11 for the write-only arguments in datasets_first_party_principal.tf,
   # datasets_pin_principal.tf, live_refresh_principal.tf, caller_principal.tf,
-  # and caller_hmac_key.tf.
+  # caller_hmac_key.tf, and share_import_principal.tf.
   required_version = ">= 1.11"
 
   required_providers {
@@ -14,7 +14,8 @@ terraform {
     random = {
       # 3.7.0 for the ephemeral random_password in
       # datasets_first_party_principal.tf, datasets_pin_principal.tf,
-      # live_refresh_principal.tf, caller_principal.tf, and caller_hmac_key.tf.
+      # live_refresh_principal.tf, caller_principal.tf, caller_hmac_key.tf,
+      # and share_import_principal.tf.
       source  = "hashicorp/random"
       version = ">= 3.7.0"
     }
@@ -144,6 +145,16 @@ module "apis_service" {
       # The pin moves with the version resource, rolling the service in the
       # same apply.
       version = google_secret_manager_secret_version.caller_hmac_key.version
+    }
+
+    # Authenticates the share import route the website's share migration Job
+    # calls. See share_import_principal.tf.
+    PRESENTATION_SHARE_IMPORT_PRINCIPAL = {
+      secret_id = google_secret_manager_secret.share_import_principal.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.share_import_principal.version
     }
     }, {
     # Mounted only when search_binder sends calls to Jev, so a gemini

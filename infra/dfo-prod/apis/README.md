@@ -8,6 +8,8 @@ Apply after `foundation`, `platform`, and `dcp`. Each commented line in `env.aut
 
 This stack creates `dfo-prod-caller-principal` and `dfo-prod-caller-hmac-key`, which the `ai` and `website` services mount, so it applies before them. The caller HMAC key replaced the `website` stack's `dfo-prod-website-caller-hmac-key`. The new key is a fresh value, so every visitor's `ip:` caller id changes once on the first apply that carries it. A rotation (a bump of `caller_hmac_key_version`) changes them again, and the website keeps the old key until it takes a new revision; "Caller HMAC key" in `infra/dfo-dev/apis/README.md` gives the steps, which here name `dfo-prod-website` and `--region europe-west1`.
 
+It also creates `dfo-prod-share-import-principal`, which the `website` stack's share migration Job reads, so it applies before `website` for that secret too. The secret and the import route it gates are removed once prod's shares are migrated ("Share import principal" in `infra/dfo-dev/apis/README.md`).
+
 ## Hand-made prerequisites
 
 - Secret Manager secrets `dfo-prod-apis-gemini-api-key` (the service's key, `data.google_secret_manager_secret.gemini` in `main.tf`) and `dfo-prod-search-catalogue-gemini-api-key` (the search catalogue Job's key, `data.google_secret_manager_secret.search_catalogue_gemini` in `search_catalogue.tf`). Each holds a key from its own AI Studio project on the DFO billing account, so the billing export attributes spend by caller. The data sources fail plan while a secret does not exist, and a secret with no version fails the revision or the Job run at apply.

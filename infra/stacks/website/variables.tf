@@ -110,6 +110,11 @@ variable "caller_principal_secret_id" {
   type        = string
 }
 
+variable "share_import_principal_secret_id" {
+  description = "Secret Manager id of the share import principal secret, which the share migration Job sends to dfo-apis. Copied from the `apis` stack's `google_secret_manager_secret.share_import_principal.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not. See README."
+  type        = string
+}
+
 variable "posthog_key" {
   description = "PostHog project API key (public write-only token, see README \"PostHog telemetry\") for the DFO project on PostHog Cloud EU, org-managed in the PostHog UI rather than by Terraform."
   type        = string
