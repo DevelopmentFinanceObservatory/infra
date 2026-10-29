@@ -36,7 +36,7 @@ Two resources appear in every plan. `null_resource.search_api_gemini_key` carrie
 
 ## The database commands
 
-Two `just` recipes touch the dcp database. Terraform grants none of the IAM they need, so grant it by hand before the first run.
+The `just` recipes below touch the dcp database. Terraform grants none of the IAM they need, so grant it by hand before the first run.
 
 | Recipe            | What it does                               | Spanner roles on your principal                             | Token creator on the workflow account |
 | ----------------- | ------------------------------------------ | ----------------------------------------------------------- | ------------------------------------- |
