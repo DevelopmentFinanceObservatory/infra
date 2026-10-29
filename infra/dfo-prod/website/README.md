@@ -57,4 +57,4 @@ gcloud run jobs execute dfo-prod-website-share-migrate \
   --region=europe-west1 --project=prod-fin-observatory --wait
 ```
 
-On exit 1, read the `share <id>:` lines in the execution's logs, fix the cause, and run it again. The Job, the import route and its principal are removed once prod's shares are migrated.
+On exit 1, read the `share <id>:` lines in the execution's logs, fix the cause, and run it again. Then run `normalise-recipes` on `dfo-prod-datasets-maintenance` (see the `apis` stack's README). The Job, the import route and its principal are removed once prod's shares are migrated.
