@@ -38,14 +38,10 @@ Two resources appear in every plan. `null_resource.search_api_gemini_key` carrie
 
 The `just` recipes below touch the dcp database. Terraform grants none of the IAM they need, so grant it by hand before the first run.
 
-| Recipe            | What it does                               | Spanner roles on your principal                             | Token creator on the workflow account |
-| ----------------- | ------------------------------------------ | ----------------------------------------------------------- | ------------------------------------- |
-| `just init-db`    | Creates the schema on a brand-new database | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` | no                                    |
-| `just migrate-db` | Applies pending Spanner schema migrations  | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` | no                                    |
-
-Terraform grants the workflow account `roles/workflows.viewer` (`ingestion_workflow_sa_viewer` in `dfo.tf`) on top of the stack module's `roles/workflows.invoker`. Starting an ingestion reads the workflow definition first, which needs this role.
-
-A permission error from any of these names the resource it denied rather than the principal it denied, which sends you to the wrong service account. Read the principal off the table first.
+| Recipe            | What it does                               | Spanner roles on your principal                             |
+| ----------------- | ------------------------------------------ | ----------------------------------------------------------- |
+| `just init-db`    | Creates the schema on a brand-new database | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` |
+| `just migrate-db` | Applies pending Spanner schema migrations  | `roles/spanner.databaseAdmin`, `roles/spanner.databaseUser` |
 
 ### init-db on an existing database
 
@@ -56,6 +52,17 @@ A permission error from any of these names the resource it denied rather than th
 Take a Spanner backup. Migrations are forward-only, the framework has no `downgrade()`, and Spanner has no transactional DDL rollback. The CLI asks whether you have taken a backup and does not take one for you.
 
 Then wait for a `terraform apply` on this stack to finish. `apply.yml` runs asynchronously, so a merged PR leaves the apply still in flight. These commands read their targets from `terraform output -json`, which stays empty until the apply populates state. `migrate-db` takes the ingestion lock in Spanner and fails while an ingestion holds it.
+
+## Ingestion
+
+Ingestions run from the pipelines repository's `*_dc_ingestion` Dagster assets. They use two principals:
+
+- The operator's own credentials upload the import bundle to the bucket named by the `storage_artifacts_bucket_name` output and delete stale objects, which needs `roles/storage.objectUser` on the bucket. Foundation grants it to each member of the principals secret's `ingestion_operators` object, and that object is empty in dev.
+- The workflow account starts the workflow through `dcp-tools`, which needs `roles/iam.serviceAccountTokenCreator` for the operator on that account. `docs/development.md` has the grant.
+
+Terraform grants the workflow account `roles/workflows.viewer` (`ingestion_workflow_sa_viewer` in `dfo.tf`) on top of the stack module's `roles/workflows.invoker`, because `dcp-tools` reads the workflow definition before it starts an execution.
+
+A permission error during an ingestion names the resource it denied and leaves out the principal. Check the operator for a bucket error and the workflow account for a workflow error.
 
 ## Migrator password rotation and recovery
 

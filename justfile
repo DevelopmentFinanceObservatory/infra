@@ -23,7 +23,7 @@ STUDIO_TOKEN_SECRET := ENV + "-studio-api-token"
 # The dcp stack's pinned upstream module version (infra/stacks/dcp/main.tf's
 # source ref). Every recipe that invokes datacommons-cli does so through this
 # pin, and an unpinned uvx call floats to whatever's latest on PyPI regardless
-# of the module ref this repo is actually running.
+# of the module ref this repo runs.
 DCP_CLI_VERSION := "1.1.6"
 
 # datacommons-cli finds its project, Spanner instance and database,
