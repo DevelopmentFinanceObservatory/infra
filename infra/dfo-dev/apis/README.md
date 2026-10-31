@@ -14,7 +14,7 @@ The service reads `GEMINI_API_KEY` from the process environment. It warm-loads i
 
 `SEARCH_GRAPH_BASE` and `SEARCH_ENGINE_MODEL` are declared as stack variables (see `variables.tf`) rather than inlined, so they're visible and overridable in one place.
 
-`SEARCH_GRAPH_BASE` points at the `dfo-dev` Data Commons service, the same graph the Datasets variables below target. It serves unauthenticated reads behind no WAF, so `SEARCH_GRAPH_TOKEN` stays unset. It carries the `sdg` namespace but none of ONE's own imports, so the query families that depend on those resolve to `no_data`.
+`SEARCH_GRAPH_BASE` points at the `dfo-dev` Data Commons service, the same graph the Datasets variables below target. It sits behind no WAF, so `SEARCH_GRAPH_TOKEN` stays unset, and the service reaches it with the ID token "Caller authentication" describes. It carries the `sdg` namespace but none of ONE's own imports, so the query families that depend on those resolve to `no_data`.
 
 Moving this to `datacommons.one.org` takes more than a new value. That graph blocks callers whose requests carry no browser user agent, and the engine's SDMX client sends none, so the development-finance family gets a 502 `upstream_error` there.
 
@@ -52,7 +52,7 @@ A migration runner for the Datasets schema reads the runtime username from this 
 
 `DATASETS_ARTIFACT_BUCKET_WORKING` and `DATASETS_ARTIFACT_BUCKET_PINNED` read the same `env.auto.tfvars` values the bucket grants above target, so the bucket the app writes to and the bucket the runtime identity can write to stay the same one.
 
-`DATASETS_GRAPH_TOKEN` is unset. The dev graph serves both the node API and SDMX anonymously, so there is no credential to carry. `DATASETS_SYNC_CEILING_ROWS` is unset too, leaving the app's own default of 50000, which it republishes on `GET /api/datasets/capabilities` with a flag marking it provisional.
+`DATASETS_GRAPH_TOKEN` is unset. The graph sits behind no WAF, so there is no WAF-skip secret to carry. `DATASETS_SYNC_CEILING_ROWS` is unset too, leaving the app's own default of 50000, which it republishes on `GET /api/datasets/capabilities` with a flag marking it provisional.
 
 `DATASET_STORE_INSTANCE_CONNECTION_NAME` and `DATASET_STORE_RUNTIME_DB_USER` give the app its runtime database path. The connection name routes the session through the Cloud SQL Python Connector rather than plain TCP, and the connector mints an IAM access token for the runtime service account, so `DATASET_STORE_RUNTIME_DB_PASSWORD` stays unset and there is no password to store or rotate. The username reads `google_sql_user.datasets_runtime` directly, the same resource that creates the Postgres role, so the name the app logs in as and the role that exists on the instance are one value. `DATASET_STORE_DATABASE` stays unset, leaving the app's own default of `datasets`, the database the `dcp` stack creates.
 
@@ -74,7 +74,7 @@ The Graph surface reads DCP directly and holds no persistence seam of its own, s
 
 `GRAPH_DCP_BASE_URL` (see "Graph and engine configuration" above for the URL shape) is the one variable its own lifespan requires once `DFO_GRAPH_SURFACE` is on, and there is no safe default for it. A revision carrying the flag on with this variable unset fails to serve any request at all, on any surface, not just `/api/graph/*`, because the lifespan runs before the first request lands. This stack always sets both together, so that failure mode does not arise here, but the two variables have to keep changing as a pair.
 
-`GRAPH_DCP_TOKEN` is unset. It is the same WAF-skip secret Search's `SEARCH_GRAPH_TOKEN` and Datasets' `DATASETS_GRAPH_TOKEN` send to their own graph endpoints, and neither of those is set on this service: the dev graph serves reads anonymously behind no WAF, so there is no credential to carry.
+`GRAPH_DCP_TOKEN` is unset. It is the same WAF-skip secret Search's `SEARCH_GRAPH_TOKEN` and Datasets' `DATASETS_GRAPH_TOKEN` send to their own graph endpoints, and neither of those is set on this service: the graph sits behind no WAF, so there is no secret to carry.
 
 The surface mounts. `DFO_GRAPH_SURFACE` reads `"true"` (see `variables.tf`), so the app mounts `GET /api/graph/healthz`, `POST /api/graph/resolve`, and `GET /api/graph/node/{dcid}` alongside Search and Datasets.
 
@@ -103,7 +103,7 @@ A caller authenticates with a Google ID token minted as one of those identities,
 
 Publish, pin and the refresh routes also compare an `x-dfo-principal` value (the three principal sections below), so a direct caller needs that value as well. Public users keep anonymous dataset creation through the website's `/api/v1/datasets` proxy, which the edge rate-limits in prod. `DFO_CORS_ORIGINS` applies platform-wide, so an origin allowlisted for Search also reaches the write doors.
 
-The Data Commons service is a second service callers reach. `dcp_access.tf` grants `roles/run.invoker` on it to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs. In dfo-dev, `eval_reader.tf` grants it to `dfo-dev-apis-eval-reader`. The grants are in place before the DC service stops serving `allUsers`.
+The Data Commons service is a second service callers reach. `dcp_access.tf` grants `roles/run.invoker` on it to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs. In dfo-dev, `eval_reader.tf` grants it to `dfo-dev-apis-eval-reader`. Neither environment's DC service grants `allUsers`, so a caller without one of these grants gets 403.
 
 The flip to `allow_unauthenticated = false` runs in stages:
 
@@ -216,7 +216,7 @@ The build key is the origin catalogue build, the graph release id (while `graph_
 
 The graph release builder starts the job after each publish, and the dfo-apis deploy workflow runs it after each deploy. `search_catalogue_tick`, true by default, adds a Cloud Scheduler trigger (`dfo-dev-search-catalogue-tick`) every 15 minutes, its trigger account and the heartbeat alert. Dev and prod set it false: a start that meets a running build waits for its lease, so no trigger is lost, and without the tick a quiet hour would open the heartbeat alert. Terraform refuses false unless `graph_release_enabled` is true. A build makes about 30 Gemini and graph calls, takes about 90 seconds and peaks near 1.2 GB resident.
 
-The job runs as `dfo-dev-search-catalogue-job`, which holds `roles/storage.objectUser` on its own bucket, `roles/storage.objectViewer` on the origin catalogue bucket, and `roles/secretmanager.secretAccessor` on the secret `var.search_catalogue_gemini_api_key_secret_id` names, `dfo-dev-gemini-api-key` in dev and the job's own `dfo-prod-search-catalogue-gemini-api-key` in prod. It reads the graph at `SEARCH_GRAPH_BASE` and the UN System Data Commons at `UN_GRAPH_BASE_URL` anonymously over the default route, with the engine settings the apis service gets from `main.tf`. The resolvekit cache and `DFO_BUILD_COMMIT` come from the image. While the tick exists, its Scheduler runs as `dfo-dev-search-cat-scheduler`, which holds `roles/run.invoker` on this one Job. The apis runtime account holds `roles/storage.objectViewer` on the bucket, and `main.tf` sets `SEARCH_CATALOGUE_URI` on the service.
+The job runs as `dfo-dev-search-catalogue-job`, which holds `roles/storage.objectUser` on its own bucket, `roles/storage.objectViewer` on the origin catalogue bucket, and `roles/secretmanager.secretAccessor` on the secret `var.search_catalogue_gemini_api_key_secret_id` names, `dfo-dev-gemini-api-key` in dev and the job's own `dfo-prod-search-catalogue-gemini-api-key` in prod. It reads the graph at `SEARCH_GRAPH_BASE` with an ID token and the UN System Data Commons at `UN_GRAPH_BASE_URL` anonymously, both over the default route, with the engine settings the apis service gets from `main.tf`. The resolvekit cache and `DFO_BUILD_COMMIT` come from the image. While the tick exists, its Scheduler runs as `dfo-dev-search-cat-scheduler`, which holds `roles/run.invoker` on this one Job. The apis runtime account holds `roles/storage.objectViewer` on the bucket, and `main.tf` sets `SEARCH_CATALOGUE_URI` on the service.
 
 The task timeout is 1800 seconds and equals `_MAX_RUN_SECONDS` in `search.catalogue.job`, which the job also uses as the grace before pruning old builds. The lease lapses `LEASE_TTL_SECONDS` (600) after it is taken, and a run that meets a held lease waits up to one lease for it, so the timeout leaves a waiting run time to load, build and publish. The Job has no retries: a failed build waits for the next publish, deploy or tick. It has 1 CPU and 4 GiB, the apis service's limits, because it loads the same coverage index and origin catalogue.
 
