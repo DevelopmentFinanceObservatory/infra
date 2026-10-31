@@ -5,9 +5,11 @@
 # only when the principal matches. The pin door and the per-caller allowances
 # then count each website visitor or `/mcp` client separately. A route that
 # names its caller to spend an allowance refuses 503 (`CallerUnresolved`) when
-# `x-dfo-caller-principal` differs from `DFO_CALLER_PRINCIPAL` or that is unset.
-# After a rotation, website and dfo-ai revisions keep the old value until a new
-# revision rolls, and their allowance-spending writes answer 503 until then.
+# a request carries an `x-dfo-caller-principal` that does not match
+# `DFO_CALLER_PRINCIPAL`, or carries one while that setting is unset. After a
+# rotation, website and dfo-ai instances that started before it keep the old
+# value, and their allowance-spending writes answer 503 until a new revision
+# replaces them.
 # Unset on the website or dfo-ai, neither header is sent.
 # It is a separate value from `live_refresh_principal.tf`'s and the two
 # datasets principals. It grants no route by itself, only trust in a caller
