@@ -9,7 +9,7 @@
 # `client`.
 #
 # Nothing in this stack reads the metric, so the propagation wait that
-# apis/coverage.tf puts between a metric and its alert policy has no use here.
+# apis/search_alert.tf puts between a metric and its alert policy has no use here.
 # Add one before any alert policy or dashboard that filters on this metric in
 # the same apply.
 resource "google_logging_metric" "client_calls" {

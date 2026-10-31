@@ -105,7 +105,7 @@ printf '%s' 'https://hooks.slack.com/services/…' | gcloud secrets versions add
 
 ## Client-call metric
 
-`client_calls.tf` declares a log-based metric, `dfo-dev-website-staging-client-calls`, over the service's Cloud Run request log. It counts requests to `/api/search`, `/api/datasets` and `/api/graph`, with or without the `/api/v1` prefix, labelled by `status` and by `client`: `dfo-python`, `dfo-r` or `dfo-ts`, read from the start of the User-Agent, and empty for any other caller. No alert or dashboard reads it yet. One added in the same apply needs the propagation wait `apis/coverage.tf` uses.
+`client_calls.tf` declares a log-based metric, `dfo-dev-website-staging-client-calls`, over the service's Cloud Run request log. It counts requests to `/api/search`, `/api/datasets` and `/api/graph`, with or without the `/api/v1` prefix, labelled by `status` and by `client`: `dfo-python`, `dfo-r` or `dfo-ts`, read from the start of the User-Agent, and empty for any other caller. No alert or dashboard reads it yet. One added in the same apply needs the propagation wait `apis/search_alert.tf` uses.
 
 ## Email sign-in
 
