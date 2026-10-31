@@ -191,11 +191,17 @@ resource "google_cloud_run_v2_job_iam_member" "datasets_maintenance_scheduler_ex
 }
 
 locals {
-  # Daily, half an hour apart so the two tasks never share the database
-  # connection budget. Each name is the task passed to `datasets-maintenance`.
+  # Each name is the task passed to `datasets-maintenance`. `sweep` and
+  # `age-operations` run daily, half an hour apart, so the two never share the
+  # database connection budget. `sweep-export-claims` runs every five minutes:
+  # it settles copy claims a dead instance left, and the five minutes bound how
+  # long a crash holds a caller's pin or export unit (`SWEEP_INTERVAL_SECONDS`
+  # in dfo-apis' `datasets_api.allowance`). Each run ends inside that interval,
+  # and generation fences let it overlap the daily `sweep`.
   datasets_maintenance_schedules = {
-    sweep          = "0 3 * * *"
-    age-operations = "30 3 * * *"
+    sweep               = "0 3 * * *"
+    age-operations      = "30 3 * * *"
+    sweep-export-claims = "*/5 * * * *"
   }
 }
 
