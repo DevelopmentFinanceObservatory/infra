@@ -92,7 +92,9 @@ cd infra/dfo-dev/dcp
 terraform init && terraform apply
 ```
 
-After `apply` completes, grant the operator `roles/spanner.databaseAdmin` and `roles/spanner.databaseUser` on the dcp database for `init-db` and `migrate-db`, and `roles/iam.serviceAccountTokenCreator` on the ingestion workflow service account (printed in the Terraform outputs) so the CLI can impersonate it for `ingest`:
+After `apply` completes, grant the operator `roles/spanner.databaseAdmin` and `roles/spanner.databaseUser` on the dcp database for `init-db` and `migrate-db`.
+
+Ingestions run from the pipelines repository's `*_dc_ingestion` Dagster assets. An operator running them needs `roles/storage.objectUser` on the bucket named by the `storage_artifacts_bucket_name` output, because the assets upload the import bundle with the operator's own credentials. The operator also needs `roles/iam.serviceAccountTokenCreator` on the ingestion workflow service account (printed in the Terraform outputs), because the assets start the workflow as that service account:
 
 ```bash
 gcloud iam service-accounts add-iam-policy-binding \
@@ -126,13 +128,3 @@ just dcp-scaffold 1.1.6
 The recipe regenerates `main.tf`, `variables.tf`, `outputs.tf`, and `README.md` from the upstream CLI at the given version. It copies the three `.tf` files over the tracked files in `infra/stacks/dcp`, which every environment's dcp root links to, and `README.md` into `infra/<ENV>/dcp`. It leaves `backend.tf` and `terraform.tfvars` untouched, because the CLI's own `backend.tf` assumes one stack per instance and would point this stack at empty state. [infra/dfo-dev/dcp/dfo.README.md](../infra/dfo-dev/dcp/dfo.README.md) explains why. It fails on uncommitted edits to `backend.tf` or any `dfo.*` file, so those do not blend into the diff it prints. It also checks the file set the CLI emitted against the expected six, which catches upstream drift the copy loop would otherwise drop silently.
 
 The recipe only stages files. Read the diff, then run `terraform init` in that directory before `just plan`, because the module source ref moves on every version bump and the installed module goes stale until you do. Use plain `init`. The module source is the only change, and `-upgrade` would also re-resolve every provider and rewrite the committed `.terraform.lock.hcl`, which pins provider versions on purpose. `terraform init -backend=false` runs the same install with no GCP credentials, enough to regenerate and review an upgrade before you have a session. Then check the plan for relocated resources that need `moved` blocks before committing.
-
-### Verify
-
-Once ingestion completes, query the service to confirm data is available. Replace `<service-url>` with the value from `terraform output`:
-
-```bash
-curl -sS -X POST <service-url>/core/api/v2/observation \
-  -H 'Content-Type: application/json' \
-  -d '{"select":["date","value","variable","entity"],"entity":{"dcids":["country/BEL"]},"variable":{"dcids":["average_annual_wage"]}}'
-```
