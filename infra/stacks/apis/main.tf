@@ -335,8 +335,9 @@ module "apis_service" {
 }
 
 # One invoker grant per identity in var.invoker_members. Every other grant sits
-# beside the account it names: eval_reader.tf's in the dev apis stack, and the
-# website and ai runtime accounts' in those stacks, which apply after this one.
+# beside the account it names: eval_reader.tf's and sdk_e2e.tf's in the dev apis
+# stack, and the website and ai runtime accounts' in those stacks, which apply
+# after this one.
 resource "google_cloud_run_v2_service_iam_member" "apis_invoker" {
   for_each = toset(var.invoker_members)
   project  = var.project_id
