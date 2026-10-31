@@ -8,6 +8,8 @@ Apply after `foundation`, `platform`, and `dcp`. Each commented line in `env.aut
 
 This stack creates `dfo-prod-caller-principal` and `dfo-prod-caller-hmac-key`, which the `ai` and `website` services mount, so it applies before them. The caller HMAC key replaced the `website` stack's `dfo-prod-website-caller-hmac-key`. The new key is a fresh value, so every visitor's `ip:` caller id changes once on the first apply that carries it. A rotation (a bump of `caller_hmac_key_version`) changes them again, and the website keeps the old key until it takes a new revision; "Caller HMAC key" in `infra/dfo-dev/apis/README.md` gives the steps, which here name `dfo-prod-website` and `--region europe-west1`.
 
+It also creates `dfo-prod-search-query-hmac-key`, which only the `dfo-prod-apis` service mounts ("Search query HMAC key" in `infra/dfo-dev/apis/README.md`).
+
 It also creates `dfo-prod-share-import-principal`, which the `website` stack's share migration Job reads, so it applies before `website` for that secret too. The secret and the import route it gates are removed once prod's shares are migrated ("Share import principal" in `infra/dfo-dev/apis/README.md`).
 
 ## Hand-made prerequisites
