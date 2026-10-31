@@ -3,14 +3,15 @@
 # `x-dfo-caller-principal` beside that header, and dfo-apis
 # (`dfo_platform.caller.resolve_caller`) names the caller by `x-dfo-caller`
 # only when the principal matches. The pin door and the per-caller allowances
-# then count each website visitor or `/mcp` client separately. A request whose
-# `x-dfo-caller-principal` matches no configured value, including when dfo-apis
-# has none, is refused 503 (`CallerUnresolved`), so a rotation answers 503 to a
-# website or dfo-ai instance still holding the old value until it restarts.
+# then count each website visitor or `/mcp` client separately. A route that
+# names its caller to spend an allowance refuses 503 (`CallerUnresolved`) when
+# `x-dfo-caller-principal` differs from `DFO_CALLER_PRINCIPAL` or that is unset.
+# After a rotation, website and dfo-ai revisions keep the old value until a new
+# revision rolls, and their allowance-spending writes answer 503 until then.
 # Unset on the website or dfo-ai, neither header is sent.
 # It is a separate value from `live_refresh_principal.tf`'s and the two
 # datasets principals. It grants no route by itself, only trust in a caller
-# name, so its allowlist rotates independently of theirs.
+# name, so it rotates independently of theirs.
 # While var.allow_unauthenticated is true, any caller reaches the apis
 # service, so a caller who learns this value can name itself as any visitor
 # and spend that visitor's allowance. With it false, only identities holding
