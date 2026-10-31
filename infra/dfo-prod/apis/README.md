@@ -23,6 +23,10 @@ It also creates `dfo-prod-share-import-principal`, which the `website` stack's s
 
 Every alert policy in the stack notifies `Telemetry pipeline alerts: team`, the email channel the telemetry stack builds from the `alerts` object in `dfo-prod-telemetry-principals`. `env.auto.tfvars` names it in `alert_notification_channel`, so the telemetry stack must apply first and the addresses stay in its secret. `search_alert.tf`'s policy, `Search failing on the apis service`, opens when `dfo-prod-apis` logs three or more engine infrastructure errors, or answers three or more 5xx on `/api/search/resolve`, in 5 minutes. "Alert notifications" and "Search failure alert" in `infra/dfo-dev/apis/README.md` describe the lookup, both signals and the thresholds.
 
+## Client-call metric
+
+`client_calls.tf` declares `dfo-prod-client-calls`, the same log-based metric as dev's. `infra/dfo-dev/apis/README.md` describes it.
+
 ## Caller authentication
 
 `env.auto.tfvars` sets `allow_unauthenticated = true` and an empty `invoker_members`. The prod `website` and `ai` stacks grant their own runtime service accounts `roles/run.invoker` on `dfo-prod-apis`. Prod has no eval reader. `dcp_access.tf` grants `roles/run.invoker` on `dfo-prod-dc-datacommons-service` to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs, so the DC service can stop serving `allUsers`. "Caller authentication" in `infra/dfo-dev/apis/README.md` describes the token each caller sends, the staged flip to `allow_unauthenticated = false`, and the break-glass command, which here names `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-observatory`.

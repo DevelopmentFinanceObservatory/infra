@@ -103,10 +103,6 @@ printf '%s' 'https://hooks.slack.com/services/…' | gcloud secrets versions add
 
 `printf` rather than `echo` keeps a trailing newline out of the stored value, and passing the URL via stdin keeps it out of shell history less than an argument would, but not out of this machine's history entirely; run it from a shell with history off if that matters. Running website instances keep the value they started with, so after adding a version roll the service onto a new revision by re-running dfo-website's `deploy.yml` for the `staging` branch, the same gap and fix the `STUDIO_TOKEN` paragraph above describes.
 
-## Client-call metric
-
-`client_calls.tf` declares a log-based metric, `dfo-dev-website-staging-client-calls`, over the service's Cloud Run request log. It counts requests to `/api/search`, `/api/datasets` and `/api/graph`, with or without the `/api/v1` prefix, labelled by `status` and by `client`: `dfo-python`, `dfo-r` or `dfo-ts`, read from the start of the User-Agent, and empty for any other caller. No alert or dashboard reads it yet. One added in the same apply needs the propagation wait `apis/search_alert.tf` uses.
-
 ## Email sign-in
 
 `/login` also offers sign-in by emailed code, but only when the app has all four settings: a mail transport (`SES_ROLE_ARN`, `SES_REGION` and `SES_TOKEN_AUDIENCE`), `AUTH_EMAIL_FROM`, `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`. `email_sign_in.tf` sets `AUTH_EMAIL_FROM` to `DFO Studio <studio@developmentfinance.org>`, the one address the SES role's policy lets the service send as, compared case-sensitively. The SES values come from the `ses` object in `env.auto.tfvars`, the Turnstile site key from `turnstile_site_key`, which defaults to null, and the Turnstile secret key from a secret. The app trims every value and treats a blank one as unset, and a transport missing any of the three SES values counts as no transport, so email sign-in stays off until every value exists.

@@ -34,10 +34,6 @@ gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref m
 
 `infra/dfo-dev/website/README.md` explains the placeholder and rotation in full.
 
-## Client-call metric
-
-`client_calls.tf` declares `dfo-prod-website-client-calls`, the same log-based metric as dev's: requests to the data API paths on the service, labelled by `status` and by DFO client library (`client`). `infra/dfo-dev/website/README.md` describes it in full.
-
 ## Email sign-in
 
 The stack creates `dfo-prod-website-turnstile-secret-key` with a first version holding a single space, which the app reads as blank, so email sign-in stays off. The Turnstile widget is "DFO website production" in the ONE Campaign Cloudflare account, for `developmentfinance.org` and its subdomains. `env.auto.tfvars` holds its site key as `turnstile_site_key`. Add its secret key as a new version with `read -rs KEY; printf '%s' "$KEY" | gcloud secrets versions add dfo-prod-website-turnstile-secret-key --project prod-fin-observatory --data-file=-`. Mail goes through the role `development-finance-observatory-ses-sender-production` in ONE's SES account, which trusts only `dfo-prod-website-run@prod-fin-observatory.iam.gserviceaccount.com` with the token audience `development-finance-observatory-production`. `env.auto.tfvars` sets both in `ses`. The apply for any tfvars change creates a new revision. A new secret version needs a manual roll:
