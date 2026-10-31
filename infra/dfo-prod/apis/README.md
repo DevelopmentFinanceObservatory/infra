@@ -29,4 +29,8 @@ Every alert policy in the stack notifies `Telemetry pipeline alerts: team`, the 
 
 ## Caller authentication
 
-`env.auto.tfvars` sets `allow_unauthenticated = true` and an empty `invoker_members`. The prod `website` and `ai` stacks grant their own runtime service accounts `roles/run.invoker` on `dfo-prod-apis`. Prod has no eval reader. `dcp_access.tf` grants `roles/run.invoker` on `dfo-prod-dc-datacommons-service` to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs, and the DC service grants no `allUsers`. "Caller authentication" in `infra/dfo-dev/apis/README.md` describes the token each caller sends, the log check prod must pass before it sets `allow_unauthenticated = false`, and the break-glass command, which here names `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-observatory`.
+`env.auto.tfvars` sets `allow_unauthenticated = false` and an empty `invoker_members`, so the service refuses anonymous callers. The prod `website` and `ai` stacks grant their own runtime service accounts `roles/run.invoker` on `dfo-prod-apis`. Prod has no eval reader. `dcp_access.tf` grants `roles/run.invoker` on `dfo-prod-dc-datacommons-service` to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs, and the DC service grants no `allUsers`. "Caller authentication" in `infra/dfo-dev/apis/README.md` describes the token each caller sends, how to add a caller, and the break-glass command for prod. A person reaches the service through a local proxy that attaches their own token, which needs a project role that carries `run.routes.invoke`, such as `roles/editor`:
+
+```bash
+gcloud run services proxy dfo-prod-apis --region europe-west1 --project prod-fin-observatory --port 8083
+```
