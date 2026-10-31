@@ -4,9 +4,8 @@
 # GET /api/search/catalogue on the apis service. It publishes each build
 # under "format-<n>/versions/<build id>/" and moves "format-<n>/current.json"
 # to point at it last, as origin_catalogue.tf describes. Its build key is the
-# origin catalogue build, the coverage index build (the graph release id
-# while graph_release_coverage is true), the image's commit and the examples
-# file, so it rebuilds after a publish of either artifact or a deploy, and
+# origin catalogue build, the graph release id (while graph_release_coverage
+# is true), the image's commit and the examples file, so it rebuilds after a publish of either artifact or a deploy, and
 # exits in seconds otherwise. The graph release builder starts it after each
 # publish and the deploy pipeline after each deploy; a 15-minute Scheduler
 # tick also starts it while var.search_catalogue_tick is true. It shares
@@ -28,17 +27,17 @@ variable "search_catalogue_tick" {
 # Bucket
 # ─────────────────────────────────────────────────────────────────────────────
 
-# A dedicated bucket, for the reasons coverage.tf gives for its own, so the
-# job's write access reaches only its own artifact.
+# A dedicated bucket: the Datasets working bucket expires objects after 30
+# days, which would delete the pointer in a quiet month, and GCS has no
+# prefix-scoped IAM, so the job's write access stays to its own artifact.
 resource "google_storage_bucket" "search_catalogue" {
   name                        = "${var.namespace}-search-catalogue-${var.project_id}"
   project                     = var.project_id
   location                    = var.region
   uniform_bucket_level_access = true
 
-  # No lifecycle_rule, for the reason coverage.tf gives: the job prunes its
-  # own old builds and the pointer it leaves in place names a build a
-  # bucket-level age rule could delete.
+  # No lifecycle_rule: the job prunes its own old builds and the pointer it
+  # leaves in place names a build a bucket-level age rule could delete.
 }
 
 output "search_catalogue_bucket_name" {
@@ -62,26 +61,16 @@ resource "google_service_account" "search_catalogue_job" {
 
 # The job overwrites "current.json" on every publish, takes and releases a
 # create-only "lease.json", and prunes old builds, so it needs create, get,
-# list and delete: roles/storage.objectUser, as coverage.tf grants.
+# list and delete: roles/storage.objectUser.
 resource "google_storage_bucket_iam_member" "search_catalogue_job_object_user" {
   bucket = google_storage_bucket.search_catalogue.name
   role   = "roles/storage.objectUser"
   member = google_service_account.search_catalogue_job.member
 }
 
-# The two artifacts the build key and the engine read: the origin catalogue
-# build the engine binds and the coverage index it filters by, the latter
-# while var.legacy_coverage_pipeline is true.
+# The origin catalogue build the build key and the engine read.
 resource "google_storage_bucket_iam_member" "search_catalogue_job_origin_catalogue_viewer" {
   bucket = google_storage_bucket.origin_catalogue.name
-  role   = "roles/storage.objectViewer"
-  member = google_service_account.search_catalogue_job.member
-}
-
-resource "google_storage_bucket_iam_member" "search_catalogue_job_coverage_viewer" {
-  count = var.legacy_coverage_pipeline ? 1 : 0
-
-  bucket = google_storage_bucket.coverage.name
   role   = "roles/storage.objectViewer"
   member = google_service_account.search_catalogue_job.member
 }
@@ -123,7 +112,7 @@ resource "google_service_account_iam_member" "search_catalogue_job_deployer_act_
 # ─────────────────────────────────────────────────────────────────────────────
 
 variable "search_catalogue_bootstrap_image" {
-  description = "Overrides the image the search catalogue Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, as coverage_job_bootstrap_image does."
+  description = "Overrides the image the search catalogue Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, the tag the apis service is currently running."
   type        = string
   default     = null
 }
@@ -178,20 +167,9 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
           value = "gs://${google_storage_bucket.origin_catalogue.name}/"
         }
 
-        # An image without graph_release_coverage refuses to start without
-        # this, also while graph_release_coverage has it read the release
-        # instead.
-        dynamic "env" {
-          for_each = var.legacy_coverage_pipeline ? [1] : []
-          content {
-            name  = "COVERAGE_ARTIFACT_URI"
-            value = "gs://${google_storage_bucket.coverage.name}/"
-          }
-        }
-
         # The release graph_release.tf's builder publishes: the job keys its
         # build on the release id and reads the code index and coverage from
-        # the release in place of the coverage artifact.
+        # the release.
         dynamic "env" {
           for_each = var.graph_release_coverage ? [1] : []
           content {
@@ -249,8 +227,9 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
         }
       }
 
-      # The same private path coverage.tf gives its Job; the graph, Gemini
-      # and GCS sit on public addresses, reached over the default route.
+      # The same private path the service and the migrate Job use; the graph,
+      # Gemini and GCS sit on public addresses, reached over the default
+      # route.
       vpc_access {
         network_interfaces {
           network    = module.psc_network.network_id
@@ -273,7 +252,6 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
     google_secret_manager_secret_iam_member.search_catalogue_job_gemini_accessor,
     google_storage_bucket_iam_member.search_catalogue_job_object_user,
     google_storage_bucket_iam_member.search_catalogue_job_origin_catalogue_viewer,
-    google_storage_bucket_iam_member.search_catalogue_job_coverage_viewer,
   ]
 }
 
@@ -388,14 +366,8 @@ resource "google_logging_metric" "search_catalogue_heartbeat" {
   }
 }
 
-variable "search_catalogue_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for search catalogue build failures, dropped example lines or a job that stopped running."
-  type        = list(string)
-  default     = []
-}
-
 # Waits out the log-based metrics' propagation to Cloud Monitoring before
-# the alert policies name them; coverage.tf explains the failure this avoids.
+# the alert policies name them; graph_release.tf explains the failure this avoids.
 resource "time_sleep" "search_catalogue_metric_propagation" {
   depends_on = [
     google_logging_metric.search_catalogue_line_dropped,
@@ -430,7 +402,7 @@ resource "google_monitoring_alert_policy" "search_catalogue_failed" {
     }
   }
 
-  notification_channels = var.search_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -462,7 +434,7 @@ resource "google_monitoring_alert_policy" "search_catalogue_line_dropped" {
     }
   }
 
-  notification_channels = var.search_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -498,7 +470,7 @@ resource "google_monitoring_alert_policy" "search_catalogue_heartbeat" {
     }
   }
 
-  notification_channels = var.search_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "604800s"

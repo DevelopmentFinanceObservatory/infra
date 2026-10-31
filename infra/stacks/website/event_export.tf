@@ -178,7 +178,7 @@ locals {
   website_export_hmac_key_version = 1
 }
 
-# Alphanumeric only, following the caller HMAC key pattern.
+# Alphanumeric only, following the better-auth secret pattern.
 ephemeral "random_password" "website_export_hmac_key" {
   count = local.event_export_count
 
@@ -379,7 +379,7 @@ resource "google_cloud_run_v2_job_iam_member" "website_export_scheduler_invoker"
 }
 
 # The Cloud Run Admin API's run call, the same oauth_token target the apis
-# stack's coverage.tf uses.
+# stack's graph_release.tf uses.
 resource "google_cloud_scheduler_job" "website_export" {
   count = local.event_export_count
 

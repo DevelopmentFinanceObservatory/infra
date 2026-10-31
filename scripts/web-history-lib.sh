@@ -1,15 +1,16 @@
 # shellcheck shell=bash
-# Shared by load-ga4-history.sh and load-search-console-history.sh, which
-# source it after setting repo_root. It holds the pieces both loaders use: the
-# date checks, the impersonated token, API calls, paging, and the BigQuery load
-# that replaces a date range in web_history.
+# Shared by load-ga4-history.sh, load-search-console-history.sh and
+# load-cloudflare-history.sh, which source it after setting repo_root. It holds
+# the pieces the loaders use: the date checks, the impersonated token, API
+# calls, paging, and the BigQuery load that replaces a date range in
+# web_history.
 #
 # Every call runs as the web_history_service_account output of
 # infra/dfo-prod/telemetry, so the caller needs
-# roles/iam.serviceAccountTokenCreator on that account and the account needs
-# read access in GA4 or Search Console (that README's "Web history before the
-# exports"). BigQuery is driven over its REST API with the same token, since
-# bq has no impersonation flag.
+# roles/iam.serviceAccountTokenCreator on that account, and the GA4 and Search
+# Console loaders need the account to have read access there (that README's
+# "Web history before the exports"). BigQuery is driven over its REST API with
+# the same token, since bq has no impersonation flag.
 
 # shellcheck disable=SC2154 # set by the sourcing loader
 wh_telemetry_root="${repo_root:?set repo_root before sourcing web-history-lib.sh}/infra/dfo-prod/telemetry"
@@ -25,14 +26,10 @@ wh_require_tools() {
     done
 }
 
-# wh_check_dates <start> <end>: exits unless both are real YYYY-MM-DD days,
-# start is not after end, and end is at least 4 days before today (UTC). Both
-# APIs finish a day's figures about 2 to 3 days late, and the fourth day covers
-# Search Console's Pacific Time days. A run replaces its whole range, so an
-# unfinished day would load as partial or empty and clear what the table held
-# for it.
-wh_check_dates() {
-    local day latest
+# wh_check_range <start> <end>: exits unless both are real YYYY-MM-DD days and
+# start is not after end.
+wh_check_range() {
+    local day
     for day in "$1" "$2"; do
         if ! [[ "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] ||
             [ "$(jq -rn --arg d "$day" '$d | strptime("%Y-%m-%d") | mktime | todate[0:10]' 2>/dev/null)" != "$day" ]; then
@@ -41,6 +38,16 @@ wh_check_dates() {
         fi
     done
     [[ ! "$1" > "$2" ]] || { echo "start date $1 is after end date $2" >&2; exit 2; }
+}
+
+# wh_check_dates <start> <end>: wh_check_range, and exits unless end is at
+# least 4 days before today (UTC). The GA4 and Search Console APIs finish a
+# day's figures about 2 to 3 days late, and the fourth day covers Search
+# Console's Pacific Time days. A run replaces its whole range, so an unfinished
+# day would load as partial or empty and clear what the table held for it.
+wh_check_dates() {
+    local latest
+    wh_check_range "$1" "$2"
     latest="$(jq -rn 'now - 4 * 86400 | todate[0:10]')"
     [[ ! "$2" > "$latest" ]] || {
         echo "end date $2 is less than 4 days old, so the APIs may not have finished it; the latest end date today is $latest" >&2
@@ -62,9 +69,9 @@ wh_output() {
     printf '%s\n' "$value"
 }
 
-# wh_init <api scope>: reads the service account, dataset and its location,
-# mints one token for the API and BigQuery, and makes the work directory, with
-# the token's header file in it.
+# wh_init [<api scope>]: reads the service account, dataset and its location,
+# mints one token for BigQuery and the API, if one is named, and makes the work
+# directory, with the token's header file in it.
 wh_init() {
     wh_require_tools
     local dataset_ref
@@ -75,7 +82,7 @@ wh_init() {
     wh_dataset="${dataset_ref#*.}"
     wh_token="$(gcloud auth print-access-token \
         --impersonate-service-account="$wh_service_account" \
-        --scopes="$1,https://www.googleapis.com/auth/bigquery")" || {
+        --scopes="${1:+$1,}https://www.googleapis.com/auth/bigquery")" || {
         echo "could not mint a token as $wh_service_account" >&2
         exit 1
     }

@@ -237,7 +237,7 @@ resource "google_cloud_run_v2_job" "langfuse_export" {
 }
 
 # The deploy workflow's `gcloud run jobs update --image`, and a manual
-# `gcloud run jobs execute` with `--args=--check-day,YYYY-MM-DD`.
+# `gcloud run jobs execute` with `--args=-m,harness.langfuse_export,--check-day,YYYY-MM-DD`.
 resource "google_cloud_run_v2_job_iam_member" "langfuse_export_deployer_run_developer" {
   count = local.langfuse_export_count
 
@@ -280,7 +280,7 @@ resource "google_cloud_run_v2_job_iam_member" "langfuse_export_scheduler_invoker
 }
 
 # The Cloud Run Admin API's run call, the same oauth_token target the apis
-# stack's coverage.tf uses.
+# stack's graph_release.tf uses.
 resource "google_cloud_scheduler_job" "langfuse_export" {
   count = local.langfuse_export_count
 

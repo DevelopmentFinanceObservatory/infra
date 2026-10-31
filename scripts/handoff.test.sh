@@ -87,10 +87,9 @@ chmod +x "$WORK/bin/gh" "$WORK/bin/terraform"
 export PATH="$WORK/bin:$PATH"
 
 # The outputs dfo-dev's state lacks because their resources are off there:
-# coverage_job_name (legacy_coverage_pipeline false), langfuse_export_job_name
-# and export_job_name (both exports default off). Every case runs against
+# langfuse_export_job_name and export_job_name (both exports default off). Every case runs against
 # that state shape unless it says otherwise.
-DEV_ABSENT_OUTPUTS="dfo-dev/apis/coverage_job_name dfo-dev/ai/langfuse_export_job_name dfo-dev/website/export_job_name"
+DEV_ABSENT_OUTPUTS="dfo-dev/ai/langfuse_export_job_name dfo-dev/website/export_job_name"
 export STUB_ABSENT_OUTPUTS="$DEV_ABSENT_OUTPUTS"
 
 # Refuse to continue if the stubs are not what the scripts will resolve.
@@ -179,7 +178,6 @@ secret WIF_SA foundation $1_deployer_service_account"
         "var JOB_ORIGIN_CATALOGUE apis origin_catalogue_job_name" \
         "var JOB_GRAPH_RELEASE apis graph_release_job_name" \
         "var JOB_SEARCH_CATALOGUE apis search_catalogue_job_name"
-        [ "$2" = dfo-prod ] && printf '%s\n' "var JOB_COVERAGE apis coverage_job_name"
         ;;
     dcp) printf '%s\n' \
         "var AR_REPO foundation artifact_registry_datacommons_repository_id" \
@@ -189,7 +187,8 @@ secret WIF_SA foundation $1_deployer_service_account"
         printf '%s\n' \
             "var AR_REPO foundation artifact_registry_website_repository_id" \
             "var SERVICE_WEBSITE website service_name" \
-            "var MIGRATE_JOB_WEBSITE website migrate_job_name"
+            "var MIGRATE_JOB_WEBSITE website migrate_job_name" \
+            "var SHARE_MIGRATE_JOB_WEBSITE website share_migrate_job_name"
         [ "$2" = dfo-prod ] && printf '%s\n' "var EXPORT_JOB_WEBSITE website export_job_name"
         ;;
     esac
@@ -280,13 +279,13 @@ check "missing output writes nothing" "$(lacks ' set ')"
 # 3a. The stub reports a missing output as Terraform does: exit 1, the error
 # on stderr, nothing on stdout, and never `null`.
 set +e
-stub_out="$(cd "$REPO/infra/dfo-dev/apis" && terraform output -json coverage_job_name 2>/dev/null)"
+stub_out="$(cd "$REPO/infra/dfo-dev/ai" && terraform output -json langfuse_export_job_name 2>/dev/null)"
 stub_status=$?
-stub_err="$(cd "$REPO/infra/dfo-dev/apis" && terraform output -json coverage_job_name 2>&1 >/dev/null)"
+stub_err="$(cd "$REPO/infra/dfo-dev/ai" && terraform output -json langfuse_export_job_name 2>&1 >/dev/null)"
 set -e
 check "stub: a missing output exits 1" "$(is "$stub_status" 1)"
 check "stub: a missing output prints nothing on stdout" "$(is "$stub_out" "")"
-check "stub: a missing output says Output not found" "$(is "$stub_err" 'Error: Output "coverage_job_name" not found')"
+check "stub: a missing output says Output not found" "$(is "$stub_err" 'Error: Output "langfuse_export_job_name" not found')"
 
 # 3b. Each prod-only output is missing from dfo-dev's state, so dfo-dev
 # succeeds without reading it. dfo-prod fails when the output is missing, as
@@ -306,11 +305,10 @@ while read -r stack output name; do
     check "dfo-prod $stack writes nothing without $output" "$(lacks ' set ')"
     prod_only=$((prod_only + 1))
 done <<'ROWS'
-apis coverage_job_name JOB_COVERAGE
 ai langfuse_export_job_name JOB_LANGFUSE_EXPORT
 website export_job_name EXPORT_JOB_WEBSITE
 ROWS
-check "covered 3 prod-only outputs (covered $prod_only)" "$(is "$prod_only" 3)"
+check "covered 2 prod-only outputs (covered $prod_only)" "$(is "$prod_only" 2)"
 
 # 4. A missing or mis-restricted environment stops the run before any write,
 # and handoff never creates or fixes one.

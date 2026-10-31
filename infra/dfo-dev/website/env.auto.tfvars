@@ -16,6 +16,9 @@ apis_service_name                   = "dfo-dev-apis" # apis output service_name
 website_url                         = "https://dfo-dev-website-staging-zms5lj4zhq-nn.a.run.app"
 datasets_pin_principal_secret_id    = "dfo-dev-datasets-pin-principal"
 live_refresh_principal_secret_id    = "dfo-dev-live-refresh-principal"
+caller_principal_secret_id          = "dfo-dev-caller-principal"
+share_import_principal_secret_id    = "dfo-dev-share-import-principal"
+caller_hmac_key_secret_id           = "dfo-dev-caller-hmac-key"
 posthog_key                         = "phc_nNtsVfPvZAKPJ5JagTFzvGsndUddT3PNXguGQsMCnSAt"
 
 # Off so destroys and replaces stay unblocked.

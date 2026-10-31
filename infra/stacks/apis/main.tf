@@ -1,6 +1,7 @@
 terraform {
   # 1.11 for the write-only arguments in datasets_first_party_principal.tf,
-  # datasets_pin_principal.tf, and live_refresh_principal.tf.
+  # datasets_pin_principal.tf, live_refresh_principal.tf, caller_principal.tf,
+  # caller_hmac_key.tf, and share_import_principal.tf.
   required_version = ">= 1.11"
 
   required_providers {
@@ -12,13 +13,15 @@ terraform {
     }
     random = {
       # 3.7.0 for the ephemeral random_password in
-      # datasets_first_party_principal.tf, datasets_pin_principal.tf, and
-      # live_refresh_principal.tf.
+      # datasets_first_party_principal.tf, datasets_pin_principal.tf,
+      # live_refresh_principal.tf, caller_principal.tf, caller_hmac_key.tf,
+      # and share_import_principal.tf.
       source  = "hashicorp/random"
       version = ">= 3.7.0"
     }
     time = {
-      # time_sleep in coverage.tf, closing the gap between a freshly created
+      # time_sleep in graph_release.tf, origin_catalogue.tf, search_alert.tf
+      # and search_catalogue.tf, closing the gap between a freshly created
       # log-based metric and Cloud Monitoring's own propagation of its
       # descriptor. No specific version feature needed; floored at latest.
       source  = "hashicorp/time"
@@ -33,12 +36,27 @@ provider "google" {
 }
 
 # Every Cloud Scheduler trigger in this stack depends on it: the graph
-# release, origin catalogue, search catalogue, coverage and datasets
-# maintenance ticks.
+# release, origin catalogue, search catalogue and datasets maintenance ticks.
 resource "google_project_service" "cloudscheduler" {
   project            = var.project_id
   service            = "cloudscheduler.googleapis.com"
   disable_on_destroy = false
+}
+
+# Every alert policy in this stack notifies the one channel
+# var.alert_notification_channel names. The channel belongs to the telemetry
+# stack, which builds it from its principals secret, so this stack holds no
+# address. With the variable null, as in dev, the policies record incidents
+# in Cloud Monitoring and notify no one.
+data "google_monitoring_notification_channel" "alerts" {
+  count = var.alert_notification_channel == null ? 0 : 1
+
+  project      = var.project_id
+  display_name = var.alert_notification_channel
+}
+
+locals {
+  alert_notification_channels = data.google_monitoring_notification_channel.alerts[*].name
 }
 
 # The service's Gemini API key secret, created outside Terraform and only
@@ -106,6 +124,37 @@ module "apis_service" {
       # The pin moves with the version resource, rolling the service in the
       # same apply.
       version = google_secret_manager_secret_version.live_refresh_principal.version
+    }
+
+    # Lets dfo-apis trust the x-dfo-caller header the website and dfo-ai send
+    # beside it. See caller_principal.tf.
+    DFO_CALLER_PRINCIPAL = {
+      secret_id = google_secret_manager_secret.caller_principal.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.caller_principal.version
+    }
+
+    # The key the website also mounts as CALLER_HMAC_KEY, so dfo-apis keys a
+    # caller it sees directly by the same digest the website sends in
+    # x-dfo-caller. See caller_hmac_key.tf.
+    DFO_CALLER_HMAC_KEY = {
+      secret_id = google_secret_manager_secret.caller_hmac_key.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.caller_hmac_key.version
+    }
+
+    # Authenticates the share import route the website's share migration Job
+    # calls. See share_import_principal.tf.
+    PRESENTATION_SHARE_IMPORT_PRINCIPAL = {
+      secret_id = google_secret_manager_secret.share_import_principal.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.share_import_principal.version
     }
     }, {
     # Mounted only when search_binder sends calls to Jev, so a gemini
@@ -240,11 +289,6 @@ module "apis_service" {
     # operation deadline above.
     DATASETS_OPERATION_BACKLOG_MAX = tostring(local.datasets_operation_backlog_max)
     },
-    # coverage.tf's bucket, while var.legacy_coverage_pipeline is true. An
-    # image without graph_release_coverage raises at startup when this
-    # artifact can't be loaded, so a missing or unreadable value fails the
-    # revision the same way a bad GEMINI_API_KEY does.
-    var.legacy_coverage_pipeline ? { COVERAGE_ARTIFACT_URI = "gs://${google_storage_bucket.coverage.name}/" } : {},
     # graph_release.tf's bucket, once var.graph_release_serving is true. The
     # service loads the release the pointer names at startup and refuses to
     # start when none is published, so it stays unset until the builder has
@@ -303,12 +347,12 @@ resource "google_cloud_run_v2_service_iam_member" "apis_invoker" {
 }
 
 # The tag the apis service is running, read fresh on every plan and
-# apply rather than embedded as a literal. This is what coverage.tf,
+# apply rather than embedded as a literal. This is what graph_release.tf,
 # datasets_worker.tf, datasets_migrate_job.tf, and presentation_migrate_job.tf
 # bootstrap their own resources from instead of each carrying a tag of its
 # own: the deploy pipeline always builds one image per commit for the whole
 # app, so whatever tag apis is currently serving already carries
-# dataset_store, presentation_store, and series_coverage.job alike, and is
+# dataset_store, presentation_store, and graph_release.job alike, and is
 # guaranteed to still be in Artifact Registry (Cloud Run couldn't be serving
 # it otherwise). A stack that has never seen a real deploy reads this as
 # module.apis_service's own "gcr.io/cloudrun/hello" bootstrap placeholder,

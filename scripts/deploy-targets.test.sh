@@ -117,14 +117,12 @@ check "deploy_values docs-sync" "$(is "$(deploy_values docs-sync dfo-dev)" "var 
 var DOCSYNC_SERVICE_ACCOUNT foundation docs_sync_service_account")"
 check "deploy_values refuses infra and foundation" "$(deploy_values infra dfo-dev >/dev/null || deploy_values foundation dfo-dev >/dev/null || echo true)"
 check "deploy_values refuses an unknown or missing environment" "$(deploy_values ai dfo-nope >/dev/null || deploy_values ai >/dev/null || echo true)"
-# The prod-only rows: apis, ai and website each differ by one row.
-check "deploy_values apis: dfo-prod adds JOB_COVERAGE to dfo-dev's rows" "$(is "$(deploy_values apis dfo-prod)" "$(deploy_values apis dfo-dev)
-var JOB_COVERAGE apis coverage_job_name")"
+# The prod-only rows: ai and website each differ by one row.
 check "deploy_values ai: dfo-prod adds JOB_LANGFUSE_EXPORT to dfo-dev's rows" "$(is "$(deploy_values ai dfo-prod)" "$(deploy_values ai dfo-dev)
 var JOB_LANGFUSE_EXPORT ai langfuse_export_job_name")"
 check "deploy_values website: dfo-prod adds EXPORT_JOB_WEBSITE to dfo-dev's rows" "$(is "$(deploy_values website dfo-prod)" "$(deploy_values website dfo-dev)
 var EXPORT_JOB_WEBSITE website export_job_name")"
-for stack in dcp infra-plan infra-apply docs-sync; do
+for stack in apis dcp infra-plan infra-apply docs-sync; do
     check "deploy_values $stack is the same in both environments" "$(is "$(deploy_values "$stack" dfo-prod)" "$(deploy_values "$stack" dfo-dev)")"
 done
 

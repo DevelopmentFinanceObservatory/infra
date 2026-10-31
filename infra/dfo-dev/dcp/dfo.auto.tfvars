@@ -64,9 +64,9 @@ spanner_create_instance = true
 # spanner_instance_id     = "existing-spanner-instance"
 
 # Compute capacity (1000 = 1 node). Online-adjustable with no downtime.
-# One node gives concurrent ingestion writes room and is the minimum the Spanner
-# managed autoscaler accepts, so it is also the entry point for an autoscaling_config.
-spanner_processing_units = 1000
+# Dev idles at 100 to save cost. Raise it to 1000 by hand for an ingestion and
+# lower it afterwards; any dcp apply, including an image pin, resets it to 100.
+spanner_processing_units = 100
 
 # =============================================================================
 # Datacommons Services Module

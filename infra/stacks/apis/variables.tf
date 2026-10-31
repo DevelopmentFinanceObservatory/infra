@@ -15,6 +15,12 @@ variable "namespace" {
 
 # Prod gives each Gemini caller its own key from its own AI Studio project, so
 # the billing export attributes spend by project. Dev shares one key.
+variable "alert_notification_channel" {
+  description = "Display name of an existing Cloud Monitoring notification channel in this project that every alert policy in the stack notifies. Plan fails unless exactly one channel has that name. Null leaves the policies with no channel."
+  type        = string
+  default     = null
+}
+
 variable "gemini_api_key_secret_id" {
   description = "Secret Manager id of the Gemini API key the apis service mounts as GEMINI_API_KEY, such as dfo-prod-apis-gemini-api-key. The secret is created outside Terraform and must hold a version before apply."
   type        = string
@@ -147,7 +153,7 @@ variable "datacommons_service_name" {
 # namespace "dfo-dev" and the default connection name "spanner_connection"
 # that evaluates to "dfo_dev_dc_spanner_connection".
 variable "dc_spanner_connection_id" {
-  description = "Short id of the BigQuery connection dcp's vendored module creates for Spanner federation (google_bigquery_connection.spanner_connection in that module). The origin catalogue job's EXTERNAL_QUERY reads through it, and the coverage job's while legacy_coverage_pipeline is true."
+  description = "Short id of the BigQuery connection dcp's vendored module creates for Spanner federation (google_bigquery_connection.spanner_connection in that module). The origin catalogue job's EXTERNAL_QUERY reads through it."
   type        = string
 }
 
@@ -227,6 +233,18 @@ variable "datasets_pin_principal_readers" {
 
 variable "live_refresh_principal_readers" {
   description = "IAM members granted secretAccessor on the live-refresh principal secret alone, for humans who need to read the value directly. Empty by default, because the `apis` service mounts it directly and the `ai` and `website` stacks' services carry it through their own secret_env_vars grants, so no human needs read access until one does."
+  type        = list(string)
+  default     = []
+}
+
+variable "caller_principal_readers" {
+  description = "IAM members granted secretAccessor on the caller principal secret alone, for humans who need to read the value directly. Empty by default, because the `apis` service mounts it directly and the `ai` and `website` stacks' services carry it through their own secret_env_vars grants, so no human needs read access until one does."
+  type        = list(string)
+  default     = []
+}
+
+variable "caller_hmac_key_readers" {
+  description = "IAM members granted secretAccessor on the caller HMAC key secret alone, for humans who need to read the value directly. Empty by default, because the `apis` service mounts it directly and the `website` stack's service carries it through its own secret_env_vars grant, so no human needs read access until one does."
   type        = list(string)
   default     = []
 }

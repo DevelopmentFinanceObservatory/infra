@@ -4,7 +4,9 @@
 # the two products' APIs as the service account below and write day-partitioned
 # tables here, creating each table with its schema on first load. The README's
 # "Web history before the exports" lists the grants they need in GA4 and
-# Search Console.
+# Search Console. scripts/load-cloudflare-history.sh writes Cloudflare page
+# loads, and scripts/load-website-page-history.sh the website's page history
+# rebuilt from Cloud Run's request log, from captured files here the same way.
 resource "google_project_service" "web_history_apis" {
   for_each = toset([
     "analyticsdata.googleapis.com",
@@ -17,7 +19,7 @@ resource "google_project_service" "web_history_apis" {
 resource "google_bigquery_dataset" "web_history" {
   dataset_id  = "web_history"
   location    = local.bigquery_location
-  description = "GA4 and Search Console daily history from their APIs, for the days before each BigQuery export starts. Written by ${google_service_account.web_history.email}."
+  description = "GA4 and Search Console daily history from their APIs, for the days before each BigQuery export starts, and Cloudflare page loads and the website's page history from captured files. Written by ${google_service_account.web_history.email}."
 
   depends_on = [google_project_service.apis]
 }
@@ -25,7 +27,7 @@ resource "google_bigquery_dataset" "web_history" {
 resource "google_service_account" "web_history" {
   account_id   = "${var.namespace}-web-history"
   display_name = "${var.namespace} web history loaders"
-  description  = "Runs the GA4 and Search Console history loaders: reads both APIs, writes web_history."
+  description  = "Runs the web history loaders: reads the GA4 and Search Console APIs, writes web_history."
 }
 
 resource "google_project_iam_member" "web_history_job_user" {

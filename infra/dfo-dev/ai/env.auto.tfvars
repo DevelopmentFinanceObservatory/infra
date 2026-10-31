@@ -9,6 +9,7 @@ dfo_apis_url                             = "https://dfo-dev-apis-zms5lj4zhq-nn.a
 apis_service_name                        = "dfo-dev-apis" # apis output service_name
 datasets_first_party_principal_secret_id = "dfo-dev-datasets-first-party-principal"
 live_refresh_principal_secret_id         = "dfo-dev-live-refresh-principal"
+caller_principal_secret_id               = "dfo-dev-caller-principal"
 presentation_public_url                  = "https://dfo-dev-website-staging-zms5lj4zhq-nn.a.run.app/mcp/presentation"
 site_origin                              = "https://dfo-dev-website-staging-zms5lj4zhq-nn.a.run.app" # website stack website_url
 platform_postgres_instance_name          = "dfo-dev-platform-postgres"

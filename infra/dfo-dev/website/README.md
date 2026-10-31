@@ -28,7 +28,7 @@ The service (`module.website_service`, named `dfo-dev-website-staging` from `var
 
 `BETTER_AUTH_SECRET` is generated here, in `auth_secret.tf`, with the same ephemeral-`random_password`-plus-write-only-version-plus-counter shape as `studio_token.tf` in the `ai` stack. It's stored as `dfo-dev-website-staging-better-auth-secret` and mounted pinned to its version, so warm and new instances can never disagree on the signing key during a rotation. Rotation means bumping `website_better_auth_secret_version` in `auth_secret.tf`. The app reads a single key, so a rotation signs everyone out and restarts any sign-in in progress. Better Auth's `BETTER_AUTH_SECRETS` supports an overlap period, which would need an app change first.
 
-`CALLER_HMAC_KEY` is the key the `/mcp` proxy HMACs the client IP with to form the `x-dfo-caller` header it sends to the harness. It is generated in `caller_hmac_key.tf` with the same shape as the auth secret, stored as `dfo-dev-website-staging-caller-hmac-key`, and mounted pinned to its version. Rotation means bumping `website_caller_hmac_key_version`, and every visitor's caller identity changes. That identity is the `ip:` caller in the combined MCP server's request log lines and the frame `writer` that data-mcp and analysis-mcp record on stored frames, so both show a new value for the same visitor after a rotation.
+`CALLER_HMAC_KEY` is the key the `/mcp` proxy HMACs the client IP with to form the `x-dfo-caller` header it sends to the harness and to `dfo-apis`. The `apis` stack creates and rotates it in `caller_hmac_key.tf`, as `dfo-dev-caller-hmac-key`, and mounts it on `dfo-dev-apis` as `DFO_CALLER_HMAC_KEY`, so both services name a client by one digest. This stack reads it through `var.caller_hmac_key_secret_id`, the same cross-stack pattern as `var.live_refresh_principal_secret_id` below, and the mount reads `latest`. Every rotation changes every visitor's caller identity. That identity is the `ip:` caller in the combined MCP server's request log lines and the frame `writer` that data-mcp and analysis-mcp record on stored frames, so both show a new value for the same visitor after a rotation. The apply that moved the key from this stack to `apis` changed it once in the same way, and destroyed the old `dfo-dev-website-staging-caller-hmac-key`, which needs the `allow-destroy` label on its pull request. "Caller HMAC key" in the `apis` stack README gives the rotation steps.
 
 `TRUSTED_PROXY_HOPS` is set from `var.trusted_proxy_hops` and omitted while that is null. The app's default of 0 takes the rightmost `X-Forwarded-For` entry, which is the one Google's front end appends on a bare `run.app` URL. Behind Cloudflare and the Google load balancer the header reads `client, cloudflare-edge, lb`, so the client sits 2 hops from the right and the variable takes 2.
 
@@ -85,6 +85,10 @@ The secret is created and rotated in the `apis` stack, as `dfo-dev-live-refresh-
 
 The mount reads `latest`, so the value reaches a running instance only on a new revision after a rotation in `apis`. A `dfo-website` deploy of the `staging` branch creates one, and `gcloud run services update dfo-dev-website-staging --region northamerica-northeast1 --update-labels=live-refresh-principal-rotated=<n>` forces one without a new image.
 
+## Caller principal
+
+`DFO_CALLER_PRINCIPAL` is the value the app sends as `x-dfo-caller-principal` on every `dfo-apis` call, so `dfo-apis` trusts the `x-dfo-caller` digest beside it. Unset, the app sends neither header. The secret is created and rotated in the `apis` stack, as `dfo-dev-caller-principal`, and this stack reads it through `var.caller_principal_secret_id`, the same cross-stack pattern as `var.live_refresh_principal_secret_id` above. The mount reads `latest`, so a rotation reaches a running instance only on a new revision, as for the live-refresh principal.
+
 ## Feedback Slack webhook
 
 `FEEDBACK_SLACK_WEBHOOK_URL` is the Slack incoming webhook the app's `/api/feedback` endpoint posts each submission to. Slack issues the URL, so unlike `BETTER_AUTH_SECRET` it can't be generated here: `feedback_webhook.tf` owns the secret container (`dfo-dev-website-staging-feedback-slack-webhook`) and the mount, and the URL itself is added out-of-band as a version. The mount tracks `latest` (a pinned version would point at whatever Terraform knew about, which is never the real URL), and a placeholder first version with the literal `disabled` guarantees the mount always resolves, since Cloud Run refuses to start a revision whose secret env var can't be read. The app treats any value that isn't a Slack webhook URL as "notifications off", so the placeholder is inert.
@@ -139,7 +143,7 @@ Only `infra/dfo-prod/website/env.auto.tfvars` sets `event_export_enabled = true`
 
 - the `website_export` dataset, with `WRITER` for the exporter through `google_bigquery_dataset_access` and no `access` blocks, which would drop the grants such resources add here and in the telemetry stack;
 - `roles/bigquery.jobUser` on the project for the exporter;
-- the secret `dfo-prod-website-export-hmac-key`, generated like the caller HMAC key and mounted pinned to its version;
+- the secret `dfo-prod-website-export-hmac-key`, generated like the auth secret and mounted pinned to its version;
 - the Job `dfo-prod-website-export`, on the service's PSC network with the service's `WEBSITE_DB_*` settings and the exporter as `WEBSITE_DB_USER`, plus `EXPORT_BQ_PROJECT`, `EXPORT_BQ_DATASET` and `EXPORT_ID_HMAC_KEY`;
 - an hourly Cloud Scheduler trigger whose own service account holds `roles/run.invoker` on the Job alone;
 - `roles/run.developer` on the Job and `roles/iam.serviceAccountUser` on the exporter for the website deployer.
@@ -147,3 +151,18 @@ Only `infra/dfo-prod/website/env.auto.tfvars` sets `event_export_enabled = true`
 The Job bootstraps from `gcr.io/cloudrun/hello`, which has no `node`, so an execution before dfo-website's deploy moves the image fails. The deploy finds the Job through `EXPORT_JOB_WEBSITE`, which `scripts/handoff.sh dfo-prod website` writes from the `export_job_name` output. Executions have a 30-minute timeout and no retry, since the next hourly run replaces the same days.
 
 Rotating the hashing key means bumping `website_export_hmac_key_version`. Every hashed id then changes, and only the days the next run reloads carry the new hashes, so a rotation also needs the `event` table dropped for a full reload.
+
+## Share migration
+
+`share_migrate_job.tf` builds the Job `dfo-dev-website-staging-share-migrate`, which runs dfo-website's `node dist/migrate-shares.cjs` once to move the website's `share` rows into dfo-apis's Presentation store. For each owned share it mints or reuses the owner's write token in `share_token` and calls dfo-apis's share import route with the token's SHA-256. Guest shares go with no digest. A share it cannot import prints `share <id>: <code> <detail>` and the run carries on, then exits 1. A re-run reuses stored tokens and dfo-apis answers an imported share as unchanged, so running it again after a fix is safe.
+
+The Job runs as the service's runtime account with the service's `WEBSITE_DB_*` settings, since it writes `share_token` with the same DML the service holds. It reads the apis base URL from `SEARCH_API_BASE` and calls dfo-apis with an ID token minted as that account, which `website_apis_invoker` already allows. `PRESENTATION_SHARE_IMPORT_PRINCIPAL` reads `latest` of the `apis` stack's `dfo-dev-share-import-principal` through `var.share_import_principal_secret_id`, and the runtime account holds `roles/secretmanager.secretAccessor` on that secret alone. The Job uses the service's PSC network, a one-hour timeout and no retry. The deployer holds `roles/run.developer` on it.
+
+The Job bootstraps from `gcr.io/cloudrun/hello`, which has no `node`, so an execution before dfo-website's deploy moves the image fails. The deploy finds the Job through `SHARE_MIGRATE_JOB_WEBSITE`, which `scripts/handoff.sh dfo-dev website` writes from the `share_migrate_job_name` output. Once dfo-apis serves the import route and the deploy has moved the image, run:
+
+```bash
+gcloud run jobs execute dfo-dev-website-staging-share-migrate \
+  --region=northamerica-northeast1 --project=dev-fin-observatory --wait
+```
+
+On exit 1, read the `share <id>:` lines in the execution's logs, fix the cause, and run it again. Then run `normalise-recipes` on `dfo-dev-datasets-maintenance` (see the `apis` stack's README). The Job, the import route and its principal are removed once prod's shares are migrated.

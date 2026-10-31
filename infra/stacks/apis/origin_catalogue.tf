@@ -4,29 +4,26 @@
 # around it. The apis service and the datasets worker load the published
 # artifact at startup. The job publishes each build under
 # "format-<n>/versions/<build id>/" and moves "format-<n>/current.json" to
-# point at it last, the same publication order coverage.tf describes for the
-# coverage index. It shares variables.tf's Spanner connection, main.tf's
-# google_project_service.cloudscheduler and coverage.tf's notification
-# channel conventions, and has its own identities and bucket.
+# point at it last. It shares variables.tf's Spanner connection, main.tf's
+# google_project_service.cloudscheduler and alert notification channel, and
+# has its own identities and bucket.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bucket
 # ─────────────────────────────────────────────────────────────────────────────
 
-# A dedicated bucket, for the reasons coverage.tf gives for its own: the
-# Datasets working bucket expires objects after 30 days, which would delete
-# `current.json` in a quiet month, and GCS has no prefix-scoped IAM. It is
-# separate from the coverage bucket, so the catalogue job's write access
-# reaches only its own artifact.
+# A dedicated bucket: the Datasets working bucket expires objects after 30
+# days, which would delete `current.json` in a quiet month, and GCS has no
+# prefix-scoped IAM, so the catalogue job's write access stays to its own
+# artifact.
 resource "google_storage_bucket" "origin_catalogue" {
   name                        = "${var.namespace}-origin-catalogue-${var.project_id}"
   project                     = var.project_id
   location                    = var.region
   uniform_bucket_level_access = true
 
-  # No lifecycle_rule, for the reason coverage.tf gives: the job prunes its
-  # own old builds and the pointer it leaves in place names a build a
-  # bucket-level age rule could delete.
+  # No lifecycle_rule: the job prunes its own old builds and the pointer it
+  # leaves in place names a build a bucket-level age rule could delete.
 }
 
 output "origin_catalogue_bucket_name" {
@@ -45,14 +42,14 @@ resource "google_service_account" "origin_catalogue_job" {
   display_name = "Origin catalogue build job"
 }
 
-# Four of the grants coverage.tf gives google_service_account.coverage_job,
-# for the same reasons (see the comments there): the job reads DFO's
-# provenances, variables and observation fingerprint with EXTERNAL_QUERY
-# against Spanner, which runs as the caller. The connection carries no
-# delegate identity, so the Spanner grants are as necessary as the two
-# BigQuery ones. It holds no roles/bigquery.readSessionUser, because the
-# job pages query results through jobs.getQueryResults, opens no BigQuery
-# Storage read session, and its image does not install the storage client.
+# The job reads DFO's provenances, variables and observation fingerprint with
+# EXTERNAL_QUERY against Spanner, which runs as the caller. The connection
+# carries no delegate identity, so the Spanner grants are as necessary as the
+# two BigQuery ones (bigquery.jobUser at the project, which has no narrower
+# scope, and bigquery.connectionUser on the connection). It holds no
+# roles/bigquery.readSessionUser, because the job pages query results through
+# jobs.getQueryResults, opens no BigQuery Storage read session, and its image
+# does not install the storage client.
 resource "google_project_iam_member" "origin_catalogue_job_bigquery_job_user" {
   project = var.project_id
   role    = "roles/bigquery.jobUser"
@@ -82,7 +79,7 @@ resource "google_spanner_instance_iam_member" "origin_catalogue_job_spanner_inst
 
 # The job overwrites "current.json" on every publish, takes and releases a
 # create-only "lease.json", and prunes old builds, so it needs create, get,
-# list and delete: roles/storage.objectUser, as coverage.tf grants.
+# list and delete: roles/storage.objectUser.
 resource "google_storage_bucket_iam_member" "origin_catalogue_job_object_user" {
   bucket = google_storage_bucket.origin_catalogue.name
   role   = "roles/storage.objectUser"
@@ -113,7 +110,7 @@ resource "google_service_account_iam_member" "origin_catalogue_job_deployer_act_
 # ─────────────────────────────────────────────────────────────────────────────
 
 variable "origin_catalogue_bootstrap_image" {
-  description = "Overrides the image the origin catalogue Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, as coverage_job_bootstrap_image does."
+  description = "Overrides the image the origin catalogue Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, the tag the apis service is currently running."
   type        = string
   default     = null
 }
@@ -179,9 +176,9 @@ resource "google_cloud_run_v2_job" "origin_catalogue" {
         }
       }
 
-      # The same private path coverage.tf gives its Job; the UN deployment
-      # and the mixer sit on public addresses, reached over the default
-      # route.
+      # The same private path the service and the migrate Job use; the UN
+      # deployment and the mixer sit on public addresses, reached over the
+      # default route.
       vpc_access {
         network_interfaces {
           network    = module.psc_network.network_id
@@ -308,14 +305,8 @@ resource "google_logging_metric" "origin_catalogue_heartbeat" {
   }
 }
 
-variable "origin_catalogue_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for origin catalogue build failures, stale publication or a job that stopped running."
-  type        = list(string)
-  default     = []
-}
-
 # Waits out the log-based metrics' propagation to Cloud Monitoring before
-# the alert policy names them; coverage.tf explains the failure this avoids.
+# the alert policy names them; graph_release.tf explains the failure this avoids.
 resource "time_sleep" "origin_catalogue_metric_propagation" {
   depends_on = [
     google_logging_metric.origin_catalogue_stale,
@@ -365,7 +356,7 @@ resource "google_monitoring_alert_policy" "origin_catalogue_stale" {
     }
   }
 
-  notification_channels = var.origin_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -400,7 +391,7 @@ resource "google_monitoring_alert_policy" "origin_catalogue_heartbeat" {
     }
   }
 
-  notification_channels = var.origin_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "604800s"

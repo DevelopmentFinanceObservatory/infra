@@ -23,11 +23,52 @@
 # props, reaches BigQuery. Staging holds message text, so it expires after a
 # day and the script deletes it on exit. It prints the entries kept per UTC day.
 #
-# The caller needs bigquery.tables.create, updateData and delete on
-# logs_daily, bigquery.jobs.create on <project>, storage.objects.list and get
-# on <bucket>, and logging.operations.list on <project>.
+# backfill_entries holds no message text, so mcp_daily's days through the
+# cut-off day come from this script, and a rebuild of them needs it run again
+# over a kept copy. It reads the cut-off from
+# infra/stacks/telemetry/logs_backfill_cutoff.txt, the file Terraform reads,
+# with its surrounding whitespace trimmed as Terraform's trimspace does.
+# The "Backfill" section of infra/dfo-prod/telemetry/README.md says why, what
+# the step writes, and what it assumes about the copy. Before it loads staging
+# the script runs infra/stacks/telemetry/sql/mcp_daily_preflight.sql. Once
+# staging is loaded it runs infra/stacks/telemetry/sql/mcp_daily_history.sql
+# before the MERGE and prints the MCP calls it wrote per UTC day. The header
+# of mcp_daily_history.sql lists what the two refuse, each refusal with a code
+# mcp_history:<code>:. A refusal inside the step leaves backfill_entries and
+# mcp_daily as they were. Any other failure of the step's bq call leaves
+# mcp_daily as it was unless the transaction committed before the error, in
+# which case its days were replaced; either way backfill_entries was not
+# replaced and the script exits 1 saying the step failed. A step that commits
+# but whose report cannot be read leaves mcp_daily written and
+# backfill_entries as it was, and the script exits 1 saying so. The step's
+# temp tables hold MCP lines with their callers; the script drops them when it
+# succeeds, and a failed run's expire with the script's session within 24
+# hours.
 #
-# Usage: scripts/load-logs-backfill.sh [--ignore-operation=<id>]... [--skip-copy-check] <project> <namespace> <bucket>
+# Before any write the script also refuses, for the step, a copy with no
+# stderr folder, where the combined MCP server logs its call lines, and a
+# deployed <namespace>-logs-daily scheduled query that does not call
+# logs_daily.parse_mcp_line or does not hold the cut-off as
+# TIMESTAMP '<cut-off>', so that the two writers cannot disagree on the
+# boundary. That call arrives with the apply that keeps the query's mcp_daily
+# DELETE after the cut-off day, and an older query's next run would delete the
+# step's days. --skip-mcp-daily leaves out the step and
+# these checks and replaces backfill_entries alone, for a copy the step
+# refuses.
+#
+# This script and the scheduled query run DML on mcp_daily, so they do not run
+# at the same time. Do not run this script around 02:00 UTC, when the scheduled
+# query runs, or during a manual run of it.
+#
+# The caller needs bigquery.tables.create, getData, updateData and delete on
+# logs_daily, bigquery.tables.list and bigquery.tables.get on logs_daily (the
+# step reads logs_daily.INFORMATION_SCHEMA.TABLES), bigquery.routines.get on
+# logs_daily (the step calls logs_daily.parse_mcp_line),
+# bigquery.tables.getData on dfo_logs, bigquery.jobs.create and bigquery.transfers.get on <project>,
+# storage.objects.list and get on <bucket>, and logging.operations.list on
+# <project>.
+#
+# Usage: scripts/load-logs-backfill.sh [--ignore-operation=<id>]... [--skip-copy-check] [--skip-mcp-daily] <project> <namespace> <bucket>
 #   scripts/load-logs-backfill.sh example-project dfo-prod gs://example-project-logs-backfill
 set -euo pipefail
 
@@ -36,6 +77,7 @@ print_usage() {
 }
 
 skip_copy_check=""
+skip_mcp_daily=""
 ignored='[]'
 args=()
 for arg in "$@"; do
@@ -45,6 +87,7 @@ for arg in "$@"; do
         exit 0
         ;;
     --skip-copy-check) skip_copy_check=1 ;;
+    --skip-mcp-daily) skip_mcp_daily=1 ;;
     --ignore-operation=?*) ignored="$(jq -c --arg id "${arg#--ignore-operation=}" '. + [$id]' <<<"$ignored")" ;;
     -*)
         echo "Unrecognized option: $arg" >&2
@@ -72,10 +115,28 @@ gs://*) ;;
 esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-select_sql="$repo_root/infra/stacks/telemetry/sql/backfill_entries.sql"
+stack="$repo_root/infra/stacks/telemetry"
+# shellcheck source=scripts/mcp-daily-lib.sh
+. "$repo_root/scripts/mcp-daily-lib.sh"
+select_sql="$stack/sql/backfill_entries.sql"
+mcp_preflight_sql="$stack/sql/mcp_daily_preflight.sql"
+mcp_history_sql="$stack/sql/mcp_daily_history.sql"
 target="$project.logs_daily.backfill_entries"
+mcp_target="$project.logs_daily.mcp_daily"
 staging="$project.logs_daily.backfill_staging"
 staging_ref="$project:logs_daily.backfill_staging"
+
+# The cut-off the entries view and the scheduled query use, from the file
+# Terraform reads, trimmed as Terraform's trimspace does.
+cutoff="$(cat "$stack/logs_backfill_cutoff.txt")"
+cutoff="${cutoff#"${cutoff%%[![:space:]]*}"}"
+cutoff="${cutoff%"${cutoff##*[![:space:]]}"}"
+if ! [[ "$cutoff" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}\+00$ ]]; then
+    echo "load-logs-backfill.sh: expected one line YYYY-MM-DD HH:MM:SS+00 in $stack/logs_backfill_cutoff.txt, found: ${cutoff:-none}" >&2
+    exit 1
+fi
+
+mcp_set_refs "$project" "$cutoff"
 
 # The load reads only these folders. The copy writes others, and a log id
 # holding a path, such as /var/log/nginx/access.log, makes object names with
@@ -83,6 +144,7 @@ staging_ref="$project:logs_daily.backfill_staging"
 # whole load, so the URIs name only the folders that hold a .json object.
 listing="$(gcloud storage ls -r "$bucket")"
 uris=""
+stderr_objects=0
 for log in requests stdout stderr; do
     folder="$bucket/run.googleapis.com/$log"
     objects="$(grep -F "$folder/" <<<"$listing" | grep -c '\.json$' || true)"
@@ -90,10 +152,52 @@ for log in requests stdout stderr; do
     if [ "$objects" -gt 0 ]; then
         uris="${uris:+$uris,}$folder/*"
     fi
+    if [ "$log" = stderr ]; then
+        stderr_objects="$objects"
+    fi
 done
 if [ -z "$uris" ]; then
     echo "load-logs-backfill.sh: $bucket/run.googleapis.com/{requests,stdout,stderr} hold no .json object; run gcloud logging copy first." >&2
     exit 1
+fi
+# The combined MCP server logs its call lines to stderr, so a copy without
+# that folder would write mcp_daily's days empty.
+if [ -z "$skip_mcp_daily" ] && [ "$stderr_objects" -eq 0 ]; then
+    echo "load-logs-backfill.sh: $bucket/run.googleapis.com/stderr holds no .json object, so mcp_daily would load empty; copy it first, or pass --skip-mcp-daily." >&2
+    exit 1
+fi
+
+bq_flags=(--project_id="$project" --location=EU)
+
+# The deployed scheduled query must call logs_daily.parse_mcp_line, which
+# arrives with the apply that keeps the query's mcp_daily DELETE after the
+# cut-off day, and must hold the same cut-off, since the two writers split
+# mcp_daily's days there. An older query's next run deletes the days the step
+# writes.
+if [ -z "$skip_mcp_daily" ]; then
+    if ! configs="$(bq "${bq_flags[@]}" ls --transfer_config --transfer_location=EU --format=json)"; then
+        printf '%s\n' "$configs" >&2
+        exit 1
+    fi
+    config="$(jq -r --arg name "$namespace-logs-daily" '[.[] | select(.displayName == $name) | .name] | select(length == 1) | .[0]' <<<"$configs")"
+    if [ -z "$config" ]; then
+        echo "load-logs-backfill.sh: expected one scheduled query named $namespace-logs-daily in $project." >&2
+        exit 1
+    fi
+    if ! deployed="$(bq "${bq_flags[@]}" show --format=json --transfer_config "$config")"; then
+        printf '%s\n' "$deployed" >&2
+        exit 1
+    fi
+    deployed_query="$(jq -r '.params.query' <<<"$deployed")"
+    if ! grep -qF -- "\`$project.logs_daily.parse_mcp_line\`(" <<<"$deployed_query"; then
+        echo "load-logs-backfill.sh: the deployed $namespace-logs-daily query does not call logs_daily.parse_mcp_line; apply infra/dfo-prod/telemetry first, or pass --skip-mcp-daily." >&2
+        exit 1
+    fi
+    if ! grep -qF -- "TIMESTAMP '$cutoff'" <<<"$deployed_query"; then
+        echo "load-logs-backfill.sh: the deployed $namespace-logs-daily query does not hold the cut-off TIMESTAMP '$cutoff' of $stack/logs_backfill_cutoff.txt; apply infra/dfo-prod/telemetry first, or pass --skip-mcp-daily." >&2
+        exit 1
+    fi
+    echo ">> The deployed $namespace-logs-daily query calls logs_daily.parse_mcp_line and holds the cut-off $cutoff"
 fi
 
 if [ -z "$skip_copy_check" ]; then
@@ -114,6 +218,18 @@ if [ -z "$skip_copy_check" ]; then
     if grep -qv ' OPERATION_STATE_SUCCEEDED$' <<<"$copies"; then
         echo "load-logs-backfill.sh: a copy into $bucket has not succeeded, so its days may be part-written." >&2
         echo "Wait for it, or rerun the copy, or pass --ignore-operation=<id> for a cancelled copy a later one repeats." >&2
+        exit 1
+    fi
+fi
+
+# The checks of the mcp_daily step that need no staged copy, run before the
+# bucket is loaded.
+if [ -z "$skip_mcp_daily" ]; then
+    echo ">> Checking $mcp_target and dfo_logs"
+    preflight_script="$(fill_mcp_sql <"$mcp_preflight_sql")"
+    if ! preflight_out="$(bq --quiet "${bq_flags[@]}" query --use_legacy_sql=false <<<"$preflight_script")"; then
+        printf '%s\n' "$preflight_out" >&2
+        echo "load-logs-backfill.sh: the $mcp_target preflight failed." >&2
         exit 1
     fi
 fi
@@ -148,8 +264,6 @@ cat >"$work/schema.json" <<'JSON'
 ]
 JSON
 
-bq_flags=(--project_id="$project" --location=EU)
-
 echo ">> Loading $uris into $staging"
 bq "${bq_flags[@]}" rm -f -t "$staging_ref"
 bq "${bq_flags[@]}" mk --table --expiration=86400 \
@@ -163,7 +277,32 @@ select="$(cat "$select_sql")"
 select="${select//'${staging}'/$staging}"
 # shellcheck disable=SC2016
 select="${select//'${namespace}'/$namespace}"
+# The query's message column is not one of these, so it stays out of the
+# table.
 columns="timestamp, log_id, severity, resource, http_request, json_payload"
+
+if [ -z "$skip_mcp_daily" ]; then
+    mcp_script="$(fill_mcp_sql "$select" <"$mcp_history_sql")"
+
+    echo ">> Replacing the whole days of $mcp_target through the cut-off day, $cutoff"
+    # The script drops its temp tables at its end, so the days it wrote are
+    # the rows mcp_report reads from the output.
+    if ! mcp_out="$(bq --quiet "${bq_flags[@]}" query --use_legacy_sql=false --format=csv --max_rows=1000 <<<"$mcp_script")"; then
+        printf '%s\n' "$mcp_out" >&2
+        echo "load-logs-backfill.sh: the $mcp_target step failed; $mcp_target is unchanged unless the step's transaction committed before the error, in which case its days were replaced. $target was not replaced." >&2
+        exit 1
+    fi
+    # The step's transaction has committed by now.
+    mcp_days="$(mcp_report "$mcp_out")"
+    if [ -z "$mcp_days" ]; then
+        printf '%s\n' "$mcp_out" >&2
+        echo "load-logs-backfill.sh: $mcp_target was written but its report could not be read; $target was not replaced." >&2
+        exit 1
+    fi
+    echo ">> MCP calls written per UTC day in $mcp_target (day,calls)"
+    echo "$mcp_days"
+    echo ">> $(grep -c . <<<"$mcp_days") MCP days written"
+fi
 
 echo ">> Replacing $target"
 bq "${bq_flags[@]}" query --use_legacy_sql=false "MERGE \`$target\` AS t

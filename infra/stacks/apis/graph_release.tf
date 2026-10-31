@@ -1,10 +1,8 @@
 # The graph release: a job that reads the Data Commons Spanner database and
 # publishes an immutable release of the platform tables and the DFO parts
-# derived from them, after a gate and (while shadowing) a diff against the
-# coverage and origin catalogue artifacts. The apis service and the datasets
-# worker load the published release. The job writes each release's parts and
-# manifest create-only and moves one pointer last, the same publication order
-# coverage.tf describes for the coverage index. It reuses variables.tf's
+# derived from them, after a gate. The apis service and the datasets worker
+# load the published release. The job writes each release's parts and
+# manifest create-only and moves one pointer last. It reuses variables.tf's
 # Spanner ids and main.tf's google_project_service.cloudscheduler, follows
 # origin_catalogue.tf's alerting conventions, and has its own identities and
 # bucket.
@@ -16,7 +14,7 @@ variable "graph_release_serving" {
 }
 
 variable "graph_release_coverage" {
-  description = "Whether the apis service, the datasets worker and the search catalogue job serve the code index and coverage from the graph release (GRAPH_RELEASE_COVERAGE=1) in place of the coverage artifact. Requires graph_release_serving. The release must already carry its serving views, which the builder publishes whenever it runs."
+  description = "Whether the apis service, the datasets worker and the search catalogue job serve the code index and coverage from the graph release (GRAPH_RELEASE_COVERAGE=1). Requires graph_release_serving. The release must already carry its serving views, which the builder publishes whenever it runs."
   type        = bool
   default     = false
 
@@ -37,12 +35,6 @@ variable "graph_release_origin" {
   }
 }
 
-variable "graph_release_shadow" {
-  description = "Whether the builder diffs each release against the coverage index and origin catalogue builds (GRAPH_RELEASE_SHADOW=1) before it publishes. False leaves the variable unset and drops the builder's COVERAGE_ARTIFACT_URI, ORIGIN_CATALOGUE_URI and read access to those two buckets, so a release publishes without those builds."
-  type        = bool
-  default     = true
-}
-
 variable "graph_release_enabled" {
   description = "Whether the graph release builder runs. False (the default) creates the Scheduler trigger paused and the alert policies disabled, so the stack applies before the dfo-apis image that carries graph_release.job is deployed. Set true once that image is live."
   type        = bool
@@ -53,20 +45,18 @@ variable "graph_release_enabled" {
 # Bucket
 # ─────────────────────────────────────────────────────────────────────────────
 
-# A dedicated bucket, for the reasons coverage.tf gives for its own: the
-# Datasets working bucket expires objects after 30 days, which would delete
-# the pointer in a quiet month, and GCS has no prefix-scoped IAM. It is
-# separate from the coverage and origin catalogue buckets, so the builder's
-# write access reaches only its own releases.
+# A dedicated bucket: the Datasets working bucket expires objects after 30
+# days, which would delete the pointer in a quiet month, and GCS has no
+# prefix-scoped IAM. It is separate from the origin catalogue bucket, so the
+# builder's write access reaches only its own releases.
 resource "google_storage_bucket" "graph_release" {
   name                        = "${var.namespace}-graph-release-${var.project_id}"
   project                     = var.project_id
   location                    = var.region
   uniform_bucket_level_access = true
 
-  # No lifecycle_rule, for the reason coverage.tf gives: the job prunes
-  # releases itself, and the pointer names a manifest a bucket-level age
-  # rule could delete.
+  # No lifecycle_rule: the job prunes releases itself, and the pointer names
+  # a manifest a bucket-level age rule could delete.
 }
 
 output "graph_release_bucket_name" {
@@ -109,28 +99,10 @@ resource "google_cloud_run_v2_service_iam_member" "graph_release_job_dc_viewer" 
 
 # The job creates parts and manifests, moves the pointer, takes and releases
 # a create-only lease, and prunes old releases, so it needs create, get, list
-# and delete: roles/storage.objectUser, as coverage.tf grants.
+# and delete: roles/storage.objectUser.
 resource "google_storage_bucket_iam_member" "graph_release_job_object_user" {
   bucket = google_storage_bucket.graph_release.name
   role   = "roles/storage.objectUser"
-  member = google_service_account.graph_release_job.member
-}
-
-# Read-only on the artifacts the shadow diff compares against, while
-# var.graph_release_shadow is true.
-resource "google_storage_bucket_iam_member" "graph_release_job_coverage_viewer" {
-  count = var.graph_release_shadow ? 1 : 0
-
-  bucket = google_storage_bucket.coverage.name
-  role   = "roles/storage.objectViewer"
-  member = google_service_account.graph_release_job.member
-}
-
-resource "google_storage_bucket_iam_member" "graph_release_job_origin_catalogue_viewer" {
-  count = var.graph_release_shadow ? 1 : 0
-
-  bucket = google_storage_bucket.origin_catalogue.name
-  role   = "roles/storage.objectViewer"
   member = google_service_account.graph_release_job.member
 }
 
@@ -168,7 +140,7 @@ resource "google_service_account_iam_member" "graph_release_job_deployer_act_as"
 # ─────────────────────────────────────────────────────────────────────────────
 
 variable "graph_release_bootstrap_image" {
-  description = "Overrides the image the graph release Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, as coverage_job_bootstrap_image does."
+  description = "Overrides the image the graph release Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, the tag the apis service is currently running."
   type        = string
   default     = null
 }
@@ -245,34 +217,6 @@ resource "google_cloud_run_v2_job" "graph_release" {
           value = var.datasets_sdmx_base_url
         }
 
-        # The shadow diff compares each release with the coverage and origin
-        # catalogue builds named below, and the builder reads those builds
-        # for nothing else. Turning it off lets a release publish without
-        # them.
-        dynamic "env" {
-          for_each = var.graph_release_shadow ? [1] : []
-          content {
-            name  = "GRAPH_RELEASE_SHADOW"
-            value = "1"
-          }
-        }
-
-        dynamic "env" {
-          for_each = var.graph_release_shadow ? [1] : []
-          content {
-            name  = "COVERAGE_ARTIFACT_URI"
-            value = "gs://${google_storage_bucket.coverage.name}/"
-          }
-        }
-
-        dynamic "env" {
-          for_each = var.graph_release_shadow ? [1] : []
-          content {
-            name  = "ORIGIN_CATALOGUE_URI"
-            value = "gs://${google_storage_bucket.origin_catalogue.name}/"
-          }
-        }
-
         # The builder starts one search catalogue execution after each
         # publish, through the Cloud Run Admin API. It does so whenever the
         # variable is set, whatever graph_release_coverage says: without the
@@ -288,8 +232,8 @@ resource "google_cloud_run_v2_job" "graph_release" {
         }
       }
 
-      # The same private path coverage.tf gives its Job; the mixer sits on a
-      # public address, reached over the default route.
+      # The same private path the service and the migrate Job use; the mixer
+      # sits on a public address, reached over the default route.
       vpc_access {
         network_interfaces {
           network    = module.psc_network.network_id
@@ -568,14 +512,17 @@ resource "google_logging_metric" "graph_release_recheck_failed" {
   }
 }
 
-variable "graph_release_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for a stale or gate-failed graph release, an unavailable dependency, a failed catalogue trigger, a failed builder execution, a builder that stopped running, a release a serving instance refused, a pointer recheck that keeps failing, a serving instance near its memory limit, or a release published with blind spots."
-  type        = list(string)
-  default     = []
-}
-
 # Waits out the log-based metrics' propagation to Cloud Monitoring before
-# the alert policies name them; coverage.tf explains the failure this avoids.
+# the alert policies name them. The Terraform google provider's create call
+# for google_logging_metric returns as soon as the API accepts the metric
+# definition, but Cloud Monitoring's own descriptor for a brand-new log-based
+# metric can take up to a few minutes to propagate to the alerting backend;
+# creating an alert policy immediately afterward risks a 404 "Cannot find
+# metric(s) that match type" that a plain depends_on can't close, since that
+# only orders the two API calls, not the metric's propagation between them.
+# condition_threshold has no disable_metric_validation escape hatch (that
+# argument exists only on condition_prometheus_query_language in the current
+# provider), so this waits out the propagation window explicitly instead.
 resource "time_sleep" "graph_release_metric_propagation" {
   depends_on = [
     google_logging_metric.graph_release_stale,
@@ -704,7 +651,7 @@ resource "google_monitoring_alert_policy" "graph_release_stale" {
     }
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -740,7 +687,7 @@ resource "google_monitoring_alert_policy" "graph_release_heartbeat" {
     }
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "604800s"
@@ -794,7 +741,7 @@ resource "google_monitoring_alert_policy" "graph_release_serving" {
     }
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -832,7 +779,7 @@ resource "google_monitoring_alert_policy" "graph_release_memory" {
     }
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -871,7 +818,7 @@ resource "google_monitoring_alert_policy" "graph_release_blind_spots" {
     content   = "A release published with variables outside it in its own families: serving may miss members if the origin catalogue does not list them. See deploy/graph-release.md step 6 in dfo-apis."
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"

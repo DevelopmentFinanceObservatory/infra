@@ -10,13 +10,17 @@ locals {
   # dataset by the GA4 BigQuery link, and the billing export dataset by the
   # foundation stack.
   reporting_source_datasets = {
-    logs           = [google_bigquery_dataset.logs_daily.dataset_id]
-    website        = ["website_export"]
-    accounts       = ["website_export"]
-    langfuse       = ["langfuse_export"]
-    ga4            = [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
-    search_console = [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
-    billing        = [var.billing_export_dataset]
+    logs             = [google_bigquery_dataset.logs_daily.dataset_id]
+    mcp              = [google_bigquery_dataset.logs_daily.dataset_id]
+    website_requests = [google_bigquery_dataset.logs_daily.dataset_id]
+    website_pages    = [google_bigquery_dataset.logs_daily.dataset_id, google_bigquery_dataset.web_history.dataset_id]
+    website          = ["website_export"]
+    accounts         = ["website_export"]
+    langfuse         = ["langfuse_export"]
+    ga4              = [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
+    search_console   = [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
+    cloudflare       = [google_bigquery_dataset.web_history.dataset_id]
+    billing          = [var.billing_export_dataset]
   }
 
   logs_daily_ref  = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}"
@@ -43,6 +47,24 @@ locals {
       description = "Cloud Run stdout and stderr entries at WARNING or above per UTC day, service or job, logger and severity. No message text."
       query       = templatefile("${path.module}/sql/reporting/service_errors_daily.sql", { errors_daily = "${local.logs_daily_ref}.errors_daily" })
     }
+    mcp_daily = {
+      source      = "mcp"
+      description = "Combined MCP server tool calls, resource reads, resource lists and initializes per UTC day, caller kind, client, request and outcome, with an HLL++ sketch of the callers. No caller, trace id, URI or other text."
+      query       = templatefile("${path.module}/sql/reporting/mcp_daily.sql", { mcp_daily = "${local.logs_daily_ref}.mcp_daily" })
+    }
+    website_requests_daily = {
+      source      = "website_requests"
+      description = "Website request lines per UTC day, route, kind (page, api, rsc, prefetch, or unparsed), bot verdict and status class, with an HLL++ sketch of the callers. No caller, host, user agent or path beyond the route."
+      query       = templatefile("${path.module}/sql/reporting/website_requests_daily.sql", { website_requests_daily = "${local.logs_daily_ref}.website_requests_daily" })
+    }
+    website_page_views_daily = {
+      source      = "website_pages"
+      description = "Website page views per UTC day, as page requests answered 2xx from visitors the website did not judge to be bots and from bots. Days before the request log's first parsed day come from the rebuilt Cloud Run history."
+      query = templatefile("${path.module}/sql/reporting/website_page_views_daily.sql", {
+        website_requests_daily = "${local.logs_daily_ref}.website_requests_daily"
+        history                = "${local.web_history_ref}.website_page_history"
+      })
+    }
     deploys = {
       source      = "logs"
       description = "Each Cloud Run revision deployed while the logs source ran, timed at its first request."
@@ -56,6 +78,11 @@ locals {
         normalise_route = "${var.project_id}.${google_bigquery_dataset.reporting.dataset_id}.${google_bigquery_routine.reporting_normalise_route.routine_id}"
       })
     }
+    account_returns_daily = {
+      source      = "website"
+      description = "Signed-in website accounts per UTC day: HLL++ sketches of the accounts active that day and of those whose first signed-in event in the export falls on an earlier day. Merged over a window they count the accounts active in it and the accounts active on a day after their first signed-in event in the export. No id."
+      query       = templatefile("${path.module}/sql/reporting/account_returns_daily.sql", { events = "${var.project_id}.website_export.event" })
+    }
     accounts_daily = {
       source      = "accounts"
       description = "Website accounts created per UTC day and organisation: the email domain when it holds at least 3 accounts, Personal email for a webmail domain, and Other organisations otherwise. No address and no user id."
@@ -63,17 +90,17 @@ locals {
     }
     ai_turns = {
       source      = "langfuse"
-      description = "One row per AI assistant turn: start, latency, time to first token, generation and tool counts, tokens, cost, errors, and an HLL++ sketch of its session. No text and no id."
+      description = "One row per AI assistant turn: start, latency, time to first token, generation and tool counts, tokens including cached input, cost, errors, and an HLL++ sketch of its session. No text and no id."
       query       = templatefile("${path.module}/sql/reporting/ai_turns.sql", { observations = local.langfuse_ref })
     }
     ai_observations_daily = {
       source      = "langfuse"
-      description = "Langfuse observations per UTC day, type, name and model, with errors, latency quantiles, tokens, cost, and a KLL sketch of latency that merges across rows."
+      description = "Langfuse observations per UTC day, type, name, model, trace name and level, with errors, latency quantiles, tokens including cached input, cost, and a KLL sketch of latency that merges across rows."
       query       = templatefile("${path.module}/sql/reporting/ai_observations_daily.sql", { observations = local.langfuse_ref })
     }
     ga4_daily = {
       source      = "ga4"
-      description = "GA4 active users, sessions and page views per day in the property's time zone, from the Data API history before the export's first day and the export from then on."
+      description = "GA4 active users, sessions, page views and declined page views per day in the property's time zone, from the Data API history before the export's first day and the export from then on, with an HLL++ sketch of the active users on export days. Users and sessions count visitors who accepted analytics storage. Export days' page views include declined ones, and history days hold accepted ones with declined_page_views and users_sketch NULL."
       query = templatefile("${path.module}/sql/reporting/ga4_daily.sql", {
         events  = local.ga4_events_ref
         history = "${local.web_history_ref}.ga4_daily"
@@ -81,11 +108,16 @@ locals {
     }
     ga4_pages_daily = {
       source      = "ga4"
-      description = "GA4 page views and sessions per day in the property's time zone and page path. Sessions do not sum across pages."
+      description = "GA4 page views, sessions and declined page views per day in the property's time zone and page path, split by consent as in ga4_daily. Sessions do not sum across pages."
       query = templatefile("${path.module}/sql/reporting/ga4_pages_daily.sql", {
         events  = local.ga4_events_ref
         history = "${local.web_history_ref}.ga4_pages_daily"
       })
+    }
+    ga4_user_ranges = {
+      source      = "ga4"
+      description = "GA4 Data API active, total and new users over each range the ga4-user-ranges workflow lists: since 2026-10-05, the last 7 and 28 days, and each ISO week and calendar month, all ending no later than yesterday in the property's time zone. Users count once per range, and only visitors who accepted analytics storage."
+      query       = templatefile("${path.module}/sql/reporting/ga4_user_ranges.sql", { ranges = "${local.web_history_ref}.${google_bigquery_table.ga4_user_ranges.table_id}" })
     }
     search_console_daily = {
       source      = "search_console"
@@ -102,6 +134,11 @@ locals {
         url_impressions = "${var.project_id}.${google_bigquery_dataset.searchconsole.dataset_id}.searchdata_url_impression"
         history         = "${local.web_history_ref}.search_console_pages_daily"
       })
+    }
+    cloudflare_daily = {
+      source      = "cloudflare"
+      description = "Cloudflare page loads per UTC day: eyeball GET requests answered 200 with HTML on the website's hosts, from no verified bot and from verified bots, for the days scripts/load-cloudflare-history.sh loaded."
+      query       = templatefile("${path.module}/sql/reporting/cloudflare_daily.sql", { history = "${local.web_history_ref}.cloudflare_daily" })
     }
     model_spend_daily = {
       source      = "billing"
