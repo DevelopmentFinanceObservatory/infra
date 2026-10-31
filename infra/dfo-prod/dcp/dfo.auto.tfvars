@@ -40,7 +40,8 @@ spanner_processing_units = 1000
 # =============================================================================
 # Datacommons Services Module
 # =============================================================================
-datacommons_services_allow_unauthenticated_access = true
+# infra/dfo-dev/dcp/dfo.auto.tfvars explains this value.
+datacommons_services_allow_unauthenticated_access = false
 datacommons_services_min_instances                = 1
 datacommons_services_max_instances                = 2
 datacommons_services_cpu                          = "4"

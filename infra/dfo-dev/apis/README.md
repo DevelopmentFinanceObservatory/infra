@@ -14,7 +14,7 @@ The service reads `GEMINI_API_KEY` from the process environment. It warm-loads i
 
 `SEARCH_GRAPH_BASE` and `SEARCH_ENGINE_MODEL` are declared as stack variables (see `variables.tf`) rather than inlined, so they're visible and overridable in one place.
 
-`SEARCH_GRAPH_BASE` points at the `dfo-dev` Data Commons service, the same graph the Datasets variables below target. It serves unauthenticated reads behind no WAF, so `SEARCH_GRAPH_TOKEN` stays unset. It carries the `sdg` namespace but none of ONE's own imports, so the query families that depend on those resolve to `no_data`.
+`SEARCH_GRAPH_BASE` points at the `dfo-dev` Data Commons service, the same graph the Datasets variables below target. It sits behind no WAF, so `SEARCH_GRAPH_TOKEN` stays unset, and the service reaches it with the ID token "Caller authentication" describes. It carries the `sdg` namespace but none of ONE's own imports, so the query families that depend on those resolve to `no_data`.
 
 Moving this to `datacommons.one.org` takes more than a new value. That graph blocks callers whose requests carry no browser user agent, and the engine's SDMX client sends none, so the development-finance family gets a 502 `upstream_error` there.
 
@@ -52,7 +52,7 @@ A migration runner for the Datasets schema reads the runtime username from this 
 
 `DATASETS_ARTIFACT_BUCKET_WORKING` and `DATASETS_ARTIFACT_BUCKET_PINNED` read the same `env.auto.tfvars` values the bucket grants above target, so the bucket the app writes to and the bucket the runtime identity can write to stay the same one.
 
-`DATASETS_GRAPH_TOKEN` is unset. The dev graph serves both the node API and SDMX anonymously, so there is no credential to carry. `DATASETS_SYNC_CEILING_ROWS` is unset too, leaving the app's own default of 50000, which it republishes on `GET /api/datasets/capabilities` with a flag marking it provisional.
+`DATASETS_GRAPH_TOKEN` is unset. The graph sits behind no WAF, so there is no WAF-skip secret to carry. `DATASETS_SYNC_CEILING_ROWS` is unset too, leaving the app's own default of 50000, which it republishes on `GET /api/datasets/capabilities` with a flag marking it provisional.
 
 `DATASET_STORE_INSTANCE_CONNECTION_NAME` and `DATASET_STORE_RUNTIME_DB_USER` give the app its runtime database path. The connection name routes the session through the Cloud SQL Python Connector rather than plain TCP, and the connector mints an IAM access token for the runtime service account, so `DATASET_STORE_RUNTIME_DB_PASSWORD` stays unset and there is no password to store or rotate. The username reads `google_sql_user.datasets_runtime` directly, the same resource that creates the Postgres role, so the name the app logs in as and the role that exists on the instance are one value. `DATASET_STORE_DATABASE` stays unset, leaving the app's own default of `datasets`, the database the `dcp` stack creates.
 
@@ -74,7 +74,7 @@ The Graph surface reads DCP directly and holds no persistence seam of its own, s
 
 `GRAPH_DCP_BASE_URL` (see "Graph and engine configuration" above for the URL shape) is the one variable its own lifespan requires once `DFO_GRAPH_SURFACE` is on, and there is no safe default for it. A revision carrying the flag on with this variable unset fails to serve any request at all, on any surface, not just `/api/graph/*`, because the lifespan runs before the first request lands. This stack always sets both together, so that failure mode does not arise here, but the two variables have to keep changing as a pair.
 
-`GRAPH_DCP_TOKEN` is unset. It is the same WAF-skip secret Search's `SEARCH_GRAPH_TOKEN` and Datasets' `DATASETS_GRAPH_TOKEN` send to their own graph endpoints, and neither of those is set on this service: the dev graph serves reads anonymously behind no WAF, so there is no credential to carry.
+`GRAPH_DCP_TOKEN` is unset. It is the same WAF-skip secret Search's `SEARCH_GRAPH_TOKEN` and Datasets' `DATASETS_GRAPH_TOKEN` send to their own graph endpoints, and neither of those is set on this service: the graph sits behind no WAF, so there is no secret to carry.
 
 The surface mounts. `DFO_GRAPH_SURFACE` reads `"true"` (see `variables.tf`), so the app mounts `GET /api/graph/healthz`, `POST /api/graph/resolve`, and `GET /api/graph/node/{dcid}` alongside Search and Datasets.
 
@@ -94,37 +94,36 @@ The Skills surface reads the same graph the Search surface reads, through Search
 
 Cloud Run IAM is the service's only identity boundary. Each `roles/run.invoker` grant on the service sits in the stack that owns the identity it names:
 
-- `allow_unauthenticated`, set in this stack's `env.auto.tfvars`, grants it to `allUsers`. It is `true` in dfo-dev and dfo-prod, so the service accepts anonymous requests, including dataset creation and registration.
-- `invoker_members`, set in the same file, grants it to each listed identity. It holds principals no stack owns, such as a group of developers, and is empty in both environments.
+- `allow_unauthenticated`, set in this stack's `env.auto.tfvars`, grants it to `allUsers`. It is `false` in dfo-dev and dfo-prod, so the service refuses anonymous callers.
+- `invoker_members`, set in the same file, grants it to each listed identity. It holds principals no stack owns and is empty in both environments.
 - The `website` and `ai` stacks grant it to their own runtime service accounts, as `google_cloud_run_v2_service_iam_member.website_apis_invoker` in `infra/stacks/website/main.tf` and `google_cloud_run_v2_service_iam_member.ai_apis_invoker` in `infra/stacks/ai/main.tf`. Each names this service through its `apis_service_name` variable, copied from this stack's `service_name` output. `apply.yml` applies this stack first, so the service exists before either grant, and this stack names no account another stack creates.
-- In dfo-dev, `eval_reader.tf` grants it to `dfo-dev-apis-eval-reader` by resource reference.
+- In dfo-dev, `eval_reader.tf` grants it to `dfo-dev-apis-eval-reader` and `sdk_e2e.tf` to `dfo-dev-sdk-e2e`, each by resource reference. The first serves the apis repository's eval jobs. The second serves the sdk repository's end-to-end workflow, and only a run on that repository's `refs/heads/main` can mint it, matched on `attribute.repo_ref`. The sdk repository has an entry in the `foundation` stack's `github_repositories` so the shared pool admits its tokens, and `dfo_sdk_repository_id` here copies that entry's id.
 
-A caller authenticates with a Google ID token minted as one of those identities, with the service URL it calls as the audience (origin only, no path), sent as `X-Serverless-Authorization: Bearer <token>`. Cloud Run checks that header in preference to `Authorization` and strips the signature before the container sees it, so it never collides with the `Authorization` header the website proxy passes through or the ai bearer. While `allow_unauthenticated` is `true`, a request with a token in either header, valid or not, still gets a 200.
+A caller authenticates with a Google ID token minted as one of those identities, with the service URL it calls as the audience (origin only, no path), sent as `X-Serverless-Authorization: Bearer <token>`. Cloud Run checks that header in preference to `Authorization` and strips the signature before the container sees it, so it never collides with the `Authorization` header the website proxy passes through or the ai bearer. Cloud Run refuses a request without a valid token from a granted identity.
 
 Publish, pin and the refresh routes also compare an `x-dfo-principal` value (the three principal sections below), so a direct caller needs that value as well. Public users keep anonymous dataset creation through the website's `/api/v1/datasets` proxy, which the edge rate-limits in prod. `DFO_CORS_ORIGINS` applies platform-wide, so an origin allowlisted for Search also reaches the write doors.
 
-The Data Commons service is a second service callers reach. `dcp_access.tf` grants `roles/run.invoker` on it to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs. In dfo-dev, `eval_reader.tf` grants it to `dfo-dev-apis-eval-reader`. The grants are in place before the DC service stops serving `allUsers`.
+The Data Commons service is a second service callers reach. `dcp_access.tf` grants `roles/run.invoker` on it to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs. In dfo-dev, `eval_reader.tf` grants it to `dfo-dev-apis-eval-reader`. Neither environment's DC service grants `allUsers`, so a caller without one of these grants gets 403.
 
-The flip to `allow_unauthenticated = false` runs in stages:
+The website and ai services mint tokens from the metadata server as their runtime accounts. In dfo-dev the apis repository's eval jobs mint them as `dfo-dev-apis-eval-reader` from the workflow's WIF credentials, and the sdk repository's end-to-end workflow mints them as `dfo-dev-sdk-e2e`. The Data Commons prototype calls the website's proxy and holds no grant on this service.
 
-1. The callers send tokens: the website and ai services mint them from the metadata server as their runtime accounts, and the apis repository's eval jobs mint them as `dfo-dev-apis-eval-reader` from the workflow's WIF credentials. The Data Commons prototype calls the website's proxy, not this service, and holds no grant.
-2. The apis service logs, per request, whether a Cloud Run token arrived and its unverified `email` and `aud`, with the user agent. Before each flip, 48 hours of that environment's logs must show no request from the website, ai or CI user agents that carries no token or an `email` that holds no invoker grant.
-3. dfo-dev sets `allow_unauthenticated = false`, and developers reach the service through a group added to `invoker_members`. IAM rejects a member that does not exist, so the group is created first.
-4. dfo-prod sets `allow_unauthenticated = false` once the callers run in prod and the prod logs pass the same check.
+To add a caller, grant `roles/run.invoker` on this service in the caller's own stack, or add a principal no stack owns to `invoker_members`. Cloud Run refuses a caller with no token or no grant before the app logs the request, so find those callers in the 401 and 403 lines of the `run.googleapis.com/requests` log. The apis service logs each admitted request as `dfo_platform.request` with `caller_token_present`, the unverified `email` and `aud` of the token, and the user agent, which shows the identity an admitted caller used.
 
-With the flag off, a developer in the invokers group reaches the service through a local proxy that attaches their own token, and points local base URLs at `http://localhost:8083`:
+A developer reaches dfo-dev through a local proxy that attaches their own token, with a project role that carries `run.routes.invoke`, such as `roles/editor`, and points local base URLs at `http://localhost:8083`:
 
 ```bash
 gcloud run services proxy dfo-dev-apis --region northamerica-northeast1 --project dev-fin-observatory --port 8083
 ```
 
-If a flip cuts off a caller, restore public access by hand:
+A script run from a laptop against either service, such as `scripts/backfill-card-refs.ts` in the website repository or `python -m harness.recipe_backfill` in the ai repository, reaches it only through `gcloud run services proxy`, with its base URL set to `http://localhost:8083`, because plain clients send no token.
+
+If `allow_unauthenticated = false` cuts off a caller, restore public access by hand:
 
 ```bash
 gcloud run services add-iam-policy-binding dfo-dev-apis --region northamerica-northeast1 --project dev-fin-observatory --member=allUsers --role=roles/run.invoker
 ```
 
-Prod uses `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-observatory`. The stack's IAM grants are additive `google_cloud_run_v2_service_iam_member` resources, so the next apply neither removes the manual binding nor reports it. Reconcile by setting `allow_unauthenticated = true` in that environment's `env.auto.tfvars`, or by running `remove-iam-policy-binding` with the same arguments once the caller is fixed.
+The stack's IAM grants are additive `google_cloud_run_v2_service_iam_member` resources, so the next apply neither removes the manual binding nor reports it, and Terraform cannot see an `allUsers` binding made by hand. Remove it with `remove-iam-policy-binding` and the same arguments once the caller is fixed. The removal takes about two minutes to take effect. Setting `allow_unauthenticated = true` in `env.auto.tfvars` instead makes Terraform own the binding. "Caller authentication" in `infra/dfo-prod/apis/README.md` gives the prod command.
 
 ## APIs
 
@@ -134,7 +133,7 @@ Prod uses `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-obser
 
 `datasets_first_party_principal.tf` generates the shared bearer value the Datasets publish door compares the `x-dfo-principal` header against (`datasets_api.doors.publish`), stores it as `dfo-dev-datasets-first-party-principal`, and mounts it on this service as `DATASETS_FIRST_PARTY_PRINCIPAL`. Unset, the door reads an empty allowlist and refuses every caller regardless of header, so this mount is what lets presentation-mcp's publish call succeed instead of drawing a `403 publish_not_permitted`. The pin door reads a separate value — see "Datasets pin principal" below.
 
-This value is a second check behind Cloud Run IAM. While `allow_unauthenticated` is true, an internet caller who learns it can send it on the same header and reach publish; with it false, only a caller holding an invoker grant can. See "Caller authentication" above.
+This value is a second check behind Cloud Run IAM. Only a caller holding an invoker grant can send it to publish. See "Caller authentication" above.
 
 Humans who need to read the value directly are granted read on this one secret through `var.datasets_first_party_principal_readers`; empty by default, since the `apis` and `ai` services carry it between themselves through their own `secret_env_vars` grants and no human needs it yet. Rotation is bumping `datasets_first_party_principal_version` in `datasets_first_party_principal.tf`: the replacement version is created before the old one is destroyed, and this stack's own mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new value here. The `ai` stack's mount reads `latest` instead (see that stack's README), so rotating here deletes the old version once the new one exists, but does not by itself reach that stack's running instances — they keep whatever value they read at startup until that stack's own next apply and rollout rolls a new revision.
 
@@ -144,7 +143,7 @@ Humans who need to read the value directly are granted read on this one secret t
 
 Its only consumer is `dfo-dev-website-staging` (the `website` stack), which sends this value server-side on its own pin call when a visitor creates a share; see that stack's README for how `DFO_PRINCIPAL` reaches it and the exposure that follows from the website's own `allow_unauthenticated` setting.
 
-This value carries the same caveat as the publish principal above: while `allow_unauthenticated` is true, an internet caller who learns it reaches pin.
+This value is a second check behind Cloud Run IAM, as the publish principal above is. Only a caller holding an invoker grant can send it to pin.
 
 Humans who need to read the value directly are granted read on this one secret through `var.datasets_pin_principal_readers`; empty by default. Rotation is bumping `datasets_pin_principal_version` in `datasets_pin_principal.tf`: the replacement version is created before the old one is destroyed, and this stack's own mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new value here. The `website` stack's mount reads `latest` instead, since it does not own the version resource; see that stack's README for what rolling a new website revision after a rotation requires.
 
@@ -154,9 +153,33 @@ Humans who need to read the value directly are granted read on this one secret t
 
 Its consumers are `dfo-dev-ai` (the `ai` stack, where it gates `POST /api/studio/refresh`) and `dfo-dev-website-staging` (the `website` stack, which sends it server-side on the refresh and render calls); see those stacks' READMEs. Apply this stack first. The other two read the secret by id, and a revision that mounts a missing secret fails to start.
 
-This value carries the same caveat as the principals above: while `allow_unauthenticated` is true, an internet caller who learns it reaches the refresh routes.
+This value is a second check behind Cloud Run IAM, as the principals above are. Only a caller holding an invoker grant can send it to the refresh routes.
 
 Humans who need to read the value directly are granted read on this one secret through `var.live_refresh_principal_readers`; empty by default. Rotation is a bump of `live_refresh_principal_version` in `live_refresh_principal.tf`. The replacement version is created before the old one is destroyed, and this stack's own mount pins the version number, so the same apply rolls a revision onto the new value here. The `ai` and `website` stacks' mounts read `latest`, since they do not own the version resource. Their READMEs say what rolling a new revision after a rotation requires.
+
+## Caller principal
+
+`caller_principal.tf` generates the shared value that lets this service trust the `x-dfo-caller` header. The website and `dfo-dev-ai` send it as `x-dfo-caller-principal` beside that header, and `dfo_platform.caller.resolve_caller` names the caller by `x-dfo-caller` only when the two match, so the pin door and the per-caller allowances count each website visitor or `/mcp` client on its own. It stores the value as `dfo-dev-caller-principal` and mounts it on this service as `DFO_CALLER_PRINCIPAL`. A route that names its caller to spend an allowance refuses 503 `CallerUnresolved` when a request carries an `x-dfo-caller-principal` that does not match `DFO_CALLER_PRINCIPAL`, or carries one while that setting is unset. It is distinct from the three principals above, because it grants no route by itself, only trust in a caller name, and the allowlists rotate independently.
+
+Its consumers are `dfo-dev-ai` and `dfo-dev-website-staging`, which mount it as `DFO_CALLER_PRINCIPAL`; see those stacks' READMEs. Apply this stack first, for the reason the live-refresh principal gives. A caller holding an invoker grant who learns the value can name itself as any visitor and spend that visitor's allowances.
+
+Readers, rotation and the `latest` mounts in `ai` and `website` work as for the live-refresh principal, through `var.caller_principal_readers` and a bump of `caller_principal_version` in `caller_principal.tf`. After a rotation, `dfo-dev-ai` and `dfo-dev-website-staging` instances that started before it keep the old value, and their allowance-spending writes, such as share creates, answer 503 until a new revision replaces them; their READMEs give the commands that roll one.
+
+## Caller HMAC key
+
+`caller_hmac_key.tf` generates the key that names a client by a keyed digest of its address, stores it as `dfo-dev-caller-hmac-key`, and mounts it on this service as `DFO_CALLER_HMAC_KEY`, pinned to its version. The website mounts the same secret as `CALLER_HMAC_KEY` and sends the digest as `x-dfo-caller`, so this service and the website name a client by one digest. The digest is the `ip:` caller in the combined MCP server's request log lines, the frame `writer` data-mcp and analysis-mcp record, and the key of each per-caller allowance here. This stack owns the key because it applies before `website`.
+
+The key moved here from the `website` stack, whose `dfo-dev-website-staging-caller-hmac-key` that move destroyed. The new key is a fresh value, so every visitor's `ip:` caller id changed once on that apply, and allowance rows keyed by the old digest stopped matching anyone.
+
+Rotation changes every visitor's caller id the same way. Bump `caller_hmac_key_version` in `caller_hmac_key.tf`. This stack's pinned mount rolls `dfo-dev-apis` onto the new key in the same apply. The website's mount reads `latest`, so it keeps the old key until a new revision: run a `dfo-website` deploy of the `staging` branch, or `gcloud run services update dfo-dev-website-staging --region northamerica-northeast1 --update-labels=caller-hmac-key-rotated=<n>`. Until then the two services name the same visitor by different digests. Humans who need the value read it through `var.caller_hmac_key_readers`, empty by default.
+
+## Share import principal
+
+`share_import_principal.tf` generates the shared bearer value that gates `PUT /api/presentation/shares/{share_id}/import`, which compares the `x-dfo-principal` header against it. It stores the value as `dfo-dev-share-import-principal` and mounts it on this service as `PRESENTATION_SHARE_IMPORT_PRINCIPAL`, pinned to its version. Unset or empty, the route refuses every caller. It is distinct from every other principal here, because the route creates shares under ids and creation times the caller chooses and spends no allowance.
+
+Its only consumer is the `website` stack's share migration Job, `dfo-dev-website-staging-share-migrate`, which reads it as `PRESENTATION_SHARE_IMPORT_PRINCIPAL` through `var.share_import_principal_secret_id`; see that stack's README. Apply this stack first, since the website stack grants the Job read on the secret. A caller holding an invoker grant who learns the value can create shares. No human reader grant exists. Rotation is a bump of `share_import_principal_version` in `share_import_principal.tf`.
+
+The route, this secret and the website Job are removed once prod's shares are migrated.
 
 ## Origin catalogue
 
@@ -192,7 +215,7 @@ The build key is the origin catalogue build, the graph release id (while `graph_
 
 The graph release builder starts the job after each publish, and the dfo-apis deploy workflow runs it after each deploy. `search_catalogue_tick`, true by default, adds a Cloud Scheduler trigger (`dfo-dev-search-catalogue-tick`) every 15 minutes, its trigger account and the heartbeat alert. Dev and prod set it false: a start that meets a running build waits for its lease, so no trigger is lost, and without the tick a quiet hour would open the heartbeat alert. Terraform refuses false unless `graph_release_enabled` is true. A build makes about 30 Gemini and graph calls, takes about 90 seconds and peaks near 1.2 GB resident.
 
-The job runs as `dfo-dev-search-catalogue-job`, which holds `roles/storage.objectUser` on its own bucket, `roles/storage.objectViewer` on the origin catalogue bucket, and `roles/secretmanager.secretAccessor` on the secret `var.search_catalogue_gemini_api_key_secret_id` names, `dfo-dev-gemini-api-key` in dev and the job's own `dfo-prod-search-catalogue-gemini-api-key` in prod. It reads the graph at `SEARCH_GRAPH_BASE` and the UN System Data Commons at `UN_GRAPH_BASE_URL` anonymously over the default route, with the engine settings the apis service gets from `main.tf`. The resolvekit cache and `DFO_BUILD_COMMIT` come from the image. While the tick exists, its Scheduler runs as `dfo-dev-search-cat-scheduler`, which holds `roles/run.invoker` on this one Job. The apis runtime account holds `roles/storage.objectViewer` on the bucket, and `main.tf` sets `SEARCH_CATALOGUE_URI` on the service.
+The job runs as `dfo-dev-search-catalogue-job`, which holds `roles/storage.objectUser` on its own bucket, `roles/storage.objectViewer` on the origin catalogue bucket, and `roles/secretmanager.secretAccessor` on the secret `var.search_catalogue_gemini_api_key_secret_id` names, `dfo-dev-gemini-api-key` in dev and the job's own `dfo-prod-search-catalogue-gemini-api-key` in prod. It reads the graph at `SEARCH_GRAPH_BASE` with an ID token and the UN System Data Commons at `UN_GRAPH_BASE_URL` anonymously, both over the default route, with the engine settings the apis service gets from `main.tf`. The resolvekit cache and `DFO_BUILD_COMMIT` come from the image. While the tick exists, its Scheduler runs as `dfo-dev-search-cat-scheduler`, which holds `roles/run.invoker` on this one Job. The apis runtime account holds `roles/storage.objectViewer` on the bucket, and `main.tf` sets `SEARCH_CATALOGUE_URI` on the service.
 
 The task timeout is 1800 seconds and equals `_MAX_RUN_SECONDS` in `search.catalogue.job`, which the job also uses as the grace before pruning old builds. The lease lapses `LEASE_TTL_SECONDS` (600) after it is taken, and a run that meets a held lease waits up to one lease for it, so the timeout leaves a waiting run time to load, build and publish. The Job has no retries: a failed build waits for the next publish, deploy or tick. It has 1 CPU and 4 GiB, the apis service's limits, because it loads the same coverage index and origin catalogue.
 
@@ -205,6 +228,12 @@ Every alert policy in this stack notifies the channel whose display name `alert_
 ## Search failure alert
 
 `search_alert.tf` declares two log metrics on `dfo-dev-apis` and one alert policy, `Search failing on the apis service`, that fires on either. The first metric counts the `Engine infrastructure error:` lines the `search.engine.app` logger writes at `ERROR` for every engine infrastructure failure, such as Gemini rejecting the key or the graph answering 500. The second counts 5xx answers on `/api/search/resolve` in Cloud Run's request log, which also covers crashes and front-end timeouts the engine never logs. A revision with a key Gemini rejects starts, takes traffic and answers 503 to every search, so these metrics are the only alert for it. Each condition sums its metric across revisions over a rolling 5 minutes and opens at three or more. Over the 14 days to 2026-10-24 prod logged one or two failures in a 5-minute window 17 times outside outages, and three or more only during outages, so the policy stays quiet for a lone failure and opens within 5 minutes of the first three failed searches. The documentation on the policy tells the responder to read the service's errors and compare the Gemini key version the failing revision started on with the previous one. The policy auto-closes after an hour.
+
+## Client-call metric
+
+`client_calls.tf` declares a log-based metric, `dfo-dev-client-calls`, over the service's `dfo_platform.request` lines. It counts HTTP requests that name a client in the `X-DFO-Client` header, labelled by `client` and `status`, whether they come through the website or straight to this service. The `client` label is `dfo-python`, `dfo-ts`, or empty for any other name.
+
+The count is of requests, so one library call that polls, re-posts, retries or downloads files counts many times. A browser's dataset download carries no `X-DFO-Client` and is missed, and so is anything refused before the app logs it: the website's and Cloudflare's rate limits, a crash, a front-end timeout. Use the `run.googleapis.com/requests` log for failure rates. Dev's series includes the sdk repository's daily end-to-end workflow.
 
 ## The async worker
 
@@ -222,7 +251,7 @@ The deploy pipeline updates this service's image with the same image-only `gclou
 
 ## Datasets maintenance
 
-`datasets_maintenance_job.tf` declares the Cloud Run Job `dfo-dev-datasets-maintenance`. It runs the apis image with the entrypoint `datasets-maintenance` and no default args, so an execution names its task in the args. The Job runs as the apis runtime service account, which holds object create and view on the working and pinned buckets and the runtime Postgres role. Its environment carries `DATASETS_ARTIFACT_BUCKET_WORKING`, `DATASETS_ARTIFACT_BUCKET_PINNED`, `DATASET_STORE_INSTANCE_CONNECTION_NAME`, `DATASET_STORE_RUNTIME_DB_USER` and `DATASETS_OPERATION_DEADLINE_SECONDS` (the deadline `age-operations` judges an abandoned operation by), the same values the apis service reads. When `graph_release_serving` is true it also carries `GRAPH_RELEASE_URI`, the apis service's value, because `backfill-descriptions`, which every deploy runs, opens the graph release. The apis runtime service account reads that bucket through `graph_release_apis_runtime_viewer`.
+`datasets_maintenance_job.tf` declares the Cloud Run Job `dfo-dev-datasets-maintenance`. It runs the apis image with the entrypoint `datasets-maintenance` and no default args, so an execution names its task in the args. The Job runs as the apis runtime service account, which holds object create and view on the working and pinned buckets and the runtime Postgres role. Its environment carries `DATASETS_ARTIFACT_BUCKET_WORKING`, `DATASETS_ARTIFACT_BUCKET_PINNED`, `DATASET_STORE_INSTANCE_CONNECTION_NAME`, `DATASET_STORE_RUNTIME_DB_USER`, `PRESENTATION_STORE_INSTANCE_CONNECTION_NAME`, `PRESENTATION_STORE_RUNTIME_DB_USER` and `DATASETS_OPERATION_DEADLINE_SECONDS` (the deadline `age-operations` judges an abandoned operation by), the same values the apis service reads. The Presentation pair lets `normalise-recipes` and `take-down-share` reach the Presentation store as the same runtime Postgres role the service uses, so they need no further grant. When `graph_release_serving` is true it also carries `GRAPH_RELEASE_URI`, the apis service's value, because `backfill-descriptions`, which every deploy runs, opens the graph release. The apis runtime service account reads that bucket through `graph_release_apis_runtime_viewer`.
 
 Two tasks run daily from Cloud Scheduler as `dfo-dev-datasets-sweep` (03:00 UTC) and `dfo-dev-datasets-age-operations` (03:30 UTC). `sweep` reads both artifact tiers and logs orphaned, missing and unreferenced counts. `age-operations` fails every abandoned row of `datasets.operation` as retryable (a `pending` or lease-ended `running` operation past `DATASETS_OPERATION_DEADLINE_SECONDS`, which the Job reads from the same local as the service and the worker, or a lease-ended one whose final delivery claimed it), then deletes `done` and `failed` rows older than 30 days. The runtime role can update and delete there: dataset_store migration `0001_bootstrap.sql` grants it SELECT, INSERT, UPDATE and DELETE on every later table in the `datasets` schema through `ALTER DEFAULT PRIVILEGES`. Each trigger posts to the Cloud Run Admin API with a container args override, as a dedicated service account (`dfo-dev-dsmaint-scheduler`) that holds `roles/run.jobsExecutorWithOverrides` on this one Job. `roles/run.invoker` is not enough, because an args override needs `run.jobs.runWithOverrides`.
 

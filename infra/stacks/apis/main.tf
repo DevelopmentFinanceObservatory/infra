@@ -1,6 +1,7 @@
 terraform {
   # 1.11 for the write-only arguments in datasets_first_party_principal.tf,
-  # datasets_pin_principal.tf, and live_refresh_principal.tf.
+  # datasets_pin_principal.tf, live_refresh_principal.tf, caller_principal.tf,
+  # caller_hmac_key.tf, and share_import_principal.tf.
   required_version = ">= 1.11"
 
   required_providers {
@@ -12,8 +13,9 @@ terraform {
     }
     random = {
       # 3.7.0 for the ephemeral random_password in
-      # datasets_first_party_principal.tf, datasets_pin_principal.tf, and
-      # live_refresh_principal.tf.
+      # datasets_first_party_principal.tf, datasets_pin_principal.tf,
+      # live_refresh_principal.tf, caller_principal.tf, caller_hmac_key.tf,
+      # and share_import_principal.tf.
       source  = "hashicorp/random"
       version = ">= 3.7.0"
     }
@@ -122,6 +124,37 @@ module "apis_service" {
       # The pin moves with the version resource, rolling the service in the
       # same apply.
       version = google_secret_manager_secret_version.live_refresh_principal.version
+    }
+
+    # Lets dfo-apis trust the x-dfo-caller header the website and dfo-ai send
+    # beside it. See caller_principal.tf.
+    DFO_CALLER_PRINCIPAL = {
+      secret_id = google_secret_manager_secret.caller_principal.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.caller_principal.version
+    }
+
+    # The key the website also mounts as CALLER_HMAC_KEY, so dfo-apis keys a
+    # caller it sees directly by the same digest the website sends in
+    # x-dfo-caller. See caller_hmac_key.tf.
+    DFO_CALLER_HMAC_KEY = {
+      secret_id = google_secret_manager_secret.caller_hmac_key.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.caller_hmac_key.version
+    }
+
+    # Authenticates the share import route the website's share migration Job
+    # calls. See share_import_principal.tf.
+    PRESENTATION_SHARE_IMPORT_PRINCIPAL = {
+      secret_id = google_secret_manager_secret.share_import_principal.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.share_import_principal.version
     }
     }, {
     # Mounted only when search_binder sends calls to Jev, so a gemini
@@ -302,8 +335,9 @@ module "apis_service" {
 }
 
 # One invoker grant per identity in var.invoker_members. Every other grant sits
-# beside the account it names: eval_reader.tf's in the dev apis stack, and the
-# website and ai runtime accounts' in those stacks, which apply after this one.
+# beside the account it names: eval_reader.tf's and sdk_e2e.tf's in the dev apis
+# stack, and the website and ai runtime accounts' in those stacks, which apply
+# after this one.
 resource "google_cloud_run_v2_service_iam_member" "apis_invoker" {
   for_each = toset(var.invoker_members)
   project  = var.project_id
