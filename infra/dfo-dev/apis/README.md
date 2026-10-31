@@ -232,7 +232,9 @@ Every alert policy in this stack notifies the channel whose display name `alert_
 
 ## Client-call metric
 
-`client_calls.tf` declares a log-based metric, `dfo-dev-client-calls`, over the service's `dfo_platform.request` lines. It counts requests from `dfo-python` and `dfo-ts`, labelled by `client` and `status`, whether they come through the website or straight to this service. The client name comes from the `X-DFO-Client` header, which the libraries set and the website forwards. Operation polls are left out and retries count. Dev's series includes the sdk repository's daily end-to-end workflow.
+`client_calls.tf` declares a log-based metric, `dfo-dev-client-calls`, over the service's `dfo_platform.request` lines. It counts HTTP requests that name a client in the `X-DFO-Client` header, labelled by `client` and `status`, whether they come through the website or straight to this service. The `client` label is `dfo-python`, `dfo-ts`, or empty for any other name.
+
+The count is of requests, so one library call that polls, re-posts, retries or downloads files counts many times. A browser's dataset download carries no `X-DFO-Client` and is missed, and so is anything refused before the app logs it: the website's and Cloudflare's rate limits, a crash, a front-end timeout. Use the `run.googleapis.com/requests` log for failure rates. Dev's series includes the sdk repository's daily end-to-end workflow.
 
 ## The async worker
 
