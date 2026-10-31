@@ -13,6 +13,19 @@ variable "namespace" {
   type        = string
 }
 
+# Prod gives each Gemini caller its own key from its own AI Studio project, so
+# the billing export attributes spend by project. Dev shares one key.
+variable "alert_notification_channel" {
+  description = "Display name of an existing Cloud Monitoring notification channel in this project that every alert policy in the stack notifies. Plan fails unless exactly one channel has that name. Null leaves the policies with no channel."
+  type        = string
+  default     = null
+}
+
+variable "gemini_api_key_secret_id" {
+  description = "Secret Manager id of the Gemini API key the apis service mounts as GEMINI_API_KEY, such as dfo-prod-apis-gemini-api-key. The secret is created outside Terraform and must hold a version before apply."
+  type        = string
+}
+
 variable "cloudsql_login_role_id" {
   description = "Id of this stack's project-scoped custom role for Cloud SQL IAM login without the Data API, such as dfoDevApisCloudsqlLoginOnly. See datasets_access.tf."
   type        = string
@@ -33,6 +46,34 @@ variable "search_engine_model" {
   description = "Gemini model the search engine uses to resolve natural-language requests."
   type        = string
   default     = "gemini-3.5-flash-lite"
+}
+
+# "jev" asks TypeSafe's Jev model to bind on search_jev_traffic_pct of queries,
+# with Gemini as its fallback, and "shadow" serves Gemini while sampling calls
+# to Jev. Either mounts the ${namespace}-typesafe-api-key secret, which no
+# stack manages, and the service refuses to start without it.
+variable "search_binder" {
+  description = "Binder the search engine elects each part's shape with: gemini, jev or shadow."
+  type        = string
+  default     = "gemini"
+
+  validation {
+    condition     = contains(["gemini", "jev", "shadow"], var.search_binder)
+    error_message = "search_binder must be gemini, jev or shadow."
+  }
+}
+
+# Picked by a hash of the normalised query, so a repeated query keeps its
+# binder. Read only when search_binder is "jev".
+variable "search_jev_traffic_pct" {
+  description = "Percent of queries, 0 to 100, the jev binder sends to Jev; the rest go to Gemini."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.search_jev_traffic_pct >= 0 && var.search_jev_traffic_pct <= 100 && floor(var.search_jev_traffic_pct) == var.search_jev_traffic_pct
+    error_message = "search_jev_traffic_pct must be a whole number from 0 to 100."
+  }
 }
 
 # Comma-separated browser-origin allowlist for CORS, applied platform-wide
@@ -104,6 +145,34 @@ variable "datacommons_service_name" {
   type        = string
 }
 
+# Produced by dcp's vendored upstream module
+# (git::https://github.com/datacommonsorg/datacommons.git//infra/dcp/modules/stack),
+# not declared in this repo, so it is referenced by id rather than through a
+# Terraform resource or data source this stack owns. The name is
+# "${namespace}_dc_${connection_name}" with "-" replaced by "_"; with
+# namespace "dfo-dev" and the default connection name "spanner_connection"
+# that evaluates to "dfo_dev_dc_spanner_connection".
+variable "dc_spanner_connection_id" {
+  description = "Short id of the BigQuery connection dcp's vendored module creates for Spanner federation (google_bigquery_connection.spanner_connection in that module). The origin catalogue job's EXTERNAL_QUERY reads through it."
+  type        = string
+}
+
+# Names dcp's vendored module derives its Spanner instance/database ids from
+# (infra/stacks/dcp/variables.tf's spanner_instance_id/spanner_database_id,
+# both empty by default there, which the module expands to
+# "<instance_name>-dc-instance"/"-dc-db" with instance_name = namespace,
+# "dfo-dev" in dev). Confirmed against the live instance with `gcloud spanner
+# instances list` and `gcloud spanner databases list`.
+variable "dc_spanner_instance_id" {
+  description = "Spanner instance dcp's vendored module creates for Data Commons."
+  type        = string
+}
+
+variable "dc_spanner_database_id" {
+  description = "Spanner database dcp's vendored module creates for Data Commons."
+  type        = string
+}
+
 variable "datasets_working_bucket_name" {
   description = "Name of the GCS bucket the Datasets API writes to while a dataset build is in progress. Copied from the `dcp` stack's `datasets_working_bucket_name` output."
   type        = string
@@ -164,6 +233,18 @@ variable "datasets_pin_principal_readers" {
 
 variable "live_refresh_principal_readers" {
   description = "IAM members granted secretAccessor on the live-refresh principal secret alone, for humans who need to read the value directly. Empty by default, because the `apis` service mounts it directly and the `ai` and `website` stacks' services carry it through their own secret_env_vars grants, so no human needs read access until one does."
+  type        = list(string)
+  default     = []
+}
+
+variable "caller_principal_readers" {
+  description = "IAM members granted secretAccessor on the caller principal secret alone, for humans who need to read the value directly. Empty by default, because the `apis` service mounts it directly and the `ai` and `website` stacks' services carry it through their own secret_env_vars grants, so no human needs read access until one does."
+  type        = list(string)
+  default     = []
+}
+
+variable "caller_hmac_key_readers" {
+  description = "IAM members granted secretAccessor on the caller HMAC key secret alone, for humans who need to read the value directly. Empty by default, because the `apis` service mounts it directly and the `website` stack's service carries it through its own secret_env_vars grant, so no human needs read access until one does."
   type        = list(string)
   default     = []
 }

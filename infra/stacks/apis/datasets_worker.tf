@@ -96,7 +96,7 @@ locals {
 # env sets or has a reason to read — the worker mounts only
 # POST /internal/datasets/operations/{id}/run, never a public door. This
 # account carries only what that one path needs: Cloud SQL login, the
-# datasets working/pinned and coverage buckets, and signBlob on itself; see
+# datasets working/pinned buckets, and signBlob on itself; see
 # the grants declared below.
 resource "google_service_account" "datasets_worker" {
   project      = var.project_id
@@ -132,17 +132,6 @@ resource "google_storage_bucket_iam_member" "datasets_worker_pinned_creator" {
 
 resource "google_storage_bucket_iam_member" "datasets_worker_pinned_viewer" {
   bucket = var.datasets_pinned_bucket_name
-  role   = "roles/storage.objectViewer"
-  member = google_service_account.datasets_worker.member
-}
-
-# Read-only on the coverage bucket, mirroring coverage.tf's
-# coverage_apis_runtime_viewer grant: worker_app.py builds DefinitionDeps
-# including series_coverage.shared.get_coverage_service(), so the worker
-# reads the published coverage artifact the same way the synchronous door
-# does, and never writes to this bucket.
-resource "google_storage_bucket_iam_member" "datasets_worker_coverage_viewer" {
-  bucket = google_storage_bucket.coverage.name
   role   = "roles/storage.objectViewer"
   member = google_service_account.datasets_worker.member
 }
@@ -197,7 +186,7 @@ resource "google_service_account_iam_member" "datasets_worker_token_creator" {
 }
 
 # actAs so the deployer can attach this identity to the service below, the
-# same grant coverage.tf and datasets_access.tf make for their own dedicated
+# same grant graph_release.tf and datasets_access.tf make for their own dedicated
 # identities.
 resource "google_service_account_iam_member" "datasets_worker_deployer_act_as" {
   service_account_id = google_service_account.datasets_worker.name
@@ -225,7 +214,7 @@ resource "google_project_service" "cloudtasks" {
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Bootstrap only, the same placeholder module.apis_service itself bootstraps
-# from (main.tf), not local.live_apis_image: unlike the coverage and migrate
+# from (main.tf), not local.live_apis_image: unlike the migrate
 # Jobs, creating this Service starts a revision that has to actually serve
 # traffic immediately, and local.live_apis_image can be an image that
 # predates the worker surface entirely -- one that doesn't listen on 8080
@@ -241,12 +230,11 @@ variable "datasets_worker_bootstrap_image" {
 }
 
 # Runs as google_service_account.datasets_worker, a dedicated identity
-# distinct from module.apis_service.runtime_service_account_email — the same
-# rationale coverage.tf's google_service_account.coverage_job comment states:
-# this workload's access shape (Cloud SQL write to the datasets schema,
-# working/pinned/coverage bucket access, signBlob on itself) is not the shape
-# the public, unauthenticated serving identity needs to also carry via
-# inherited grants like the secrets above.
+# distinct from module.apis_service.runtime_service_account_email: this
+# workload's access shape (Cloud SQL write to the datasets schema,
+# working/pinned bucket access, signBlob on itself) is not the shape the
+# public, unauthenticated serving identity needs to also carry via inherited
+# grants like the secrets above.
 resource "google_cloud_run_v2_service" "datasets_worker" {
   name     = local.datasets_worker_service_name
   location = var.region
@@ -384,11 +372,6 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
       }
 
       env {
-        name  = "COVERAGE_ARTIFACT_URI"
-        value = "gs://${google_storage_bucket.coverage.name}/"
-      }
-
-      env {
         name  = "ORIGIN_CATALOGUE_URI"
         value = "gs://${google_storage_bucket.origin_catalogue.name}/"
       }
@@ -489,10 +472,8 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
   }
 
   # Every grant the container's own startup path needs, named explicitly:
-  # unlike google_cloud_run_v2_job.coverage (coverage.tf), which already
-  # depends_on its own prerequisite grants, this resource had no ordering
-  # edge into any of them, so Terraform's DAG could create the revision
-  # before the bucket/Cloud SQL/self-signBlob grants existed. A revision
+  # without an ordering edge into them, Terraform's DAG could create the
+  # revision before the bucket/Cloud SQL/self-signBlob grants existed. A revision
   # started with a real (non-placeholder) image and a missing grant fails
   # its startup probe the same way a missing worker surface does.
   depends_on = [
@@ -500,7 +481,6 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
     google_storage_bucket_iam_member.datasets_worker_working_viewer,
     google_storage_bucket_iam_member.datasets_worker_pinned_creator,
     google_storage_bucket_iam_member.datasets_worker_pinned_viewer,
-    google_storage_bucket_iam_member.datasets_worker_coverage_viewer,
     google_project_iam_member.datasets_worker_cloudsql_client,
     google_project_iam_member.datasets_worker_cloudsql_instance_user,
     google_sql_user.datasets_worker_runtime,
@@ -544,7 +524,7 @@ output "datasets_worker_service_url" {
 # Purely a bearer identity: Cloud Tasks mints an OIDC token as this account
 # when it dispatches a task, and Cloud Run IAM verifies that token against
 # the run.invoker grant above. It never runs as anything itself and holds no
-# other grant, unlike the coverage job's or migration runner's identities.
+# other grant, unlike the migration runner's identity.
 resource "google_service_account" "datasets_worker_invoker" {
   project      = var.project_id
   account_id   = "${var.namespace}-worker-invoker"

@@ -16,7 +16,23 @@ apis_service_name                   = "dfo-dev-apis" # apis output service_name
 website_url                         = "https://dfo-dev-website-staging-zms5lj4zhq-nn.a.run.app"
 datasets_pin_principal_secret_id    = "dfo-dev-datasets-pin-principal"
 live_refresh_principal_secret_id    = "dfo-dev-live-refresh-principal"
+caller_principal_secret_id          = "dfo-dev-caller-principal"
+share_import_principal_secret_id    = "dfo-dev-share-import-principal"
+caller_hmac_key_secret_id           = "dfo-dev-caller-hmac-key"
 posthog_key                         = "phc_nNtsVfPvZAKPJ5JagTFzvGsndUddT3PNXguGQsMCnSAt"
 
 # Off so destroys and replaces stay unblocked.
 stateless_deletion_protection = false
+
+# The role in ONE's SES account that sends sign-in email. It trusts only
+# dfo-dev-website-staging-run, and only with this token audience. Staging
+# sends real mail from studio@developmentfinance.org, so use test recipients.
+ses = {
+  role_arn       = "arn:aws:iam::961128127831:role/development-finance-observatory-ses-sender-staging"
+  region         = "us-east-1"
+  token_audience = "development-finance-observatory-staging"
+}
+
+# Cloudflare Turnstile widget "DFO website staging" in the ONE Campaign
+# account, for this service's run.app host. Public: the login page renders it.
+turnstile_site_key = "0x4AAAAAAFiLWYsFJwHodJgu"

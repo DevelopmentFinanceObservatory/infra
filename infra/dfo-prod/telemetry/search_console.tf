@@ -1,0 +1,1 @@
+../../stacks/telemetry/search_console.tf

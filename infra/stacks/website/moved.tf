@@ -17,16 +17,6 @@ moved {
 }
 
 moved {
-  from = google_secret_manager_secret.website_staging_caller_hmac_key
-  to   = google_secret_manager_secret.website_caller_hmac_key
-}
-
-moved {
-  from = google_secret_manager_secret_version.website_staging_caller_hmac_key
-  to   = google_secret_manager_secret_version.website_caller_hmac_key
-}
-
-moved {
   from = google_secret_manager_secret.website_staging_feedback_slack_webhook
   to   = google_secret_manager_secret.website_feedback_slack_webhook
 }

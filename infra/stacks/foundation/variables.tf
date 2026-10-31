@@ -119,68 +119,63 @@ variable "provider_id" {
   default     = "github"
 }
 
-variable "applier_impersonators" {
-  description = "Principals that may mint access tokens for the dfo-infra-applier service account, as full IAM member strings. Impersonating the applier reaches every role in applier_project_roles, so this list stays short and holds only people, directly or through a group, who already have project owner."
+variable "principals_secret_stacks" {
+  description = "Stacks in this environment that read their principals from a hand-made <namespace>-<stack>-principals secret. The planner gets roles/secretmanager.secretAccessor on each, and the grant fails while the secret does not exist, so a stack is listed only in the environments that deploy it."
   type        = list(string)
-}
-
-variable "ingestion_operators" {
-  description = "Principals that run Dagster ingestion into this environment's Data Commons, as full IAM member strings. Each gets token creator on the ingestion workflow's service account, object read and write on the artifacts bucket, workflows.invoker on the project, spanner.databaseReader on the Data Commons database, and workflows.viewer, storage.bucketViewer, logging.viewer, run.viewer, spanner.viewer, dataflow.viewer, monitoring.viewer, and serviceusage.serviceUsageConsumer on the project. The four resources belong to the dcp stack, so this list stays empty until dcp has applied and the ingestion_* names below are set."
-  type        = list(string)
+  default     = []
 }
 
 variable "ingestion_workflow_service_account_email" {
-  description = "Email of the dcp ingestion workflow's service account (dcp output ingestion_workflow_service_account_email). Required once ingestion_operators is non-empty."
+  description = "Email of the dcp ingestion workflow's service account (dcp output ingestion_workflow_service_account_email). Required once the foundation principals secret's ingestion_operators object is non-empty."
   type        = string
   default     = null
 }
 
 variable "ingestion_artifacts_bucket_name" {
-  description = "Name of the dcp artifacts bucket (dcp output storage_artifacts_bucket_name). Required once ingestion_operators is non-empty."
+  description = "Name of the dcp artifacts bucket (dcp output storage_artifacts_bucket_name). Required once the foundation principals secret's ingestion_operators object is non-empty."
   type        = string
   default     = null
 }
 
 variable "ingestion_spanner_instance_id" {
-  description = "Spanner instance holding the Data Commons database (dcp output spanner_instance_id). Required once ingestion_operators is non-empty."
+  description = "Spanner instance holding the Data Commons database (dcp output spanner_instance_id). Required once the foundation principals secret's ingestion_operators object is non-empty."
   type        = string
   default     = null
 }
 
 variable "ingestion_spanner_database_id" {
-  description = "Spanner database the Data Commons services read (dcp output spanner_database_id). Required once ingestion_operators is non-empty."
+  description = "Spanner database the Data Commons services read (dcp output spanner_database_id). Required once the foundation principals secret's ingestion_operators object is non-empty."
   type        = string
   default     = null
 }
 
-# The four budget variables below have no default and are set in
-# budget.auto.tfvars. Leaving billing_account_id or gemini_key_project_number
-# empty there switches the Gemini budget off, so every other stack and CI's
-# validate and plan keep working before anyone fills them in.
+# The two budget variables below have no default and are set in
+# budget.auto.tfvars. An empty billing_account_id or gemini_key_projects there
+# switches the Gemini budgets off, so every other stack and CI's validate and
+# plan keep working before anyone fills them in.
 variable "billing_account_id" {
-  description = "Billing account that pays for the project holding the Gemini key, as the bare id (`XXXXXX-XXXXXX-XXXXXX`). Look it up with `gcloud billing projects describe <gemini_key_project_number>`. Empty disables the Gemini budget."
+  description = "Billing account that pays for the projects holding the Gemini keys, as the bare id (`XXXXXX-XXXXXX-XXXXXX`). Look it up with `gcloud billing projects describe <project_number>`. Empty disables the Gemini budgets."
   type        = string
 }
 
-variable "gemini_key_project_number" {
-  description = "Number of the project that owns this environment's Gemini API key: the digits after `projects/` in the key name `gcloud services api-keys lookup <key string>` prints. It can belong to another project than project_id when the key came from AI Studio. Empty disables the Gemini budget."
-  type        = string
+variable "gemini_key_projects" {
+  description = "The projects that own this environment's Gemini API keys, keyed by caller (such as apis or ai), one budget each. project_number is the digits after `projects/` in the key name `gcloud services api-keys lookup <key string>` prints. It can belong to another project than project_id when the key came from AI Studio. budget_usd is the monthly Gemini API spend, in USD, that the budget's thresholds are percentages of. Empty disables the Gemini budgets."
+  type = map(object({
+    project_number = string
+    budget_usd     = optional(number, 500)
+  }))
 
   validation {
-    condition     = can(regex("^[0-9]*$", var.gemini_key_project_number))
-    error_message = "gemini_key_project_number must be the project's number (digits only), or empty."
+    condition     = alltrue([for p in values(var.gemini_key_projects) : can(regex("^[0-9]+$", p.project_number))])
+    error_message = "Each gemini_key_projects project_number must be the project's number, digits only."
   }
-}
 
-variable "gemini_budget_usd" {
-  description = "Monthly Gemini API spend, in USD, that the budget's thresholds are percentages of."
-  type        = number
-  default     = 500
-}
-
-variable "budget_alert_emails" {
-  description = "Addresses that receive the Gemini budget alerts, each through its own Cloud Monitoring email channel. Billing account admins are notified as well, whatever this holds."
-  type        = list(string)
+  # The Budget API caps a display name at 60 characters, and budget.tf names
+  # each budget "Gemini API spend: <key>". Its amount takes whole units.
+  validation {
+    condition     = alltrue([for k, p in var.gemini_key_projects : length(k) <= 42 && floor(p.budget_usd) == p.budget_usd])
+    error_message = "Each gemini_key_projects key must be at most 42 characters, and each budget_usd a whole number of dollars."
+  }
 }
 
 variable "billing_export_dataset_id" {

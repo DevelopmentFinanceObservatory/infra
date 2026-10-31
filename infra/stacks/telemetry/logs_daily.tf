@@ -1,0 +1,285 @@
+# Daily aggregates of the routed Cloud Run logs. The linked dataset reaches
+# back only var.log_retention_days, so trends longer than that come from
+# here, and the reporting views read here rather than from raw entries.
+#
+# Terraform owns the dataset, the route function, the MCP line parse function
+# (parse_mcp_line), the backfill table, the entries view and the scheduled
+# query. The query creates its aggregate tables on its first run
+# (sql/logs_daily.sql).
+resource "google_bigquery_dataset" "logs_daily" {
+  dataset_id  = "logs_daily"
+  location    = local.bigquery_location
+  description = "Daily Cloud Run request, route, error, deploy, MCP call and website request aggregates, written by the ${var.namespace}-logs-daily scheduled query, and for MCP calls through the cut-off day by scripts/load-logs-backfill.sh."
+
+  # No access blocks: every grant on this dataset is a
+  # google_bigquery_dataset_access, which authoritative access blocks would
+  # remove on the next apply.
+
+  depends_on = [google_project_service.apis]
+}
+
+# The route rule is a pinned function so the scheduled query and anyone
+# querying logs_daily by hand normalise URLs the same way.
+# tests/normalise_route.test.sh checks the body against recorded prod request
+# paths, whose hosts carry a synthetic project number, and a few hand-written
+# cases.
+resource "google_bigquery_routine" "normalise_route" {
+  dataset_id      = google_bigquery_dataset.logs_daily.dataset_id
+  routine_id      = "normalise_route"
+  routine_type    = "SCALAR_FUNCTION"
+  language        = "SQL"
+  description     = "Route of a request URL: the path with id, dcid, hash and number segments as :id."
+  definition_body = file("${path.module}/sql/normalise_route.sql")
+  return_type     = jsonencode({ typeKind = "STRING" })
+
+  arguments {
+    name      = "url"
+    data_type = jsonencode({ typeKind = "STRING" })
+  }
+}
+
+# The parse of the combined MCP server's call lines, which every writer of
+# mcp_daily calls. tests/mcp_daily.test.sh runs the body over literal lines.
+resource "google_bigquery_routine" "parse_mcp_line" {
+  dataset_id      = google_bigquery_dataset.logs_daily.dataset_id
+  routine_id      = "parse_mcp_line"
+  routine_type    = "SCALAR_FUNCTION"
+  language        = "SQL"
+  description     = "mcp_daily's request, outcome, caller kind and client of a combined MCP call line, and its raw caller; NULL for any other message."
+  definition_body = file("${path.module}/sql/parse_mcp_line.sql")
+  return_type = jsonencode({
+    typeKind = "STRUCT"
+    structType = {
+      fields = [
+        for name in ["request", "outcome", "caller_kind", "client", "caller"] :
+        { name = name, type = { typeKind = "STRING" } }
+      ]
+    }
+  })
+
+  arguments {
+    name      = "message"
+    data_type = jsonencode({ typeKind = "STRING" })
+  }
+}
+
+# The sink routes only entries written after it exists, so the entries
+# before local.logs_backfill_cutoff come from _Default. gcloud logging copy
+# wrote those entries to Cloud Storage, and scripts/load-logs-backfill.sh
+# loads them here through sql/backfill_entries.sql. The schema is the part of
+# dfo_logs._AllLogs that logs_daily.sql reads, so the entries view can union
+# the two. It holds no message text, so the loader also writes mcp_daily's
+# days through the cut-off day. The "Backfill" section of
+# infra/dfo-prod/telemetry/README.md explains that split.
+resource "google_bigquery_table" "backfill_entries" {
+  dataset_id  = google_bigquery_dataset.logs_daily.dataset_id
+  table_id    = "backfill_entries"
+  description = "Cloud Run entries from _Default before ${local.logs_backfill_cutoff}, when the ${var.namespace}-telemetry sink did not yet route every entry, in the dfo_logs._AllLogs columns logs_daily reads. Written by scripts/load-logs-backfill.sh."
+
+  time_partitioning {
+    type  = "DAY"
+    field = "timestamp"
+  }
+
+  schema = jsonencode([
+    { name = "timestamp", type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "log_id", type = "STRING", mode = "NULLABLE" },
+    { name = "severity", type = "STRING", mode = "NULLABLE" },
+    {
+      name = "resource", type = "RECORD", mode = "NULLABLE", fields = [
+        { name = "type", type = "STRING", mode = "NULLABLE" },
+        { name = "labels", type = "JSON", mode = "NULLABLE" },
+      ]
+    },
+    {
+      name = "http_request", type = "RECORD", mode = "NULLABLE", fields = [
+        { name = "request_method", type = "STRING", mode = "NULLABLE" },
+        { name = "request_url", type = "STRING", mode = "NULLABLE" },
+        { name = "status", type = "INTEGER", mode = "NULLABLE" },
+        {
+          name = "latency", type = "RECORD", mode = "NULLABLE", fields = [
+            { name = "seconds", type = "INTEGER", mode = "NULLABLE" },
+            { name = "nanos", type = "INTEGER", mode = "NULLABLE" },
+          ]
+        },
+      ]
+    },
+    { name = "json_payload", type = "JSON", mode = "NULLABLE", description = "The entry's jsonPayload.logger, as {\"logger\": ...}, and nothing else." },
+  ])
+}
+
+locals {
+  # Where logs_daily's source passes from backfill_entries to dfo_logs. The
+  # sink's first entry is at 2026-10-23 18:48:34.611764 UTC, but it routed
+  # every entry only from about 18:50, so the cut-off sits after that and the
+  # copy into backfill_entries reaches it. scripts/load-logs-backfill.sh reads
+  # the same file. regex() fails the plan on a value that is not a UTC
+  # timestamp in this form.
+  logs_backfill_cutoff = regex("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\+00$", trimspace(file("${path.module}/logs_backfill_cutoff.txt")))
+}
+
+# The source logs_daily.sql reads: dfo_logs from the cut-off on, and
+# backfill_entries before it. The scheduled query's account reads both
+# through its grants on dfo_logs and logs_daily.
+resource "google_bigquery_table" "entries" {
+  dataset_id  = google_bigquery_dataset.logs_daily.dataset_id
+  table_id    = "entries"
+  description = "Routed Cloud Run entries from dfo_logs from ${local.logs_backfill_cutoff}, and from backfill_entries before it. The source of the ${var.namespace}-logs-daily scheduled query."
+
+  view {
+    use_legacy_sql = false
+    query = templatefile("${path.module}/sql/entries.sql", {
+      logs     = "${var.project_id}.${google_logging_linked_dataset.telemetry.link_id}._AllLogs"
+      backfill = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_table.backfill_entries.table_id}"
+      cutoff   = local.logs_backfill_cutoff
+    })
+  }
+}
+
+resource "google_service_account" "logs_daily" {
+  account_id   = "${var.namespace}-logs-daily"
+  display_name = "${var.namespace} logs_daily scheduled query"
+  description  = "Runs the logs_daily scheduled query: reads dfo_logs, writes logs_daily."
+}
+
+resource "google_project_iam_member" "logs_daily_job_user" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = google_service_account.logs_daily.member
+}
+
+resource "google_bigquery_dataset_access" "logs_daily_source_reader" {
+  dataset_id    = google_logging_linked_dataset.telemetry.link_id
+  role          = "READER"
+  user_by_email = google_service_account.logs_daily.email
+}
+
+resource "google_bigquery_dataset_access" "logs_daily_writer" {
+  dataset_id    = google_bigquery_dataset.logs_daily.dataset_id
+  role          = "WRITER"
+  user_by_email = google_service_account.logs_daily.email
+}
+
+# The Data Transfer Service runs each scheduled query by minting a token for
+# its service account, so its service agent needs token creation on that
+# account and no other.
+resource "google_service_account_iam_member" "logs_daily_transfer_agent" {
+  service_account_id = google_service_account.logs_daily.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com"
+}
+
+# A script with DDL and DML, so no destination table. It runs at 02:00 UTC,
+# loads whole days up to yesterday, and starts each table from its latest
+# loaded day minus one, so the run reloads that day with any entry that
+# reached the source after the previous run.
+resource "google_bigquery_data_transfer_config" "logs_daily" {
+  display_name         = "${var.namespace}-logs-daily"
+  location             = local.bigquery_location
+  data_source_id       = "scheduled_query"
+  schedule             = "every day 02:00"
+  service_account_name = google_service_account.logs_daily.email
+
+  params = {
+    query = templatefile("${path.module}/sql/logs_daily.sql", {
+      source          = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_table.entries.table_id}"
+      live_source     = "${var.project_id}.${google_logging_linked_dataset.telemetry.link_id}._AllLogs"
+      cutoff          = local.logs_backfill_cutoff
+      parse_mcp_line  = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_routine.parse_mcp_line.routine_id}"
+      dataset         = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}"
+      normalise_route = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}.${google_bigquery_routine.normalise_route.routine_id}"
+      website_service = "${var.namespace}-website"
+    })
+  }
+
+  depends_on = [
+    google_project_iam_member.logs_daily_job_user,
+    google_bigquery_dataset_access.logs_daily_source_reader,
+    google_bigquery_dataset_access.logs_daily_writer,
+    google_service_account_iam_member.logs_daily_transfer_agent,
+  ]
+}
+
+# Alerting on failed runs. A missed day heals on the next run, but a run that
+# keeps failing for longer than var.log_retention_days loses those days for
+# good, so a failure has to reach someone.
+locals {
+  # The config's name is projects/<number>/locations/<location>/transferConfigs/<id>.
+  logs_daily_config_id = element(split("/", google_bigquery_data_transfer_config.logs_daily.name), 5)
+}
+
+# The Data Transfer Service logs each run's progress against the config, and
+# a failed run at ERROR.
+resource "google_logging_metric" "logs_daily_failed" {
+  name    = "${var.namespace}-logs-daily-failed"
+  project = var.project_id
+  filter  = <<-EOT
+    resource.type="bigquery_dts_config"
+    resource.labels.config_id="${local.logs_daily_config_id}"
+    severity>=ERROR
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+# A new log-based metric takes a few minutes to reach Cloud Monitoring's
+# alerting backend, and an alert policy created before then fails with
+# "Cannot find metric(s) that match type". depends_on orders the API calls
+# only, so this waits out the propagation, as apis/graph_release.tf does.
+resource "time_sleep" "logs_daily_failed_metric_propagation" {
+  depends_on      = [google_logging_metric.logs_daily_failed]
+  create_duration = "120s"
+}
+
+resource "google_monitoring_alert_policy" "logs_daily_failed" {
+  project      = var.project_id
+  display_name = "logs_daily scheduled query failed"
+  combiner     = "OR"
+
+  depends_on = [time_sleep.logs_daily_failed_metric_propagation]
+
+  conditions {
+    display_name = "logs_daily run logged an error"
+
+    condition_threshold {
+      filter          = "resource.type=\"bigquery_dts_config\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.logs_daily_failed.name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      # ALIGN_SUM, since Cloud Logging writes a zero sample in the interval
+      # beside each non-zero one, which ALIGN_COUNT would count as an error.
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  # The service's own run count, which needs no particular log line.
+  conditions {
+    display_name = "logs_daily run completed as FAILED"
+
+    condition_threshold {
+      filter          = "resource.type=\"bigquery_dts_config\" AND resource.labels.config_id=\"${local.logs_daily_config_id}\" AND metric.type=\"bigquerydatatransfer.googleapis.com/transfer_config/completed_runs\" AND metric.labels.completion_state=\"FAILED\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "86400s"
+  }
+}

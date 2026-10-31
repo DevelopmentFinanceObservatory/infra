@@ -4,29 +4,40 @@
 # GET /api/search/catalogue on the apis service. It publishes each build
 # under "format-<n>/versions/<build id>/" and moves "format-<n>/current.json"
 # to point at it last, as origin_catalogue.tf describes. Its build key is the
-# origin catalogue build, the coverage index build (the graph release id
-# while graph_release_coverage is true), the image's commit and the examples
-# file, so it rebuilds after a publish of either artifact or a deploy, and
+# origin catalogue build, the graph release id (while graph_release_coverage
+# is true), the image's commit and the examples file, so it rebuilds after a publish of either artifact or a deploy, and
 # exits in seconds otherwise. The graph release builder starts it after each
-# publish. It shares coverage.tf's
-# google_project_service.cloudscheduler and has its own identities and
-# bucket.
+# publish and the deploy pipeline after each deploy; a 15-minute Scheduler
+# tick also starts it while var.search_catalogue_tick is true. It shares
+# main.tf's google_project_service.cloudscheduler and has its own identities
+# and bucket.
+
+variable "search_catalogue_tick" {
+  description = "Whether a Cloud Scheduler tick starts the search catalogue job every 15 minutes, with its trigger identity and the heartbeat alert that fires when no run completes for an hour. False leaves the job to the graph release builder, which starts it after each publish, and the deploy pipeline. It needs a dfo-apis image whose job waits out a held lease, so a start that meets a running build is not lost, and the builder running (graph_release_enabled). Prod can turn it off once it serves from the graph release."
+  type        = bool
+  default     = true
+
+  validation {
+    condition     = var.search_catalogue_tick || var.graph_release_enabled
+    error_message = "search_catalogue_tick false leaves the graph release builder as the job's only trigger between deploys, so it requires graph_release_enabled."
+  }
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bucket
 # ─────────────────────────────────────────────────────────────────────────────
 
-# A dedicated bucket, for the reasons coverage.tf gives for its own, so the
-# job's write access reaches only its own artifact.
+# A dedicated bucket: the Datasets working bucket expires objects after 30
+# days, which would delete the pointer in a quiet month, and GCS has no
+# prefix-scoped IAM, so the job's write access stays to its own artifact.
 resource "google_storage_bucket" "search_catalogue" {
   name                        = "${var.namespace}-search-catalogue-${var.project_id}"
   project                     = var.project_id
   location                    = var.region
   uniform_bucket_level_access = true
 
-  # No lifecycle_rule, for the reason coverage.tf gives: the job prunes its
-  # own old builds and the pointer it leaves in place names a build a
-  # bucket-level age rule could delete.
+  # No lifecycle_rule: the job prunes its own old builds and the pointer it
+  # leaves in place names a build a bucket-level age rule could delete.
 }
 
 output "search_catalogue_bucket_name" {
@@ -50,32 +61,35 @@ resource "google_service_account" "search_catalogue_job" {
 
 # The job overwrites "current.json" on every publish, takes and releases a
 # create-only "lease.json", and prunes old builds, so it needs create, get,
-# list and delete: roles/storage.objectUser, as coverage.tf grants.
+# list and delete: roles/storage.objectUser.
 resource "google_storage_bucket_iam_member" "search_catalogue_job_object_user" {
   bucket = google_storage_bucket.search_catalogue.name
   role   = "roles/storage.objectUser"
   member = google_service_account.search_catalogue_job.member
 }
 
-# The two artifacts the build key and the engine read: the origin catalogue
-# build the engine binds and the coverage index it filters by.
+# The origin catalogue build the build key and the engine read.
 resource "google_storage_bucket_iam_member" "search_catalogue_job_origin_catalogue_viewer" {
   bucket = google_storage_bucket.origin_catalogue.name
   role   = "roles/storage.objectViewer"
   member = google_service_account.search_catalogue_job.member
 }
 
-resource "google_storage_bucket_iam_member" "search_catalogue_job_coverage_viewer" {
-  bucket = google_storage_bucket.coverage.name
-  role   = "roles/storage.objectViewer"
-  member = google_service_account.search_catalogue_job.member
+# The job's own Gemini key, so its spend bills to its own AI Studio project in
+# prod. Created outside Terraform, like the service's key in main.tf.
+variable "search_catalogue_gemini_api_key_secret_id" {
+  description = "Secret Manager id of the Gemini API key the search catalogue Job mounts as GEMINI_API_KEY, such as dfo-prod-search-catalogue-gemini-api-key. Dev names the service's shared key. The secret must hold a version before apply."
+  type        = string
 }
 
-# The engine's Gemini key, the secret main.tf mounts on the apis service,
-# scoped to that one secret as the module scopes the service's own grant.
+data "google_secret_manager_secret" "search_catalogue_gemini" {
+  secret_id = var.search_catalogue_gemini_api_key_secret_id
+}
+
+# Scoped to that one secret, as the module scopes the service's own grant.
 resource "google_secret_manager_secret_iam_member" "search_catalogue_job_gemini_accessor" {
-  project   = data.google_secret_manager_secret.gemini.project
-  secret_id = data.google_secret_manager_secret.gemini.secret_id
+  project   = data.google_secret_manager_secret.search_catalogue_gemini.project
+  secret_id = data.google_secret_manager_secret.search_catalogue_gemini.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = google_service_account.search_catalogue_job.member
 }
@@ -98,7 +112,7 @@ resource "google_service_account_iam_member" "search_catalogue_job_deployer_act_
 # ─────────────────────────────────────────────────────────────────────────────
 
 variable "search_catalogue_bootstrap_image" {
-  description = "Overrides the image the search catalogue Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, as coverage_job_bootstrap_image does."
+  description = "Overrides the image the search catalogue Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, the tag the apis service is currently running."
   type        = string
   default     = null
 }
@@ -114,15 +128,17 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
     template {
       service_account = google_service_account.search_catalogue_job.email
 
-      # No retry. The Scheduler polls every 15 minutes and the job's lease
-      # keeps overlapping executions from both building, so a retry only
-      # delays the poll that would have started the next attempt.
+      # No retry. A failed build waits for the next start: a publish, a
+      # deploy, or the Scheduler tick while var.search_catalogue_tick is
+      # true.
       max_retries = 0
 
-      # Equal to _MAX_RUN_SECONDS in dfo-apis's search.catalogue.job. A lease
-      # lapses after that long because Cloud Run has killed the run holding
-      # it by then, so the two values move together. A build takes about
-      # 90 seconds.
+      # Equal to _MAX_RUN_SECONDS in dfo-apis's search.catalogue.job, which
+      # it also uses as the grace before pruning old builds. The lease is
+      # separate: it lapses LEASE_TTL_SECONDS (600) after it is taken, and
+      # a run that meets a held lease waits up to one lease for it, so the
+      # timeout leaves a waiting run time to load, build and publish. A
+      # build takes about 90 seconds.
       timeout = "1800s"
 
       containers {
@@ -151,16 +167,9 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
           value = "gs://${google_storage_bucket.origin_catalogue.name}/"
         }
 
-        # The job refuses to start without this, also while
-        # graph_release_coverage has it read the release instead.
-        env {
-          name  = "COVERAGE_ARTIFACT_URI"
-          value = "gs://${google_storage_bucket.coverage.name}/"
-        }
-
         # The release graph_release.tf's builder publishes: the job keys its
         # build on the release id and reads the code index and coverage from
-        # the release in place of the coverage artifact.
+        # the release.
         dynamic "env" {
           for_each = var.graph_release_coverage ? [1] : []
           content {
@@ -211,15 +220,16 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
           name = "GEMINI_API_KEY"
           value_source {
             secret_key_ref {
-              secret  = data.google_secret_manager_secret.gemini.secret_id
+              secret  = data.google_secret_manager_secret.search_catalogue_gemini.secret_id
               version = "latest"
             }
           }
         }
       }
 
-      # The same private path coverage.tf gives its Job; the graph, Gemini
-      # and GCS sit on public addresses, reached over the default route.
+      # The same private path the service and the migrate Job use; the graph,
+      # Gemini and GCS sit on public addresses, reached over the default
+      # route.
       vpc_access {
         network_interfaces {
           network    = module.psc_network.network_id
@@ -242,7 +252,6 @@ resource "google_cloud_run_v2_job" "search_catalogue" {
     google_secret_manager_secret_iam_member.search_catalogue_job_gemini_accessor,
     google_storage_bucket_iam_member.search_catalogue_job_object_user,
     google_storage_bucket_iam_member.search_catalogue_job_origin_catalogue_viewer,
-    google_storage_bucket_iam_member.search_catalogue_job_coverage_viewer,
   ]
 }
 
@@ -263,21 +272,28 @@ output "search_catalogue_job_name" {
 # Scheduler
 # ─────────────────────────────────────────────────────────────────────────────
 
+# The tick, while var.search_catalogue_tick is true.
 resource "google_service_account" "search_catalogue_scheduler" {
+  count = var.search_catalogue_tick ? 1 : 0
+
   project      = var.project_id
   account_id   = "${var.namespace}-search-cat-scheduler"
   display_name = "Search catalogue job Cloud Scheduler trigger"
 }
 
 resource "google_cloud_run_v2_job_iam_member" "search_catalogue_scheduler_invoker" {
+  count = var.search_catalogue_tick ? 1 : 0
+
   project  = google_cloud_run_v2_job.search_catalogue.project
   location = google_cloud_run_v2_job.search_catalogue.location
   name     = google_cloud_run_v2_job.search_catalogue.name
   role     = "roles/run.invoker"
-  member   = google_service_account.search_catalogue_scheduler.member
+  member   = google_service_account.search_catalogue_scheduler[0].member
 }
 
 resource "google_cloud_scheduler_job" "search_catalogue" {
+  count = var.search_catalogue_tick ? 1 : 0
+
   name      = "${var.namespace}-search-catalogue-tick"
   project   = var.project_id
   region    = var.region
@@ -289,7 +305,7 @@ resource "google_cloud_scheduler_job" "search_catalogue" {
     uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.search_catalogue.name}:run"
 
     oauth_token {
-      service_account_email = google_service_account.search_catalogue_scheduler.email
+      service_account_email = google_service_account.search_catalogue_scheduler[0].email
       scope                 = "https://www.googleapis.com/auth/cloud-platform"
     }
   }
@@ -328,8 +344,12 @@ resource "google_logging_metric" "search_catalogue_line_dropped" {
 # Every run that exits 0 logs `search_catalogue_job_heartbeat` last, naming
 # the published build and its age. A Scheduler that stops starting the job
 # produces no dropped line and no failed execution. Only the heartbeat's
-# absence shows it.
+# absence shows it. Without the tick the job runs only after a publish or a
+# deploy, so a quiet hour is normal and the metric and its alert go with
+# the tick.
 resource "google_logging_metric" "search_catalogue_heartbeat" {
+  count = var.search_catalogue_tick ? 1 : 0
+
   name    = "${var.namespace}-search-catalogue-heartbeat"
   project = var.project_id
   filter  = <<-EOT
@@ -346,14 +366,8 @@ resource "google_logging_metric" "search_catalogue_heartbeat" {
   }
 }
 
-variable "search_catalogue_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for search catalogue build failures, dropped example lines or a job that stopped running."
-  type        = list(string)
-  default     = []
-}
-
 # Waits out the log-based metrics' propagation to Cloud Monitoring before
-# the alert policies name them; coverage.tf explains the failure this avoids.
+# the alert policies name them; graph_release.tf explains the failure this avoids.
 resource "time_sleep" "search_catalogue_metric_propagation" {
   depends_on = [
     google_logging_metric.search_catalogue_line_dropped,
@@ -388,7 +402,7 @@ resource "google_monitoring_alert_policy" "search_catalogue_failed" {
     }
   }
 
-  notification_channels = var.search_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -420,7 +434,7 @@ resource "google_monitoring_alert_policy" "search_catalogue_line_dropped" {
     }
   }
 
-  notification_channels = var.search_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -434,6 +448,8 @@ resource "google_monitoring_alert_policy" "search_catalogue_line_dropped" {
 # timeout plus one cycle, so one hung or timed-out build cannot open the
 # alert on its own.
 resource "google_monitoring_alert_policy" "search_catalogue_heartbeat" {
+  count = var.search_catalogue_tick ? 1 : 0
+
   project      = var.project_id
   display_name = "Search catalogue job not running"
   combiner     = "OR"
@@ -444,7 +460,7 @@ resource "google_monitoring_alert_policy" "search_catalogue_heartbeat" {
     display_name = "no search_catalogue_job_heartbeat for 3600s"
 
     condition_absent {
-      filter   = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.search_catalogue_heartbeat.name}\""
+      filter   = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.search_catalogue_heartbeat[0].name}\""
       duration = "3600s"
 
       aggregations {
@@ -454,7 +470,7 @@ resource "google_monitoring_alert_policy" "search_catalogue_heartbeat" {
     }
   }
 
-  notification_channels = var.search_catalogue_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "604800s"

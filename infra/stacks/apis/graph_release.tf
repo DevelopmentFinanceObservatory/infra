@@ -1,11 +1,9 @@
 # The graph release: a job that reads the Data Commons Spanner database and
 # publishes an immutable release of the platform tables and the DFO parts
-# derived from them, after a gate and (while shadowing) a diff against the
-# coverage and origin catalogue artifacts. The apis service and the datasets
-# worker load the published release. The job writes each release's parts and
-# manifest create-only and moves one pointer last, the same publication order
-# coverage.tf describes for the coverage index. It reuses that file's
-# Spanner ids and google_project_service.cloudscheduler, follows
+# derived from them, after a gate. The apis service and the datasets worker
+# load the published release. The job writes each release's parts and
+# manifest create-only and moves one pointer last. It reuses variables.tf's
+# Spanner ids and main.tf's google_project_service.cloudscheduler, follows
 # origin_catalogue.tf's alerting conventions, and has its own identities and
 # bucket.
 
@@ -16,7 +14,7 @@ variable "graph_release_serving" {
 }
 
 variable "graph_release_coverage" {
-  description = "Whether the apis service, the datasets worker and the search catalogue job serve the code index and coverage from the graph release (GRAPH_RELEASE_COVERAGE=1) in place of the coverage artifact. Requires graph_release_serving. The release must already carry its serving views, which the builder publishes whenever it runs."
+  description = "Whether the apis service, the datasets worker and the search catalogue job serve the code index and coverage from the graph release (GRAPH_RELEASE_COVERAGE=1). Requires graph_release_serving. The release must already carry its serving views, which the builder publishes whenever it runs."
   type        = bool
   default     = false
 
@@ -37,12 +35,6 @@ variable "graph_release_origin" {
   }
 }
 
-variable "graph_release_shadow" {
-  description = "Whether the builder diffs each release against the coverage index and origin catalogue builds (GRAPH_RELEASE_SHADOW=1) before it publishes. False leaves the variable unset, so a release publishes without those builds."
-  type        = bool
-  default     = true
-}
-
 variable "graph_release_enabled" {
   description = "Whether the graph release builder runs. False (the default) creates the Scheduler trigger paused and the alert policies disabled, so the stack applies before the dfo-apis image that carries graph_release.job is deployed. Set true once that image is live."
   type        = bool
@@ -53,20 +45,18 @@ variable "graph_release_enabled" {
 # Bucket
 # ─────────────────────────────────────────────────────────────────────────────
 
-# A dedicated bucket, for the reasons coverage.tf gives for its own: the
-# Datasets working bucket expires objects after 30 days, which would delete
-# the pointer in a quiet month, and GCS has no prefix-scoped IAM. It is
-# separate from the coverage and origin catalogue buckets, so the builder's
-# write access reaches only its own releases.
+# A dedicated bucket: the Datasets working bucket expires objects after 30
+# days, which would delete the pointer in a quiet month, and GCS has no
+# prefix-scoped IAM. It is separate from the origin catalogue bucket, so the
+# builder's write access reaches only its own releases.
 resource "google_storage_bucket" "graph_release" {
   name                        = "${var.namespace}-graph-release-${var.project_id}"
   project                     = var.project_id
   location                    = var.region
   uniform_bucket_level_access = true
 
-  # No lifecycle_rule, for the reason coverage.tf gives: the job prunes
-  # releases itself, and the pointer names a manifest a bucket-level age
-  # rule could delete.
+  # No lifecycle_rule: the job prunes releases itself, and the pointer names
+  # a manifest a bucket-level age rule could delete.
 }
 
 output "graph_release_bucket_name" {
@@ -109,23 +99,10 @@ resource "google_cloud_run_v2_service_iam_member" "graph_release_job_dc_viewer" 
 
 # The job creates parts and manifests, moves the pointer, takes and releases
 # a create-only lease, and prunes old releases, so it needs create, get, list
-# and delete: roles/storage.objectUser, as coverage.tf grants.
+# and delete: roles/storage.objectUser.
 resource "google_storage_bucket_iam_member" "graph_release_job_object_user" {
   bucket = google_storage_bucket.graph_release.name
   role   = "roles/storage.objectUser"
-  member = google_service_account.graph_release_job.member
-}
-
-# Read-only on the artifacts the shadow diff compares against.
-resource "google_storage_bucket_iam_member" "graph_release_job_coverage_viewer" {
-  bucket = google_storage_bucket.coverage.name
-  role   = "roles/storage.objectViewer"
-  member = google_service_account.graph_release_job.member
-}
-
-resource "google_storage_bucket_iam_member" "graph_release_job_origin_catalogue_viewer" {
-  bucket = google_storage_bucket.origin_catalogue.name
-  role   = "roles/storage.objectViewer"
   member = google_service_account.graph_release_job.member
 }
 
@@ -163,7 +140,7 @@ resource "google_service_account_iam_member" "graph_release_job_deployer_act_as"
 # ─────────────────────────────────────────────────────────────────────────────
 
 variable "graph_release_bootstrap_image" {
-  description = "Overrides the image the graph release Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, as coverage_job_bootstrap_image does."
+  description = "Overrides the image the graph release Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, the tag the apis service is currently running."
   type        = string
   default     = null
 }
@@ -240,27 +217,6 @@ resource "google_cloud_run_v2_job" "graph_release" {
           value = var.datasets_sdmx_base_url
         }
 
-        # The shadow diff compares each release with the coverage and origin
-        # catalogue builds named below. Turning it off lets a release publish
-        # without them.
-        dynamic "env" {
-          for_each = var.graph_release_shadow ? [1] : []
-          content {
-            name  = "GRAPH_RELEASE_SHADOW"
-            value = "1"
-          }
-        }
-
-        env {
-          name  = "COVERAGE_ARTIFACT_URI"
-          value = "gs://${google_storage_bucket.coverage.name}/"
-        }
-
-        env {
-          name  = "ORIGIN_CATALOGUE_URI"
-          value = "gs://${google_storage_bucket.origin_catalogue.name}/"
-        }
-
         # The builder starts one search catalogue execution after each
         # publish, through the Cloud Run Admin API. It does so whenever the
         # variable is set, whatever graph_release_coverage says: without the
@@ -276,8 +232,8 @@ resource "google_cloud_run_v2_job" "graph_release" {
         }
       }
 
-      # The same private path coverage.tf gives its Job; the mixer sits on a
-      # public address, reached over the default route.
+      # The same private path the service and the migrate Job use; the mixer
+      # sits on a public address, reached over the default route.
       vpc_access {
         network_interfaces {
           network    = module.psc_network.network_id
@@ -486,14 +442,87 @@ resource "google_logging_metric" "graph_release_heartbeat" {
   }
 }
 
-variable "graph_release_notification_channels" {
-  description = "Existing Cloud Monitoring notification channel resource names to notify for a stale or gate-failed graph release, an unavailable dependency, a failed catalogue trigger, a failed builder execution or a builder that stopped running."
-  type        = list(string)
-  default     = []
+# `graph_release_published` carries `blind_spots.shared` and
+# `blind_spots.unread`, counts of variables outside the release in its own
+# families. The release still publishes with a nonzero count, so this metric
+# counts the publishes that carry one and is that case's only alert.
+resource "google_logging_metric" "graph_release_blind_spots" {
+  name    = "${var.namespace}-graph-release-blind-spots"
+  project = var.project_id
+  filter  = <<-EOT
+    resource.type="cloud_run_job"
+    resource.labels.job_name="${google_cloud_run_v2_job.graph_release.name}"
+    resource.labels.location="${var.region}"
+    jsonPayload.event="graph_release_published"
+    (jsonPayload.blind_spots.shared>0 OR jsonPayload.blind_spots.unread>0)
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+# The apis service and the datasets worker load the release in process. Each
+# logs `graph_release_refused` at ERROR, once per release id, when it declines
+# a release it cannot serve and keeps the one it holds, and
+# `graph_release_recheck_failed` at WARNING on every recheck of the pointer
+# that fails or is skipped, about once a minute per instance while it fails.
+# Neither stops the service, so these log metrics are their only alert.
+locals {
+  graph_release_serving_services = [
+    module.apis_service.service_name,
+    local.datasets_worker_service_name,
+  ]
+  graph_release_serving_filter = <<-EOT
+    resource.type="cloud_run_revision"
+    resource.labels.service_name=(${join(" OR ", [for name in local.graph_release_serving_services : "\"${name}\""])})
+    resource.labels.location="${var.region}"
+  EOT
+}
+
+resource "google_logging_metric" "graph_release_refused" {
+  name    = "${var.namespace}-graph-release-refused"
+  project = var.project_id
+  filter  = <<-EOT
+    ${local.graph_release_serving_filter}
+    jsonPayload.event="graph_release_refused"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+resource "google_logging_metric" "graph_release_recheck_failed" {
+  name    = "${var.namespace}-graph-release-recheck-failed"
+  project = var.project_id
+  filter  = <<-EOT
+    ${local.graph_release_serving_filter}
+    jsonPayload.event="graph_release_recheck_failed"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
 }
 
 # Waits out the log-based metrics' propagation to Cloud Monitoring before
-# the alert policies name them; coverage.tf explains the failure this avoids.
+# the alert policies name them. The Terraform google provider's create call
+# for google_logging_metric returns as soon as the API accepts the metric
+# definition, but Cloud Monitoring's own descriptor for a brand-new log-based
+# metric can take up to a few minutes to propagate to the alerting backend;
+# creating an alert policy immediately afterward risks a 404 "Cannot find
+# metric(s) that match type" that a plain depends_on can't close, since that
+# only orders the two API calls, not the metric's propagation between them.
+# condition_threshold has no disable_metric_validation escape hatch (that
+# argument exists only on condition_prometheus_query_language in the current
+# provider), so this waits out the propagation window explicitly instead.
 resource "time_sleep" "graph_release_metric_propagation" {
   depends_on = [
     google_logging_metric.graph_release_stale,
@@ -501,7 +530,24 @@ resource "time_sleep" "graph_release_metric_propagation" {
     google_logging_metric.graph_release_unavailable,
     google_logging_metric.graph_release_catalogue_trigger_failed,
     google_logging_metric.graph_release_heartbeat,
+    google_logging_metric.graph_release_refused,
+    google_logging_metric.graph_release_recheck_failed,
+    google_logging_metric.graph_release_blind_spots,
   ]
+  # A new metric replaces the sleep, so the policies wait for it as they did
+  # for the first ones. depends_on alone leaves an existing sleep in place.
+  triggers = {
+    metrics = join(",", [
+      google_logging_metric.graph_release_stale.name,
+      google_logging_metric.graph_release_gate_failed.name,
+      google_logging_metric.graph_release_unavailable.name,
+      google_logging_metric.graph_release_catalogue_trigger_failed.name,
+      google_logging_metric.graph_release_heartbeat.name,
+      google_logging_metric.graph_release_refused.name,
+      google_logging_metric.graph_release_recheck_failed.name,
+      google_logging_metric.graph_release_blind_spots.name,
+    ])
+  }
   create_duration = "120s"
 }
 
@@ -605,7 +651,7 @@ resource "google_monitoring_alert_policy" "graph_release_stale" {
     }
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "3600s"
@@ -641,9 +687,140 @@ resource "google_monitoring_alert_policy" "graph_release_heartbeat" {
     }
   }
 
-  notification_channels = var.graph_release_notification_channels
+  notification_channels = local.alert_notification_channels
 
   alert_strategy {
     auto_close = "604800s"
+  }
+}
+
+# One policy for the two serving events. A refusal is a discrete event that
+# logs once per release id, so any occurrence opens an incident. A recheck
+# failure is logged about once a minute per instance while it lasts, so the
+# condition needs it present in every 2-minute window for 10 minutes before it
+# opens; a single failed read of the pointer does not. Each revision of the
+# apis service and the worker is its own series, so either service tripping
+# either condition opens the incident.
+resource "google_monitoring_alert_policy" "graph_release_serving" {
+  project      = var.project_id
+  display_name = "Graph release refused or pointer recheck failing on the apis service or datasets worker"
+  combiner     = "OR"
+  enabled      = var.graph_release_enabled
+
+  depends_on = [time_sleep.graph_release_metric_propagation]
+
+  conditions {
+    display_name = "graph_release_refused logged"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.graph_release_refused.name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "120s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  conditions {
+    display_name = "graph_release_recheck_failed logged for 10 minutes"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.graph_release_recheck_failed.name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "600s"
+
+      aggregations {
+        alignment_period   = "120s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "3600s"
+  }
+}
+
+# A swap holds the serving release and the incoming one in memory together, so
+# an instance near its limit is an instance the next swap can kill. Cloud Run
+# reports memory utilisation as a distribution of per-instance fractions; the
+# p99 over 5 minutes above 0.8 catches one instance running hot. The policy
+# names both services, since the same release loads in each.
+resource "google_monitoring_alert_policy" "graph_release_memory" {
+  project      = var.project_id
+  display_name = "Apis service or datasets worker memory above 80%"
+  combiner     = "OR"
+  enabled      = var.graph_release_enabled
+
+  dynamic "conditions" {
+    for_each = local.graph_release_serving_services
+
+    content {
+      display_name = "${conditions.value} memory p99 above 80%"
+
+      condition_threshold {
+        filter          = "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${conditions.value}\" AND metric.type=\"run.googleapis.com/container/memory/utilizations\""
+        comparison      = "COMPARISON_GT"
+        threshold_value = 0.8
+        duration        = "0s"
+
+        aggregations {
+          alignment_period   = "300s"
+          per_series_aligner = "ALIGN_PERCENTILE_99"
+        }
+      }
+    }
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "3600s"
+  }
+}
+
+# A notice, not a fault: the release published and serves. Its own policy, so
+# the documentation below reaches the operator alone and its incident closes
+# on its own timer.
+resource "google_monitoring_alert_policy" "graph_release_blind_spots" {
+  project      = var.project_id
+  display_name = "Graph release published with blind spots"
+  combiner     = "OR"
+  enabled      = var.graph_release_enabled
+
+  depends_on = [time_sleep.graph_release_metric_propagation]
+
+  conditions {
+    display_name = "graph_release_published with blind spots logged"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.graph_release_blind_spots.name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period   = "120s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  documentation {
+    mime_type = "text/markdown"
+    content   = "A release published with variables outside it in its own families: serving may miss members if the origin catalogue does not list them. See deploy/graph-release.md step 6 in dfo-apis."
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "3600s"
   }
 }

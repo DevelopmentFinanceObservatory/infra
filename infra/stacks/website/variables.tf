@@ -100,6 +100,21 @@ variable "live_refresh_principal_secret_id" {
   type        = string
 }
 
+variable "caller_hmac_key_secret_id" {
+  description = "Secret Manager id of the caller HMAC key secret. Copied from the `apis` stack's `google_secret_manager_secret.caller_hmac_key.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not. See README."
+  type        = string
+}
+
+variable "caller_principal_secret_id" {
+  description = "Secret Manager id of the caller principal secret. Copied from the `apis` stack's `google_secret_manager_secret.caller_principal.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not. See README."
+  type        = string
+}
+
+variable "share_import_principal_secret_id" {
+  description = "Secret Manager id of the share import principal secret, which the share migration Job sends to dfo-apis. Copied from the `apis` stack's `google_secret_manager_secret.share_import_principal.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not. See README."
+  type        = string
+}
+
 variable "posthog_key" {
   description = "PostHog project API key (public write-only token, see README \"PostHog telemetry\") for the DFO project on PostHog Cloud EU, org-managed in the PostHog UI rather than by Terraform."
   type        = string
@@ -120,4 +135,29 @@ variable "min_instances" {
   description = "Instances Cloud Run keeps warm for the website service. 0 lets it scale to zero, and the first request after an idle spell waits for a Next.js cold start. With cpu_idle, a warm instance bills at the idle rate between requests."
   type        = number
   default     = 0
+}
+
+variable "ses" {
+  description = "The IAM role in ONE's SES account that this service assumes with its Google identity to send sign-in email through the Amazon SES API: the role's ARN, the account's region, and the ID token audience the role's trust policy requires. Null omits SES_ROLE_ARN, SES_REGION and SES_TOKEN_AUDIENCE, and the app offers no email sign-in. See README, \"Email sign-in\"."
+  type = object({
+    role_arn       = string
+    region         = string
+    token_audience = string
+  })
+  default = null
+
+  validation {
+    condition = var.ses == null ? true : (
+      can(regex("^arn:aws:iam::[0-9]{12}:role/.+$", var.ses.role_arn)) &&
+      can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]$", var.ses.region)) &&
+      can(regex("\\S", var.ses.token_audience))
+    )
+    error_message = "ses must be null or set role_arn to an IAM role ARN such as arn:aws:iam::123456789012:role/name, region to an AWS region such as us-east-1, and token_audience to a non-blank string."
+  }
+}
+
+variable "turnstile_site_key" {
+  description = "Site key of the Cloudflare Turnstile widget on the login page. The login page renders it, so it is public and passed as a plain env var. Null omits TURNSTILE_SITE_KEY, and the app offers no email sign-in. See README, \"Email sign-in\"."
+  type        = string
+  default     = null
 }

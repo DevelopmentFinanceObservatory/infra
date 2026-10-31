@@ -4,17 +4,18 @@ project_id                               = "dev-fin-observatory"
 region                                   = "northamerica-northeast1"
 namespace                                = "dfo-dev"
 cloudsql_login_role_id                   = "dfoDevAiCloudsqlLoginOnly"
+gemini_api_key_secret_id                 = "dfo-dev-gemini-api-key" # shared by every dev caller
 dfo_apis_url                             = "https://dfo-dev-apis-zms5lj4zhq-nn.a.run.app"
 apis_service_name                        = "dfo-dev-apis" # apis output service_name
 datasets_first_party_principal_secret_id = "dfo-dev-datasets-first-party-principal"
 live_refresh_principal_secret_id         = "dfo-dev-live-refresh-principal"
+caller_principal_secret_id               = "dfo-dev-caller-principal"
 presentation_public_url                  = "https://dfo-dev-website-staging-zms5lj4zhq-nn.a.run.app/mcp/presentation"
 site_origin                              = "https://dfo-dev-website-staging-zms5lj4zhq-nn.a.run.app" # website stack website_url
 platform_postgres_instance_name          = "dfo-dev-platform-postgres"
 platform_postgres_connection_name        = "dev-fin-observatory:northamerica-northeast1:dfo-dev-platform-postgres"
 platform_psc_service_attachment_uri      = "projects/fd56baf1868cc60d9p-tp/regions/northamerica-northeast1/serviceAttachments/a-bbd723248b19-psc-service-attachment-e2be3e641f3b4eba"
 platform_dns_name                        = "bbd723248b19.3niso0mm9bket.northamerica-northeast1.sql.goog"
-studio_token_readers                     = ["group:dfo-dev-studio-testers@googlegroups.com"]
 
 # Off so destroys and replaces stay unblocked.
 stateless_deletion_protection = false

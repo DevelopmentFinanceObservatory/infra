@@ -107,14 +107,24 @@ check "handoff_targets refuses an unknown environment for infra" "$(handoff_targ
 check "handoff_targets refuses an unknown stack" "$(handoff_targets dfo-dev foundation >/dev/null 2>&1 && echo false || echo true)"
 
 # 4. deploy_values for infra: the planner gets the provider and planner, the
-# applier the provider and applier, all from foundation.
-check "deploy_values infra-plan" "$(is "$(deploy_values infra-plan)" "var WIF_PROVIDER foundation workload_identity_provider
+# applier the provider and applier, all from foundation. Then the rows that
+# differ by environment.
+check "deploy_values infra-plan" "$(is "$(deploy_values infra-plan dfo-dev)" "var WIF_PROVIDER foundation workload_identity_provider
 var WIF_PLAN_SA foundation planner_service_account")"
-check "deploy_values infra-apply" "$(is "$(deploy_values infra-apply)" "var WIF_PROVIDER foundation workload_identity_provider
+check "deploy_values infra-apply" "$(is "$(deploy_values infra-apply dfo-dev)" "var WIF_PROVIDER foundation workload_identity_provider
 var WIF_APPLY_SA foundation applier_service_account")"
-check "deploy_values docs-sync" "$(is "$(deploy_values docs-sync)" "var GCP_WIF_PROVIDER foundation workload_identity_provider
+check "deploy_values docs-sync" "$(is "$(deploy_values docs-sync dfo-dev)" "var GCP_WIF_PROVIDER foundation workload_identity_provider
 var DOCSYNC_SERVICE_ACCOUNT foundation docs_sync_service_account")"
-check "deploy_values refuses infra and foundation" "$(deploy_values infra >/dev/null || deploy_values foundation >/dev/null || echo true)"
+check "deploy_values refuses infra and foundation" "$(deploy_values infra dfo-dev >/dev/null || deploy_values foundation dfo-dev >/dev/null || echo true)"
+check "deploy_values refuses an unknown or missing environment" "$(deploy_values ai dfo-nope >/dev/null || deploy_values ai >/dev/null || echo true)"
+# The prod-only rows: ai and website each differ by one row.
+check "deploy_values ai: dfo-prod adds JOB_LANGFUSE_EXPORT to dfo-dev's rows" "$(is "$(deploy_values ai dfo-prod)" "$(deploy_values ai dfo-dev)
+var JOB_LANGFUSE_EXPORT ai langfuse_export_job_name")"
+check "deploy_values website: dfo-prod adds EXPORT_JOB_WEBSITE to dfo-dev's rows" "$(is "$(deploy_values website dfo-prod)" "$(deploy_values website dfo-dev)
+var EXPORT_JOB_WEBSITE website export_job_name")"
+for stack in apis dcp infra-plan infra-apply docs-sync; do
+    check "deploy_values $stack is the same in both environments" "$(is "$(deploy_values "$stack" dfo-prod)" "$(deploy_values "$stack" dfo-dev)")"
+done
 
 # 5. The environment table: infra's contract, the service repos' deploy
 # environments with release reviewers on production, and docs' docsync.

@@ -1,0 +1,27 @@
+{
+  "dimensionHeaders": [
+    {
+      "name": "date"
+    }
+  ],
+  "metricHeaders": [
+    {
+      "name": "activeUsers",
+      "type": "TYPE_INTEGER"
+    },
+    {
+      "name": "sessions",
+      "type": "TYPE_INTEGER"
+    },
+    {
+      "name": "screenPageViews",
+      "type": "TYPE_INTEGER"
+    }
+  ],
+  "rowCount": 2,
+  "metadata": {
+    "currencyCode": "USD",
+    "timeZone": "Europe/London"
+  },
+  "kind": "analyticsData#runReport"
+}

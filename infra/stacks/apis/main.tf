@@ -1,6 +1,7 @@
 terraform {
   # 1.11 for the write-only arguments in datasets_first_party_principal.tf,
-  # datasets_pin_principal.tf, and live_refresh_principal.tf.
+  # datasets_pin_principal.tf, live_refresh_principal.tf, caller_principal.tf,
+  # caller_hmac_key.tf, and share_import_principal.tf.
   required_version = ">= 1.11"
 
   required_providers {
@@ -12,13 +13,15 @@ terraform {
     }
     random = {
       # 3.7.0 for the ephemeral random_password in
-      # datasets_first_party_principal.tf, datasets_pin_principal.tf, and
-      # live_refresh_principal.tf.
+      # datasets_first_party_principal.tf, datasets_pin_principal.tf,
+      # live_refresh_principal.tf, caller_principal.tf, caller_hmac_key.tf,
+      # and share_import_principal.tf.
       source  = "hashicorp/random"
       version = ">= 3.7.0"
     }
     time = {
-      # time_sleep in coverage.tf, closing the gap between a freshly created
+      # time_sleep in graph_release.tf, origin_catalogue.tf, search_alert.tf
+      # and search_catalogue.tf, closing the gap between a freshly created
       # log-based metric and Cloud Monitoring's own propagation of its
       # descriptor. No specific version feature needed; floored at latest.
       source  = "hashicorp/time"
@@ -32,11 +35,41 @@ provider "google" {
   region  = var.region
 }
 
-# Reuse the existing Gemini API key secret (not terraform-managed — see
-# infra/stacks/dcp/dfo.tf and infra/stacks/ai/main.tf for its other
-# consumers) rather than creating a dedicated one for this service.
+# Every Cloud Scheduler trigger in this stack depends on it: the graph
+# release, origin catalogue, search catalogue and datasets maintenance ticks.
+resource "google_project_service" "cloudscheduler" {
+  project            = var.project_id
+  service            = "cloudscheduler.googleapis.com"
+  disable_on_destroy = false
+}
+
+# Every alert policy in this stack notifies the one channel
+# var.alert_notification_channel names. The channel belongs to the telemetry
+# stack, which builds it from its principals secret, so this stack holds no
+# address. With the variable null, as in dev, the policies record incidents
+# in Cloud Monitoring and notify no one.
+data "google_monitoring_notification_channel" "alerts" {
+  count = var.alert_notification_channel == null ? 0 : 1
+
+  project      = var.project_id
+  display_name = var.alert_notification_channel
+}
+
+locals {
+  alert_notification_channels = data.google_monitoring_notification_channel.alerts[*].name
+}
+
+# The service's Gemini API key secret, created outside Terraform and only
+# referenced here. See var.gemini_api_key_secret_id.
 data "google_secret_manager_secret" "gemini" {
-  secret_id = "${var.namespace}-gemini-api-key"
+  secret_id = var.gemini_api_key_secret_id
+}
+
+# TypeSafe's API key for the Jev binder, created by hand like the Gemini key.
+# Read only when search_binder sends calls to Jev.
+data "google_secret_manager_secret" "typesafe" {
+  count     = var.search_binder == "gemini" ? 0 : 1
+  secret_id = "${var.namespace}-typesafe-api-key"
 }
 
 # The dfo-apis CI image-deployer (provisioned in ../foundation) needs actAs on
@@ -56,7 +89,7 @@ module "apis_service" {
   bootstrap_image     = "gcr.io/cloudrun/hello"
   container_port      = 8080
 
-  secret_env_vars = {
+  secret_env_vars = merge({
     # The engine warm-loads its Gemini client at startup, so a missing or
     # invalid key fails the revision immediately rather than on first request.
     GEMINI_API_KEY = { secret_id = data.google_secret_manager_secret.gemini.secret_id }
@@ -92,7 +125,43 @@ module "apis_service" {
       # same apply.
       version = google_secret_manager_secret_version.live_refresh_principal.version
     }
-  }
+
+    # Lets dfo-apis trust the x-dfo-caller header the website and dfo-ai send
+    # beside it. See caller_principal.tf.
+    DFO_CALLER_PRINCIPAL = {
+      secret_id = google_secret_manager_secret.caller_principal.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.caller_principal.version
+    }
+
+    # The key the website also mounts as CALLER_HMAC_KEY, so dfo-apis keys a
+    # caller it sees directly by the same digest the website sends in
+    # x-dfo-caller. See caller_hmac_key.tf.
+    DFO_CALLER_HMAC_KEY = {
+      secret_id = google_secret_manager_secret.caller_hmac_key.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.caller_hmac_key.version
+    }
+
+    # Authenticates the share import route the website's share migration Job
+    # calls. See share_import_principal.tf.
+    PRESENTATION_SHARE_IMPORT_PRINCIPAL = {
+      secret_id = google_secret_manager_secret.share_import_principal.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.share_import_principal.version
+    }
+    }, {
+    # Mounted only when search_binder sends calls to Jev, so a gemini
+    # environment needs no TypeSafe secret.
+    for name, secret_id in { TYPESAFE_API_KEY = one(data.google_secret_manager_secret.typesafe[*].secret_id) } :
+    name => { secret_id = secret_id } if var.search_binder != "gemini"
+  })
 
   env_vars = merge({
     # The project Cloud Logging's trace field names. dfo-apis writes JSON log
@@ -103,6 +172,10 @@ module "apis_service" {
     SEARCH_GRAPH_BASE   = var.search_graph_base
     SEARCH_ENGINE_MODEL = var.search_engine_model
     DFO_CORS_ORIGINS    = var.dfo_cors_origins
+
+    # TYPESAFE_API_KEY above is mounted whenever SEARCH_BINDER is not gemini.
+    SEARCH_BINDER          = var.search_binder
+    SEARCH_JEV_TRAFFIC_PCT = tostring(var.search_jev_traffic_pct)
 
     DATASETS_GRAPH_BASE_URL = var.datasets_graph_base_url
     DATASETS_SDMX_BASE_URL  = var.datasets_sdmx_base_url
@@ -166,13 +239,15 @@ module "apis_service" {
     PRESENTATION_STORE_INSTANCE_CONNECTION_NAME = var.platform_postgres_connection_name
     PRESENTATION_STORE_RUNTIME_DB_USER          = google_sql_user.datasets_runtime.name
 
-    # coverage.tf's bucket. Search and the mint door raise at startup when
-    # this artifact can't be loaded, so a missing or unreadable value fails
-    # the revision the same way a bad GEMINI_API_KEY does.
-    COVERAGE_ARTIFACT_URI = "gs://${google_storage_bucket.coverage.name}/"
+    # Concurrent component reads the Presentation surface runs on each
+    # instance. The website checks every data card of a canvas at once when it
+    # creates a live link, up to its LIVE_SHARE_MAX_DATA_CARDS of 20, and
+    # dfo-apis answers each read past this limit with an immediate 503. The
+    # dfo-apis default is 4.
+    PRESENTATION_COMPONENTS_MAX_CONCURRENCY = "20"
 
     # origin_catalogue.tf's bucket. The service raises at startup when no
-    # published catalogue can be loaded, as it does for the coverage artifact.
+    # published catalogue can be loaded.
     ORIGIN_CATALOGUE_URI = "gs://${google_storage_bucket.origin_catalogue.name}/"
 
     # search_catalogue.tf's bucket, which GET /api/search/catalogue serves.
@@ -272,12 +347,12 @@ resource "google_cloud_run_v2_service_iam_member" "apis_invoker" {
 }
 
 # The tag the apis service is running, read fresh on every plan and
-# apply rather than embedded as a literal. This is what coverage.tf,
+# apply rather than embedded as a literal. This is what graph_release.tf,
 # datasets_worker.tf, datasets_migrate_job.tf, and presentation_migrate_job.tf
 # bootstrap their own resources from instead of each carrying a tag of its
 # own: the deploy pipeline always builds one image per commit for the whole
 # app, so whatever tag apis is currently serving already carries
-# dataset_store, presentation_store, and series_coverage.job alike, and is
+# dataset_store, presentation_store, and graph_release.job alike, and is
 # guaranteed to still be in Artifact Registry (Cloud Run couldn't be serving
 # it otherwise). A stack that has never seen a real deploy reads this as
 # module.apis_service's own "gcr.io/cloudrun/hello" bootstrap placeholder,

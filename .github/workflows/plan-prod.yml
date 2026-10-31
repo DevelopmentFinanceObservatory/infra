@@ -39,6 +39,16 @@
 # job may declare `plan`. detect and plan check out main to ./base and the
 # merge commit to ./merge, and every script they run comes from ./base.
 #
+# Before any terraform step, the plan job runs base's
+# scripts/mask-principals.sh, which masks every address in the prod
+# `<namespace>-<stack>-principals` secrets in the job's log and lists them in
+# $RUNNER_TEMP, and base's plan-comment.js strips each listed address from the
+# step summary and the PR comment. See plan.yml's "Principal addresses". Both
+# come from main, so a release PR plans with main's copy of each, and a
+# release PR that adds them is planned without them. They reach main in a
+# release of their own, before any release that carries a stack reading a
+# `*-principals` secret.
+#
 # The plan job holds no concurrency group. It runs `-lock=false` and writes
 # nothing, and a job waiting for approval in apply-stack.yml's group would
 # risk cancelling a queued apply, or being cancelled by one.
@@ -210,10 +220,21 @@ jobs:
           persist-credentials: false
 
       - name: Authenticate to GCP (WIF)
+        id: auth
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.WIF_PLAN_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      # Before any terraform step; see the header.
+      - name: Mask principal addresses
+        env:
+          PROJECT: ${{ steps.auth.outputs.project_id }}
+        run: |
+          "$GITHUB_WORKSPACE/base/scripts/mask-principals.sh" "$PROJECT" "$RUNNER_TEMP/principal-addresses"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -267,6 +288,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           STACK: ${{ matrix.stack }}
+          PRINCIPALS_FILE: ${{ runner.temp }}/principal-addresses
           INIT_OUTCOME: ${{ steps.init.outcome }}
           VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
           PLAN_OUTCOME: ${{ steps.plan.outcome }}

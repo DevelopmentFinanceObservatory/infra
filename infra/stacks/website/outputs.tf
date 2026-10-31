@@ -1,4 +1,5 @@
-# scripts/handoff.sh reads service_name, migrate_job_name and website_url.
+# scripts/handoff.sh reads service_name, migrate_job_name, website_url and
+# share_migrate_job_name (share_migrate_job.tf).
 output "service_name" {
   description = "Cloud Run service name. dfo-website's SERVICE_WEBSITE in this environment's GitHub Environment."
   value       = module.website_service.service_name

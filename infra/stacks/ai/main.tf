@@ -21,11 +21,25 @@ provider "google" {
   region  = var.region
 }
 
-# Reuse the existing, already-created Gemini API key secret (not
-# terraform-managed — see infra/stacks/dcp/dfo.tf for the same secret's
-# other consumer) rather than creating a dedicated one for this service.
+# The studio and MCP token readers (studio_token.tf, mcp_token.tf), read from a
+# hand-made secret. The module holds the rules and this stack's schema, and
+# scripts/bootstrap-principals.sh writes it.
+module "principals" {
+  source = "../../modules/principals-secret"
+
+  project_id = var.project_id
+  namespace  = var.namespace
+  stack      = "ai"
+}
+
+locals {
+  principals = module.principals.principals
+}
+
+# The service's Gemini API key secret, created outside Terraform and only
+# referenced here. See var.gemini_api_key_secret_id.
 data "google_secret_manager_secret" "gemini" {
-  secret_id = "${var.namespace}-gemini-api-key"
+  secret_id = var.gemini_api_key_secret_id
 }
 
 # The Langfuse key pair the harness exports traces with. Like the Gemini key,
@@ -36,6 +50,15 @@ data "google_secret_manager_secret" "langfuse_public_key" {
 
 data "google_secret_manager_secret" "langfuse_secret_key" {
   secret_id = "${var.namespace}-langfuse-secret-key"
+}
+
+locals {
+  # Langfuse Cloud EU, the region the Langfuse keys above belong to.
+  langfuse_base_url = "https://cloud.langfuse.com"
+  # Tags deployed traces so they filter apart from a local harness's, which
+  # export under Langfuse's default environment. langfuse_export.tf reads
+  # this environment back.
+  langfuse_tracing_environment = "${var.namespace}-ai"
 }
 
 # The dfo-ai CI image-deployer (provisioned in ../foundation) needs actAs on the
@@ -70,6 +93,12 @@ module "ai_service" {
     # owns and pins the secret. This mount reads latest, as for the principal
     # above. See the `ai` stack README's "Live-refresh principal" section.
     LIVE_REFRESH_PRINCIPAL = { secret_id = var.live_refresh_principal_secret_id }
+    # Value analysis-mcp and presentation-mcp send as x-dfo-caller-principal
+    # beside the x-dfo-caller of an external `/mcp` client, so dfo-apis counts
+    # that client's own allowance. The `apis` stack owns and pins the secret.
+    # This mount reads latest, as for the principals above. See the `ai` stack
+    # README's "Caller principal" section.
+    DFO_CALLER_PRINCIPAL = { secret_id = var.caller_principal_secret_id }
     STUDIO_API_TOKEN = {
       secret_id = google_secret_manager_secret.studio_api_token.secret_id
       # Pinned rather than latest so warm and new instances can never disagree during a rotation; the pin moves with the version resource, rolling the service in the same apply.
@@ -92,13 +121,10 @@ module "ai_service" {
     DFO_SITE_ORIGIN = var.site_origin
     # The combined MCP server's service-wide ceiling on tool calls, one bucket
     # per instance shared by every outside caller (harness.combined_mcp).
-    COMBINED_MCP_REQUESTS_PER_S = "20"
-    COMBINED_MCP_BURST          = "60"
-    # Langfuse Cloud EU, the region the Langfuse keys above belong to.
-    LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
-    # Tags deployed traces so they filter apart from a local harness's, which
-    # export under Langfuse's default environment.
-    LANGFUSE_TRACING_ENVIRONMENT = "${var.namespace}-ai"
+    COMBINED_MCP_REQUESTS_PER_S  = "20"
+    COMBINED_MCP_BURST           = "60"
+    LANGFUSE_BASE_URL            = local.langfuse_base_url
+    LANGFUSE_TRACING_ENVIRONMENT = local.langfuse_tracing_environment
 
     # Selects the engine that answers a live studio turn: "orchestrator" is one
     # agent calling tools itself, "graph" is the workflow graph. The harness

@@ -6,7 +6,7 @@ The service is defined via the reusable `../../modules/cloud-run-service` module
 
 ## Model credentials
 
-The service reads `GOOGLE_API_KEY` from the process environment (google-adk's underlying `google-genai` client bypasses `ai`'s own settings classes for this). This stack wires that env var to the existing `dfo-dev-gemini-api-key` Secret Manager secret, the same secret the `dcp` stack's Search API already uses (`infra/dfo-dev/dcp/dfo.tf`). Terraform does not manage that secret. This stack references it through a `data "google_secret_manager_secret"` source. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
+The service reads `GOOGLE_API_KEY` from the process environment (google-adk's underlying `google-genai` client bypasses `ai`'s own settings classes for this). This stack wires that env var to the Secret Manager secret `var.gemini_api_key_secret_id` names. Dev sets `dfo-dev-gemini-api-key`, the secret the `dcp` stack also attaches to the Data Commons service as `GEMINI_API_KEY` for the DFO prototype app's Gemini-backed routes (`infra/stacks/dcp/dfo.tf`). Prod sets `dfo-prod-ai-gemini-api-key`, a key from the ai service's own AI Studio project, so the billing export attributes its Gemini spend. Terraform does not manage that secret. This stack references it through a `data "google_secret_manager_secret"` source. The runtime service account is granted `roles/secretmanager.secretAccessor` scoped to only that one secret.
 
 ## data-mcp environment
 
@@ -60,13 +60,32 @@ Three env vars carry this to the service: `SESSION_STORE_INSTANCE_CONNECTION_NAM
 
 `studio_token.tf` generates the shared bearer secret the harness's studio routes compare requests against (`harness.auth` in the `ai` repo), stores it as `dfo-dev-studio-api-token`, and mounts it on the service as `STUDIO_API_TOKEN`. Until that mount reaches a running revision, the harness accepts any non-empty bearer token and logs `STUDIO AUTH IS OPEN` at startup, on a public URL, so this is a gap being closed rather than a feature being added.
 
-This is the interim scheme: #12's settled end-state for proxy-to-harness auth is a service-to-service ID token from the website proxy, with this service coming off public access, and this secret retires when that lands. The website services get their own mount of this secret in a later PR, once the proxy code reads it; humans who call the studio routes directly are granted read on this one secret through `var.studio_token_readers` (dev lists the `dfo-dev-studio-testers@googlegroups.com` group, so membership is managed in the group), and fetch it with `just studio-token`. Rotation is bumping `studio_api_token_version`: the replacement version is created before the old one is destroyed, and the service's mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new token and warm and new instances can never disagree.
+This is the interim scheme: #12's settled end-state for proxy-to-harness auth is a service-to-service ID token from the website proxy, with this service coming off public access, and this secret retires when that lands. The website services get their own mount of this secret in a later PR, once the proxy code reads it; humans who call the studio routes directly are granted read on this one secret through the principals secret's `studio_token_readers` object (see "Principals secret" below; dev lists one group, so membership is managed in the group), and fetch it with `just studio-token`. Rotation is bumping `studio_api_token_version`: the replacement version is created before the old one is destroyed, and the service's mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new token and warm and new instances can never disagree.
 
 ## MCP API token
 
 `mcp_token.tf` generates the shared bearer secret the harness's MCP mounts (`/mcp/data`, `/mcp/analysis`, `/mcp/presentation`) compare requests against, stores it as `dfo-dev-mcp-api-token`, and mounts it on the service as `MCP_API_TOKEN`. Unset, the harness mints a random token at startup for its own in-process clients only, so this mount is what lets callers outside the process — including the out-of-repo e2e test daemon that points at this service's deployed URL — reach the MCP mounts instead of drawing a `401`. Health routes are unaffected either way. The bearer gate on the three mounts lives in the ai repository's harness, which reads this variable.
 
-Humans who call the MCP mounts directly, and whoever configures the e2e test daemon, are granted read on this one secret through `var.mcp_token_readers`. Rotation is bumping `mcp_api_token_version`: the replacement version is created before the old one is destroyed, and the service's mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new token and warm and new instances can never disagree.
+Humans who call the MCP mounts directly, and whoever configures the e2e test daemon, are granted read on this one secret through the principals secret's `mcp_token_readers` object. Rotation is bumping `mcp_api_token_version`: the replacement version is created before the old one is destroyed, and the service's mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new token and warm and new instances can never disagree.
+
+## Principals secret
+
+The studio and MCP token readers live in the Secret Manager secret `<namespace>-ai-principals` (`dfo-dev-ai-principals` here, `dfo-prod-ai-principals` in prod). Each environment needs it, and an environment with no readers of a kind holds an empty object for it. Both objects hold IAM members:
+
+```json
+{
+  "studio_token_readers": {"testers": "group:testers@example.org"},
+  "mcp_token_readers": {}
+}
+```
+
+To create the secret or change its members, write the JSON to a file outside the repository and run
+
+```sh
+scripts/bootstrap-principals.sh dev-fin-observatory dfo-dev-ai-principals principals.json
+```
+
+[`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states the rules the secret must meet, what the script does, the relabel order, and the `removed` block that moved the studio grant off member-keyed state.
 
 ## Datasets first-party principal
 
@@ -82,6 +101,12 @@ The secret is created and rotated in the `apis` stack, as `dfo-dev-live-refresh-
 
 The mount reads `latest`, so a rotation in `apis` reaches a running instance only on a new revision, which an image-only deploy or a `terraform apply` here that changes the service creates.
 
+## Caller principal
+
+`DFO_CALLER_PRINCIPAL` is the value analysis-mcp sends as `x-dfo-caller-principal` on each analysis runner call, and presentation-mcp on each card an external `/mcp` client creates or revises, beside the `x-dfo-caller` the website names that client by. `dfo-apis` then counts the client's own allowance. Unset, neither header is sent, runner calls carry no client, and every external client's cards spend the one allowance of this service's address.
+
+The secret is created and rotated in the `apis` stack, as `dfo-dev-caller-principal`. This stack reads it through `var.caller_principal_secret_id`, the same plain-value pattern as `var.live_refresh_principal_secret_id` above, and the mount reads `latest` with the same rollout caveat.
+
 ## Langfuse tracing
 
 The harness exports traces to Langfuse Cloud EU when `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` are all set. This stack mounts the first two from the existing `dfo-dev-langfuse-public-key` and `dfo-dev-langfuse-secret-key` Secret Manager secrets, which are not terraform-managed and are referenced through `data "google_secret_manager_secret"` sources like the Gemini key. `LANGFUSE_BASE_URL` is set to `https://cloud.langfuse.com`, the region the keys belong to. `LANGFUSE_TRACING_ENVIRONMENT` is set to `dfo-dev-ai`, so deployed traces filter apart from a local harness's, which export under Langfuse's default environment. The module grants the runtime service account `roles/secretmanager.secretAccessor` on each of the two secrets, in the same project as the service.
@@ -92,9 +117,19 @@ After a rollout, `curl <service-url>/status/telemetry` returns `{"telemetry": "l
 
 A rejected key pair leaves the state `langfuse`. The harness's startup credentials check logs a warning. Traces are accepted once the secret holds a valid pair and the service is rolled. They appear in the Langfuse project under the environment `dfo-dev-ai`.
 
+## Langfuse export
+
+`langfuse_export.tf` builds the Cloud Run Job `<namespace>-langfuse-export`, which runs `python -m harness.langfuse_export` from the dfo-ai image every hour and loads Langfuse observation rows into the BigQuery dataset `langfuse_export` (EU multi-region). Each run replaces one partition per UTC day, from the latest loaded day minus one through today, and an empty table backfills from 2026-10-05. The job creates its own `observations` table; Terraform owns the dataset and its grants only. The dfo-ai repo's `deploy/README.md` describes the job's settings and its `--check-day` mode.
+
+Every resource in the file has count 0 unless `var.langfuse_export_enabled` is true, which only `infra/dfo-prod/ai/env.auto.tfvars` sets, so dfo-dev creates none of it.
+
+The job runs as its own service account, which holds `roles/bigquery.jobUser` on the project, `WRITER` on the dataset through `google_bigquery_dataset_access`, and `roles/secretmanager.secretAccessor` on the two Langfuse secrets the service mounts. The dataset has no `access` blocks, since they would make its ACL authoritative and drop the grants that `google_bigquery_dataset_access` resources add here and in the telemetry stack. `LANGFUSE_EXPORT_ENVIRONMENT` is the service's `LANGFUSE_TRACING_ENVIRONMENT`, so the job reads deployed traces only.
+
+The Job bootstraps from the image the service runs and ignores later image changes. dfo-ai's deploy workflow moves it to each new image with `gcloud run jobs update`, as the deployer, which holds `roles/run.developer` on the Job and `roles/iam.serviceAccountUser` on its service account. That step runs only when the `JOB_LANGFUSE_EXPORT` variable is set in dfo-ai's GitHub Environment, which `scripts/handoff.sh` writes in dfo-prod alone (see "Handoff after `apply`"). A dedicated scheduler account holds `roles/run.invoker` on the Job alone. Executions have a 30-minute timeout, which also keeps one from overlapping the next trigger, and no retry, since the next hourly run reads the same window again.
+
 ## Handoff after `apply`
 
-`ai`'s deploy workflow reads `REGION`, `PROJECT_ID`, `AR_REPO` and `SERVICE_AI` as variables and `WIF_PROVIDER` and `WIF_SA` as secrets from its `dev` GitHub Environment. Each is an output of this stack or `foundation`, and `deploy_values` in `scripts/deploy-targets.sh` maps each name to its output.
+`ai`'s deploy workflow reads `REGION`, `PROJECT_ID`, `AR_REPO` and `SERVICE_AI` as variables and `WIF_PROVIDER` and `WIF_SA` as secrets from its `dev` GitHub Environment. Each is an output of this stack or `foundation`, and `deploy_values` in `scripts/deploy-targets.sh` maps each name to its output. In dfo-prod the `production` environment also gets `JOB_LANGFUSE_EXPORT`, from the `langfuse_export_job_name` output, which dfo-dev's state lacks because the Job does not exist there.
 
 Run **`just handoff ai`** (`scripts/handoff.sh dfo-dev ai`) after applying the `foundation` and `ai` stacks, and again after either renames a resource it hands over. It reads those outputs and sets them on `ai`'s `dev` GitHub Environment with `gh`, using your GitHub login. Nothing else sets them.
 

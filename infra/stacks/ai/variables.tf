@@ -13,6 +13,13 @@ variable "namespace" {
   type        = string
 }
 
+# Prod gives each Gemini caller its own key from its own AI Studio project, so
+# the billing export attributes spend by project. Dev shares one key.
+variable "gemini_api_key_secret_id" {
+  description = "Secret Manager id of the Gemini API key the ai service mounts as GOOGLE_API_KEY, which serves the harness and its direct genai calls, such as dfo-prod-ai-gemini-api-key. The secret is created outside Terraform and must hold a version before apply."
+  type        = string
+}
+
 variable "cloudsql_login_role_id" {
   description = "Id of this stack's project-scoped custom role for Cloud SQL IAM login without the Data API, such as dfoDevAiCloudsqlLoginOnly. See session_store.tf."
   type        = string
@@ -44,6 +51,11 @@ variable "live_refresh_principal_secret_id" {
   type        = string
 }
 
+variable "caller_principal_secret_id" {
+  description = "Secret Manager id of the caller principal secret. Copied from the `apis` stack's `google_secret_manager_secret.caller_principal.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not."
+  type        = string
+}
+
 variable "presentation_public_url" {
   description = "Public URL prefix under which presentation-mcp is reachable from a browser. It is the website's /mcp/presentation route, which forwards to this service's per-server mount. The app views resolve their theme stylesheet against it. Copied from the `website` stack's `website_url` value plus the path, a plain value so this plan never depends on that stack having applied. The service fails to start without it."
   type        = string
@@ -57,17 +69,6 @@ variable "site_origin" {
     condition     = can(regex("^https://[^/]+$", var.site_origin))
     error_message = "site_origin must start with https:// and carry no path or trailing slash."
   }
-}
-
-variable "studio_token_readers" {
-  description = "IAM members granted secretAccessor on the studio API token secret alone, the humans who call the studio routes from their own machines."
-  type        = list(string)
-}
-
-variable "mcp_token_readers" {
-  description = "IAM members granted secretAccessor on the MCP API token secret alone, the callers who reach the raw MCP tool mounts from outside the service. Empty by default: the token reaches the tools directly, below the studio routes, so each member is added as one needs that access."
-  type        = list(string)
-  default     = []
 }
 
 variable "platform_postgres_instance_name" {

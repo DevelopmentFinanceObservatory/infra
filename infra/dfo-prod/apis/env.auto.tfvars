@@ -42,3 +42,36 @@ allow_unauthenticated = true
 # Principals no stack owns, such as a developers' group. The website and ai
 # stacks grant their own runtime accounts invoker on this service.
 invoker_members = []
+
+# One Gemini key per caller, each from its own AI Studio project.
+gemini_api_key_secret_id                  = "dfo-prod-apis-gemini-api-key"
+search_catalogue_gemini_api_key_secret_id = "dfo-prod-search-catalogue-gemini-api-key"
+
+# Jev binds every query, with Gemini as its fallback.
+# The key is the hand-made dfo-prod-typesafe-api-key secret.
+search_binder = "jev"
+
+# Unpauses the graph release builder's Scheduler trigger and enables its
+# alert policies. The deployed dfo-apis image carries graph_release.job.
+graph_release_enabled = true
+
+# The builder has published in prod, so the apis service, the datasets worker,
+# the maintenance job and the search catalogue job get GRAPH_RELEASE_URI,
+# which dfo-apis needs to start.
+graph_release_serving = true
+
+# The apis service, datasets worker and search catalogue job serve the code
+# index and coverage from the release.
+graph_release_coverage = true
+
+# The origin catalogue is read from the release as well.
+graph_release_origin = true
+
+# The graph release builder starts the search catalogue job after each
+# publish and the deploy after each deploy, so no Scheduler tick or
+# heartbeat alert runs.
+search_catalogue_tick = false
+
+# The telemetry stack's email channel, built from the alerts object in
+# dfo-prod-telemetry-principals. Every apis alert policy notifies it.
+alert_notification_channel = "Telemetry pipeline alerts: team"

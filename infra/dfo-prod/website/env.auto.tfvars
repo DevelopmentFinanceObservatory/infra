@@ -11,6 +11,9 @@ platform_postgres_instance_name   = "dfo-prod-platform-postgres"                
 platform_postgres_connection_name = "prod-fin-observatory:europe-west1:dfo-prod-platform-postgres" # platform output connection_name
 datasets_pin_principal_secret_id  = "dfo-prod-datasets-pin-principal"
 live_refresh_principal_secret_id  = "dfo-prod-live-refresh-principal"
+caller_principal_secret_id        = "dfo-prod-caller-principal"
+share_import_principal_secret_id  = "dfo-prod-share-import-principal"
+caller_hmac_key_secret_id         = "dfo-prod-caller-hmac-key"
 # One PostHog project serves every environment; events carry an environment property.
 posthog_key = "phc_nNtsVfPvZAKPJ5JagTFzvGsndUddT3PNXguGQsMCnSAt"
 
@@ -41,3 +44,18 @@ stateless_deletion_protection = true
 # One warm instance, so no visitor waits for a cold start. cpu_idle bills it
 # at the idle rate between requests.
 min_instances = 1
+
+# The role in ONE's SES account that sends sign-in email. It trusts only
+# dfo-prod-website-run, and only with this token audience.
+ses = {
+  role_arn       = "arn:aws:iam::961128127831:role/development-finance-observatory-ses-sender-production"
+  region         = "us-east-1"
+  token_audience = "development-finance-observatory-production"
+}
+
+# Cloudflare Turnstile widget "DFO website production" in the ONE Campaign
+# account, for developmentfinance.org. Public: the login page renders it.
+turnstile_site_key = "0x4AAAAAAFiLPXQeqPLKYQs9"
+
+# The event export dataset, ID hashing key, Job and hourly trigger (event_export.tf).
+event_export_enabled = true

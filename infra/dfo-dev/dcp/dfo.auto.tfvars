@@ -12,6 +12,10 @@ project_id = "dev-fin-observatory"
 namespace  = "dfo-dev"
 region     = "northamerica-northeast1"
 
+# The Gemini key the DFO prototype app reads (dfo.tf).
+# Dev shares one Gemini key across callers.
+search_api_gemini_api_key_secret_id = "dfo-dev-gemini-api-key"
+
 # Deletion protection for stateful resources holding persistent data. In the
 # upstream module this maps to the Spanner *database* deletion_protection and
 # the artifacts-bucket force_destroy — it does NOT cover the Spanner instance,
@@ -60,18 +64,21 @@ spanner_create_instance = true
 # spanner_instance_id     = "existing-spanner-instance"
 
 # Compute capacity (1000 = 1 node). Online-adjustable with no downtime.
-# One node gives concurrent ingestion writes room and is the minimum the Spanner
-# managed autoscaler accepts, so it is also the entry point for an autoscaling_config.
-spanner_processing_units = 1000
+# Dev idles at 100 to save cost. Raise it to 1000 by hand for an ingestion and
+# lower it afterwards; any dcp apply, including an image pin, resets it to 100.
+spanner_processing_units = 100
 
 # =============================================================================
 # Datacommons Services Module
 # =============================================================================
-# Controls whether the Data Commons API and frontend services are publicly accessible.
-# Set to true to allow unauthenticated public internet traffic to access the service.
-# Set to false (default) to check for access permissions. For more information, see the
-# Data Commons documentation.
-datacommons_services_allow_unauthenticated_access = true
+# Only our own identities may call the service: the apis stack grants
+# roles/run.invoker to each caller (infra/stacks/apis/dcp_access.tf, and
+# the eval reader in infra/dfo-dev/apis/eval_reader.tf), and the callers
+# send a Google ID token in X-Serverless-Authorization. Browsers cannot,
+# so the Data Commons web UI and /prototype are not public. DCP still
+# creates its Maps key: the services image exits at start without
+# MAPS_API_KEY, and with no public page the key is never served.
+datacommons_services_allow_unauthenticated_access = false
 
 # One instance stays warm because a cold start on this service is
 # user-visible. max_instances = 1 caps it at exactly one instance. The

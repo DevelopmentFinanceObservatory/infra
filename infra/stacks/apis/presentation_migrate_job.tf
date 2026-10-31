@@ -35,8 +35,8 @@ variable "presentation_migrator_db_user" {
 # the freshly created Job sees before the pipeline has moved it.
 # local.live_apis_image (main.tf) always satisfies this: the deploy pipeline
 # builds one image per commit for the whole app, and presentation_store has
-# been part of that image since before this stack's own datasets_worker and
-# coverage resources existed.
+# been part of that image since before this stack's own datasets_worker
+# resources existed.
 variable "presentation_migrate_bootstrap_image" {
   description = "Overrides the image the migration Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, the tag the apis service is currently running — always a real dfo-apis image that carries presentation_store."
   type        = string

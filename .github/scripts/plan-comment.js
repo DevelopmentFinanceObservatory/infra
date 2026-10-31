@@ -2,8 +2,11 @@
 // write the full init, validate and plan output to the job summary. Called
 // from the "Comment plan on PR" step of .github/workflows/plan.yml and
 // .github/workflows/plan-prod.yml through actions/github-script, which
-// passes github, context and core. The step's env carries STACK and each
-// step's outcome and output.
+// passes github, context and core. The step's env carries STACK, each
+// step's outcome and output, and PRINCIPALS_FILE, the principal addresses
+// that redact-principals.js strips from the output before anything is posted.
+const redactor = require("./redact-principals.js");
+
 module.exports = async ({ github, context, core }) => {
   const stack = process.env.STACK;
   const marker = `<!-- tf-plan:${stack} -->`;
@@ -25,12 +28,15 @@ module.exports = async ({ github, context, core }) => {
   const validateOutcome = process.env.VALIDATE_OUTCOME || "skipped";
   const planOutcome = process.env.PLAN_OUTCOME || "skipped";
   const guardOutcome = process.env.GUARD_OUTCOME || "skipped";
-  const initStdout = process.env.INIT_STDOUT || "";
-  const initStderr = process.env.INIT_STDERR || "";
-  const validateStdout = process.env.VALIDATE_STDOUT || "";
-  const validateStderr = process.env.VALIDATE_STDERR || "";
-  const planStdout = process.env.PLAN_STDOUT || "";
-  const planStderr = process.env.PLAN_STDERR || "";
+  // Redacted here, at the read, so neither the summary nor the comment can
+  // see an address.
+  const redact = redactor(process.env.PRINCIPALS_FILE);
+  const initStdout = redact(process.env.INIT_STDOUT || "");
+  const initStderr = redact(process.env.INIT_STDERR || "");
+  const validateStdout = redact(process.env.VALIDATE_STDOUT || "");
+  const validateStderr = redact(process.env.VALIDATE_STDERR || "");
+  const planStdout = redact(process.env.PLAN_STDOUT || "");
+  const planStderr = redact(process.env.PLAN_STDERR || "");
 
   const initText = [initStdout, initStderr].filter(Boolean).join("\n").trim();
   const validateText = [validateStdout, validateStderr].filter(Boolean).join("\n").trim();

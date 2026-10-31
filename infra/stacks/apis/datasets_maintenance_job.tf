@@ -75,11 +75,38 @@ resource "google_cloud_run_v2_job" "datasets_maintenance" {
           value = google_sql_user.datasets_runtime.name
         }
 
+        # The Presentation store connection main.tf gives the service:
+        # normalise-recipes and take-down-share read and write that store.
+        # The same instance and the same runtime Postgres role, which the
+        # Job already logs in as because it runs as the apis runtime
+        # identity, so no further grant.
+        env {
+          name  = "PRESENTATION_STORE_INSTANCE_CONNECTION_NAME"
+          value = var.platform_postgres_connection_name
+        }
+
+        env {
+          name  = "PRESENTATION_STORE_RUNTIME_DB_USER"
+          value = google_sql_user.datasets_runtime.name
+        }
+
         # The deadline age-operations judges an abandoned operation by, the
         # value the apis service and the worker read.
         env {
           name  = "DATASETS_OPERATION_DEADLINE_SECONDS"
           value = tostring(local.datasets_operation_deadline_seconds)
+        }
+
+        # The graph release main.tf mounts, under the same switch:
+        # backfill-descriptions opens it, as the service does at startup. The
+        # apis runtime identity reads the bucket through
+        # graph_release_apis_runtime_viewer.
+        dynamic "env" {
+          for_each = var.graph_release_serving ? [1] : []
+          content {
+            name  = "GRAPH_RELEASE_URI"
+            value = "gs://${google_storage_bucket.graph_release.name}/"
+          }
         }
       }
 
@@ -173,7 +200,7 @@ locals {
 }
 
 # Cloud Run Admin API's run call with a container args override, the same
-# oauth_token target coverage.tf uses.
+# oauth_token target graph_release.tf uses.
 resource "google_cloud_scheduler_job" "datasets_maintenance" {
   for_each = local.datasets_maintenance_schedules
 

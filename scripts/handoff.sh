@@ -102,7 +102,9 @@ gh auth status >/dev/null 2>&1 || { echo "Not logged in to GitHub. Run 'gh auth 
 # Read one infra-derived value from a stack's Terraform state, failing loudly
 # if the stack hasn't been applied (or init'd) yet. `output -json NAME` exits 1
 # with nothing on stdout for a state with no outputs, where `output -raw` exits
-# 0 and prints a "No outputs found" warning to stdout.
+# 0 and prints a "No outputs found" warning to stdout. Terraform stores no
+# null output, so an output whose resource is off in this environment is
+# missing too. deploy_values lists such rows only where the resource exists.
 read_output() {
     local dir="$1" name="$2" val
     # stdin is closed so terraform cannot consume the table the caller's loop reads.
@@ -125,7 +127,7 @@ repos=() envs=() kinds=() names=() vals=()
 checked=""
 while read -r repo env branch values_key; do
     [ -z "$repo" ] && continue
-    values="$(deploy_values "$values_key")" || {
+    values="$(deploy_values "$values_key" "$dfo_env")" || {
         echo "ERROR: deploy_values lists nothing for $values_key." >&2
         exit 1
     }
