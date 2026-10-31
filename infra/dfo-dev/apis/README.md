@@ -94,31 +94,28 @@ The Skills surface reads the same graph the Search surface reads, through Search
 
 Cloud Run IAM is the service's only identity boundary. Each `roles/run.invoker` grant on the service sits in the stack that owns the identity it names:
 
-- `allow_unauthenticated`, set in this stack's `env.auto.tfvars`, grants it to `allUsers`. It is `true` in dfo-dev and dfo-prod, so the service accepts anonymous requests, including dataset creation and registration.
-- `invoker_members`, set in the same file, grants it to each listed identity. It holds principals no stack owns, such as a group of developers, and is empty in both environments.
+- `allow_unauthenticated`, set in this stack's `env.auto.tfvars`, grants it to `allUsers`. It is `false` in dfo-dev, which refuses anonymous callers, and `true` in dfo-prod, whose service accepts anonymous requests, including dataset creation and registration.
+- `invoker_members`, set in the same file, grants it to each listed identity. It holds principals no stack owns and is empty in both environments.
 - The `website` and `ai` stacks grant it to their own runtime service accounts, as `google_cloud_run_v2_service_iam_member.website_apis_invoker` in `infra/stacks/website/main.tf` and `google_cloud_run_v2_service_iam_member.ai_apis_invoker` in `infra/stacks/ai/main.tf`. Each names this service through its `apis_service_name` variable, copied from this stack's `service_name` output. `apply.yml` applies this stack first, so the service exists before either grant, and this stack names no account another stack creates.
 - In dfo-dev, `eval_reader.tf` grants it to `dfo-dev-apis-eval-reader` and `sdk_e2e.tf` to `dfo-dev-sdk-e2e`, each by resource reference. The first serves the apis repository's eval jobs. The second serves the sdk repository's end-to-end workflow, and only a run on that repository's `refs/heads/main` can mint it, matched on `attribute.repo_ref`. The sdk repository has an entry in the `foundation` stack's `github_repositories` so the shared pool admits its tokens, and `dfo_sdk_repository_id` here copies that entry's id.
 
-A caller authenticates with a Google ID token minted as one of those identities, with the service URL it calls as the audience (origin only, no path), sent as `X-Serverless-Authorization: Bearer <token>`. Cloud Run checks that header in preference to `Authorization` and strips the signature before the container sees it, so it never collides with the `Authorization` header the website proxy passes through or the ai bearer. While `allow_unauthenticated` is `true`, a request with a token in either header, valid or not, still gets a 200.
+A caller authenticates with a Google ID token minted as one of those identities, with the service URL it calls as the audience (origin only, no path), sent as `X-Serverless-Authorization: Bearer <token>`. Cloud Run checks that header in preference to `Authorization` and strips the signature before the container sees it, so it never collides with the `Authorization` header the website proxy passes through or the ai bearer. In dfo-prod, where `allow_unauthenticated` is `true`, a request with a token in either header, valid or not, still gets a 200.
 
 Publish, pin and the refresh routes also compare an `x-dfo-principal` value (the three principal sections below), so a direct caller needs that value as well. Public users keep anonymous dataset creation through the website's `/api/v1/datasets` proxy, which the edge rate-limits in prod. `DFO_CORS_ORIGINS` applies platform-wide, so an origin allowlisted for Search also reaches the write doors.
 
 The Data Commons service is a second service callers reach. `dcp_access.tf` grants `roles/run.invoker` on it to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs. In dfo-dev, `eval_reader.tf` grants it to `dfo-dev-apis-eval-reader`. Neither environment's DC service grants `allUsers`, so a caller without one of these grants gets 403.
 
-The flip to `allow_unauthenticated = false` runs in stages:
+The website and ai services mint tokens from the metadata server as their runtime accounts. In dfo-dev the apis repository's eval jobs mint them as `dfo-dev-apis-eval-reader` from the workflow's WIF credentials, and the sdk repository's end-to-end workflow mints them as `dfo-dev-sdk-e2e`. The Data Commons prototype calls the website's proxy and holds no grant on this service.
 
-1. The callers send tokens: the website and ai services mint them from the metadata server as their runtime accounts, and the apis repository's eval jobs mint them as `dfo-dev-apis-eval-reader` from the workflow's WIF credentials, and the sdk repository's end-to-end workflow mints them as `dfo-dev-sdk-e2e`. The Data Commons prototype calls the website's proxy, not this service, and holds no grant.
-2. The apis service logs, per request, whether a Cloud Run token arrived and its unverified `email` and `aud`, with the user agent. Before each flip, 48 hours of that environment's logs must show no request from the website, ai or CI user agents that carries no token or an `email` that holds no invoker grant.
-3. dfo-dev sets `allow_unauthenticated = false`, and developers reach the service through a group added to `invoker_members`. IAM rejects a member that does not exist, so the group is created first.
-4. dfo-prod sets `allow_unauthenticated = false` once the callers run in prod and the prod logs pass the same check.
+dfo-prod keeps `allow_unauthenticated = true` until its logs pass a check. The apis service logs each request as `dfo_platform.request` with `caller_token_present`, the unverified `email` and `aud` of the token, and the user agent. Before dfo-prod sets the flag to `false`, 48 hours of its logs must show no request from the website, ai or CI user agents that carries no token or an `email` that holds no invoker grant.
 
-With the flag off, a developer in the invokers group reaches the service through a local proxy that attaches their own token, and points local base URLs at `http://localhost:8083`:
+A developer reaches dfo-dev through a local proxy that attaches their own token, with a project role that carries `run.routes.invoke`, such as `roles/editor`, and points local base URLs at `http://localhost:8083`:
 
 ```bash
 gcloud run services proxy dfo-dev-apis --region northamerica-northeast1 --project dev-fin-observatory --port 8083
 ```
 
-If a flip cuts off a caller, restore public access by hand:
+If `allow_unauthenticated = false` cuts off a caller, restore public access by hand:
 
 ```bash
 gcloud run services add-iam-policy-binding dfo-dev-apis --region northamerica-northeast1 --project dev-fin-observatory --member=allUsers --role=roles/run.invoker
@@ -134,7 +131,7 @@ Prod uses `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-obser
 
 `datasets_first_party_principal.tf` generates the shared bearer value the Datasets publish door compares the `x-dfo-principal` header against (`datasets_api.doors.publish`), stores it as `dfo-dev-datasets-first-party-principal`, and mounts it on this service as `DATASETS_FIRST_PARTY_PRINCIPAL`. Unset, the door reads an empty allowlist and refuses every caller regardless of header, so this mount is what lets presentation-mcp's publish call succeed instead of drawing a `403 publish_not_permitted`. The pin door reads a separate value — see "Datasets pin principal" below.
 
-This value is a second check behind Cloud Run IAM. While `allow_unauthenticated` is true, an internet caller who learns it can send it on the same header and reach publish; with it false, only a caller holding an invoker grant can. See "Caller authentication" above.
+This value is a second check behind Cloud Run IAM. In dfo-prod, while `allow_unauthenticated` is true, an internet caller who learns it can send it on the same header and reach publish; in dfo-dev only a caller holding an invoker grant can. See "Caller authentication" above.
 
 Humans who need to read the value directly are granted read on this one secret through `var.datasets_first_party_principal_readers`; empty by default, since the `apis` and `ai` services carry it between themselves through their own `secret_env_vars` grants and no human needs it yet. Rotation is bumping `datasets_first_party_principal_version` in `datasets_first_party_principal.tf`: the replacement version is created before the old one is destroyed, and this stack's own mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new value here. The `ai` stack's mount reads `latest` instead (see that stack's README), so rotating here deletes the old version once the new one exists, but does not by itself reach that stack's running instances — they keep whatever value they read at startup until that stack's own next apply and rollout rolls a new revision.
 
@@ -144,7 +141,7 @@ Humans who need to read the value directly are granted read on this one secret t
 
 Its only consumer is `dfo-dev-website-staging` (the `website` stack), which sends this value server-side on its own pin call when a visitor creates a share; see that stack's README for how `DFO_PRINCIPAL` reaches it and the exposure that follows from the website's own `allow_unauthenticated` setting.
 
-This value carries the same caveat as the publish principal above: while `allow_unauthenticated` is true, an internet caller who learns it reaches pin.
+This value carries the same caveat as the publish principal above: in dfo-prod, while `allow_unauthenticated` is true, an internet caller who learns it reaches pin.
 
 Humans who need to read the value directly are granted read on this one secret through `var.datasets_pin_principal_readers`; empty by default. Rotation is bumping `datasets_pin_principal_version` in `datasets_pin_principal.tf`: the replacement version is created before the old one is destroyed, and this stack's own mount pins the version number rather than `latest`, so the same apply rolls a revision onto the new value here. The `website` stack's mount reads `latest` instead, since it does not own the version resource; see that stack's README for what rolling a new website revision after a rotation requires.
 
@@ -154,7 +151,7 @@ Humans who need to read the value directly are granted read on this one secret t
 
 Its consumers are `dfo-dev-ai` (the `ai` stack, where it gates `POST /api/studio/refresh`) and `dfo-dev-website-staging` (the `website` stack, which sends it server-side on the refresh and render calls); see those stacks' READMEs. Apply this stack first. The other two read the secret by id, and a revision that mounts a missing secret fails to start.
 
-This value carries the same caveat as the principals above: while `allow_unauthenticated` is true, an internet caller who learns it reaches the refresh routes.
+This value carries the same caveat as the principals above: in dfo-prod, while `allow_unauthenticated` is true, an internet caller who learns it reaches the refresh routes.
 
 Humans who need to read the value directly are granted read on this one secret through `var.live_refresh_principal_readers`; empty by default. Rotation is a bump of `live_refresh_principal_version` in `live_refresh_principal.tf`. The replacement version is created before the old one is destroyed, and this stack's own mount pins the version number, so the same apply rolls a revision onto the new value here. The `ai` and `website` stacks' mounts read `latest`, since they do not own the version resource. Their READMEs say what rolling a new revision after a rotation requires.
 
@@ -162,7 +159,7 @@ Humans who need to read the value directly are granted read on this one secret t
 
 `caller_principal.tf` generates the shared value that lets this service trust the `x-dfo-caller` header. The website and `dfo-dev-ai` send it as `x-dfo-caller-principal` beside that header, and `dfo_platform.caller.resolve_caller` names the caller by `x-dfo-caller` only when the two match, so the pin door and the per-caller allowances count each website visitor or `/mcp` client on its own. It stores the value as `dfo-dev-caller-principal` and mounts it on this service as `DFO_CALLER_PRINCIPAL`. Unset or empty, the service trusts no `x-dfo-caller` header. It is distinct from the three principals above, because it grants no route by itself, only trust in a caller name, and the allowlists rotate independently.
 
-Its consumers are `dfo-dev-ai` and `dfo-dev-website-staging`, which mount it as `DFO_CALLER_PRINCIPAL`; see those stacks' READMEs. Apply this stack first, for the reason the live-refresh principal gives. While `allow_unauthenticated` is true, an internet caller who learns the value can name itself as any visitor and spend that visitor's allowances.
+Its consumers are `dfo-dev-ai` and `dfo-dev-website-staging`, which mount it as `DFO_CALLER_PRINCIPAL`; see those stacks' READMEs. Apply this stack first, for the reason the live-refresh principal gives. In dfo-prod, while `allow_unauthenticated` is true, an internet caller who learns the value can name itself as any visitor and spend that visitor's allowances.
 
 Readers, rotation and the `latest` mounts in `ai` and `website` work as for the live-refresh principal, through `var.caller_principal_readers` and a bump of `caller_principal_version` in `caller_principal.tf`.
 
@@ -178,7 +175,7 @@ Rotation changes every visitor's caller id the same way. Bump `caller_hmac_key_v
 
 `share_import_principal.tf` generates the shared bearer value that gates `PUT /api/presentation/shares/{share_id}/import`, which compares the `x-dfo-principal` header against it. It stores the value as `dfo-dev-share-import-principal` and mounts it on this service as `PRESENTATION_SHARE_IMPORT_PRINCIPAL`, pinned to its version. Unset or empty, the route refuses every caller. It is distinct from every other principal here, because the route creates shares under ids and creation times the caller chooses and spends no allowance.
 
-Its only consumer is the `website` stack's share migration Job, `dfo-dev-website-staging-share-migrate`, which reads it as `PRESENTATION_SHARE_IMPORT_PRINCIPAL` through `var.share_import_principal_secret_id`; see that stack's README. Apply this stack first, since the website stack grants the Job read on the secret. While `allow_unauthenticated` is true, an internet caller who learns the value can create shares. No human reader grant exists. Rotation is a bump of `share_import_principal_version` in `share_import_principal.tf`.
+Its only consumer is the `website` stack's share migration Job, `dfo-dev-website-staging-share-migrate`, which reads it as `PRESENTATION_SHARE_IMPORT_PRINCIPAL` through `var.share_import_principal_secret_id`; see that stack's README. Apply this stack first, since the website stack grants the Job read on the secret. In dfo-prod, while `allow_unauthenticated` is true, an internet caller who learns the value can create shares. No human reader grant exists. Rotation is a bump of `share_import_principal_version` in `share_import_principal.tf`.
 
 The route, this secret and the website Job are removed once prod's shares are migrated.
 
