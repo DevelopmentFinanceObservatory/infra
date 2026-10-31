@@ -40,11 +40,7 @@ spanner_processing_units = 1000
 # =============================================================================
 # Datacommons Services Module
 # =============================================================================
-# Only our own identities may call the service: the apis stack grants
-# roles/run.invoker to each caller (infra/stacks/apis/dcp_access.tf), and the
-# callers send a Google ID token in X-Serverless-Authorization. Browsers
-# cannot, so the Data Commons web UI and /prototype are not public. The Maps
-# key stays: the services image exits at start without MAPS_API_KEY.
+# infra/dfo-dev/dcp/dfo.auto.tfvars explains this value.
 datacommons_services_allow_unauthenticated_access = false
 datacommons_services_min_instances                = 1
 datacommons_services_max_instances                = 2
