@@ -2,8 +2,11 @@
 # It runs the same image as the service with the entrypoint
 # `datasets-maintenance`, and each execution names one task in its args:
 #
-#   sweep           read-only reconciliation of both artifact tiers against
-#                   the artifact inventory, logging counts per tier
+#   sweep           reconciles both artifact tiers against the artifact
+#                   inventory, logging counts per tier, and settles expired
+#                   export claims; the reconciliation only reads
+#   sweep-export-claims
+#                   settles expired export claims; runs every five minutes
 #   age-operations  fails abandoned rows of datasets.operation, then
 #                   deletes done and failed rows older than the advertised
 #                   retention of 30 days
@@ -30,9 +33,9 @@ resource "google_cloud_run_v2_job" "datasets_maintenance" {
     template {
       service_account = module.apis_service.runtime_service_account_email
 
-      # Every task is safe to run again (the sweep only reads, age-operations
-      # fails abandoned rows and deletes by age, and the backfill only adds
-      # objects and links), and
+      # Every task is safe to run again (the sweep settles expired export
+      # claims and otherwise only reads, age-operations fails abandoned rows
+      # and deletes by age, and the backfill only adds objects and links), and
       # the next daily trigger covers a failed scheduled run, so a failed
       # task waits for that run or an operator.
       max_retries = 0
@@ -95,6 +98,28 @@ resource "google_cloud_run_v2_job" "datasets_maintenance" {
         env {
           name  = "DATASETS_OPERATION_DEADLINE_SECONDS"
           value = tostring(local.datasets_operation_deadline_seconds)
+        }
+
+        # The graph and catalogue endpoints the worker reads (datasets_worker.tf),
+        # which tasks that re-probe members, such as backfill-warnings, call.
+        env {
+          name  = "DATASETS_GRAPH_BASE_URL"
+          value = var.datasets_graph_base_url
+        }
+
+        env {
+          name  = "DATASETS_SDMX_BASE_URL"
+          value = var.datasets_sdmx_base_url
+        }
+
+        env {
+          name  = "UN_GRAPH_BASE_URL"
+          value = var.un_graph_base_url
+        }
+
+        env {
+          name  = "ORIGIN_CATALOGUE_URI"
+          value = "gs://${google_storage_bucket.origin_catalogue.name}/"
         }
 
         # The graph release main.tf mounts, under the same switch:
@@ -191,11 +216,13 @@ resource "google_cloud_run_v2_job_iam_member" "datasets_maintenance_scheduler_ex
 }
 
 locals {
-  # Daily, half an hour apart so the two tasks never share the database
-  # connection budget. Each name is the task passed to `datasets-maintenance`.
+  # Daily, half an hour apart so the two daily tasks never share the database
+  # connection budget, plus the export claim sweep every five minutes. Each
+  # name is the task passed to `datasets-maintenance`.
   datasets_maintenance_schedules = {
-    sweep          = "0 3 * * *"
-    age-operations = "30 3 * * *"
+    sweep               = "0 3 * * *"
+    age-operations      = "30 3 * * *"
+    sweep-export-claims = "*/5 * * * *"
   }
 }
 
