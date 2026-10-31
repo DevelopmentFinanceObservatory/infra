@@ -35,8 +35,10 @@ stateless_deletion_protection = true
 # at once. cpu_idle bills it at the idle rate between operations.
 datasets_worker_min_instances = 1
 
-# The run.app URL refuses anonymous callers. Each caller sends an ID token
-# minted as an identity holding run.invoker; see "Caller authentication" in
+# The run.app URL refuses anonymous callers. A caller reaches it with an ID
+# token minted as an identity holding roles/run.invoker on the service, or with
+# a person's own token through `gcloud run services proxy` under a project
+# role that carries run.routes.invoke. See "Caller authentication" in
 # infra/dfo-dev/apis/README.md.
 allow_unauthenticated = false
 # Principals no stack owns. The website and ai stacks grant their own runtime
