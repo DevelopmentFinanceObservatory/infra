@@ -8,9 +8,9 @@
 # The apis service logs `Engine infrastructure error: <cause>` at ERROR for
 # every EngineInfraError a search route raises, such as Gemini rejecting the
 # key or the graph answering 500. The streaming resolve writes it on logger
-# search.engine.app; the JSON routes write it on dfo_platform.app, prefixed
-# `search: `. Cloud Run parses the service's JSON log lines, so the message
-# lands in jsonPayload, and the unanchored match counts both forms.
+# search.engine.app. The JSON routes write it on dfo_platform.app, prefixed
+# `search: `. Cloud Run parses the service's JSON log lines, so the logger
+# name and message land in jsonPayload, and the filter matches both forms.
 resource "google_logging_metric" "search_engine_infra_error" {
   name    = "${var.namespace}-search-engine-infra-error"
   project = var.project_id
@@ -19,7 +19,8 @@ resource "google_logging_metric" "search_engine_infra_error" {
     resource.labels.service_name="${module.apis_service.service_name}"
     resource.labels.location="${var.region}"
     severity=ERROR
-    jsonPayload.message=~"Engine infrastructure error:"
+    jsonPayload.logger=("search.engine.app" OR "dfo_platform.app")
+    jsonPayload.message=~"^(search: )?Engine infrastructure error:"
   EOT
 
   metric_descriptor {
