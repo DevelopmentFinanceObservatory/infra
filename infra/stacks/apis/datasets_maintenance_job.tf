@@ -100,8 +100,11 @@ resource "google_cloud_run_v2_job" "datasets_maintenance" {
           value = tostring(local.datasets_operation_deadline_seconds)
         }
 
-        # The graph and catalogue endpoints the worker reads (datasets_worker.tf),
-        # which tasks that re-probe members, such as backfill-warnings, call.
+        # What a task that re-probes dataset members reads: the graph, the
+        # SDMX endpoint, the UN System Data Commons and the origin catalogue,
+        # with the values the apis service (main.tf) and the datasets worker
+        # (datasets_worker.tf) read. DATASETS_GRAPH_TOKEN stays unset, as on
+        # both: the graph serves reads anonymously.
         env {
           name  = "DATASETS_GRAPH_BASE_URL"
           value = var.datasets_graph_base_url

@@ -35,12 +35,14 @@ stateless_deletion_protection = true
 # at once. cpu_idle bills it at the idle rate between operations.
 datasets_worker_min_instances = 1
 
-# True keeps the run.app URL open to anonymous callers. It turns false once
-# the apis request logs show every caller sending an ID token; see "Caller
-# authentication" in infra/dfo-dev/apis/README.md.
-allow_unauthenticated = true
-# Principals no stack owns, such as a developers' group. The website and ai
-# stacks grant their own runtime accounts invoker on this service.
+# The run.app URL refuses anonymous callers. A caller reaches it with an ID
+# token minted as an identity holding roles/run.invoker on the service, or with
+# a person's own token through `gcloud run services proxy` under a project
+# role that carries run.routes.invoke. See "Caller authentication" in
+# infra/dfo-dev/apis/README.md.
+allow_unauthenticated = false
+# Principals no stack owns. The website and ai stacks grant their own runtime
+# accounts invoker on this service.
 invoker_members = []
 
 # One Gemini key per caller, each from its own AI Studio project.

@@ -25,6 +25,24 @@ It also creates `dfo-prod-share-import-principal`, which the `website` stack's s
 
 Every alert policy in the stack notifies `Telemetry pipeline alerts: team`, the email channel the telemetry stack builds from the `alerts` object in `dfo-prod-telemetry-principals`. `env.auto.tfvars` names it in `alert_notification_channel`, so the telemetry stack must apply first and the addresses stay in its secret. `search_alert.tf`'s policy, `Search failing on the apis service`, opens when `dfo-prod-apis` logs three or more engine infrastructure errors, or answers three or more 5xx on `/api/search/resolve`, in 5 minutes. "Alert notifications" and "Search failure alert" in `infra/dfo-dev/apis/README.md` describe the lookup, both signals and the thresholds.
 
+## Client-call metric
+
+`client_calls.tf` declares `dfo-prod-client-calls`, the same log-based metric as dev's. `infra/dfo-dev/apis/README.md` describes it.
+
 ## Caller authentication
 
-`env.auto.tfvars` sets `allow_unauthenticated = true` and an empty `invoker_members`. The prod `website` and `ai` stacks grant their own runtime service accounts `roles/run.invoker` on `dfo-prod-apis`. Prod has no eval reader. `dcp_access.tf` grants `roles/run.invoker` on `dfo-prod-dc-datacommons-service` to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs, and the DC service grants no `allUsers`. "Caller authentication" in `infra/dfo-dev/apis/README.md` describes the token each caller sends, the staged flip to `allow_unauthenticated = false`, and the break-glass command, which here names `dfo-prod-apis`, `--region europe-west1` and `--project prod-fin-observatory`.
+`env.auto.tfvars` sets `allow_unauthenticated = false` and an empty `invoker_members`, so the service refuses anonymous callers. The prod `website` and `ai` stacks grant their own runtime service accounts `roles/run.invoker` on `dfo-prod-apis`. Prod has no eval reader. `dcp_access.tf` grants `roles/run.invoker` on `dfo-prod-dc-datacommons-service` to the apis runtime account, the datasets worker, and the origin catalogue, graph release and search catalogue jobs, and `infra/dfo-prod/dcp/dfo.auto.tfvars` sets `datacommons_services_allow_unauthenticated_access = false`, so the Data Commons service is private. "Caller authentication" in `infra/dfo-dev/apis/README.md` describes the token each caller sends and how to add a caller. A person reaches the service through a local proxy that attaches their own token, which needs a project role that carries `run.routes.invoke`. In prod, `roles/editor` is held only by service accounts, so only `roles/owner` holders reach the service this way. A person who needs access otherwise needs a grant, which belongs in a principals secret, not a committed address.
+
+The proxy command:
+
+```bash
+gcloud run services proxy dfo-prod-apis --region europe-west1 --project prod-fin-observatory --port 8083
+```
+
+If `allow_unauthenticated = false` cuts off a caller, restore public access by hand:
+
+```bash
+gcloud run services add-iam-policy-binding dfo-prod-apis --region europe-west1 --project prod-fin-observatory --member=allUsers --role=roles/run.invoker
+```
+
+The stack's IAM grants are additive `google_cloud_run_v2_service_iam_member` resources, so the next apply neither removes the manual binding nor reports it, and Terraform cannot see an `allUsers` binding made by hand. Remove it with `remove-iam-policy-binding` and the same arguments once the caller is fixed. The removal takes about two minutes to take effect. Setting `allow_unauthenticated = true` in `env.auto.tfvars` instead makes Terraform own the binding.

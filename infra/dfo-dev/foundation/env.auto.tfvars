@@ -12,6 +12,9 @@ github_repositories = {
   dcp     = { name = "dcp", id = "1431071058", deploy_environment = "dev", deploy_branch = "dev" }
   website = { name = "website", id = "1401633828", deploy_environment = "dev", deploy_branch = "dev" }
   docs    = { name = "docs", id = "1401634043", deploy_environment = "docsync", deploy_branch = "dev" }
+  # The sdk repository has no deployer. Its entry admits its tokens to the pool,
+  # and the apis stack binds the end-to-end workflow's identity to its default branch.
+  sdk = { name = "sdk", id = "1428553790" }
   # The site QA repository stays private under its original owner, so its entry names that owner.
   site_qa = { name = "dfo-site-qa", id = "1406139622", owner = { name = "ONEcampaign", id = "6450343" } }
 }

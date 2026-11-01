@@ -273,14 +273,16 @@ variable "datasets_worker_min_instances" {
   default     = 0
 }
 
-# Each environment sets both in env.auto.tfvars. The apis service's only
-# identity boundary is Cloud Run IAM, so with allow_unauthenticated false
-# a caller reaches it only by sending a Google ID token whose audience is the
-# service URL, minted as an identity listed in invoker_members.
+# Each environment sets this in env.auto.tfvars, and it has no default, so a
+# root that omits it fails at plan instead of opening the service. The apis
+# service's only identity boundary is Cloud Run IAM. With allow_unauthenticated
+# false, a caller reaches it by sending a Google ID token whose audience is the
+# service URL, minted as an identity holding run.invoker on the service, or
+# through `gcloud run services proxy` as a person whose project role carries
+# run.routes.invoke.
 variable "allow_unauthenticated" {
-  description = "Grant roles/run.invoker on the apis service to allUsers. True lets any caller reach the run.app URL with no token. False admits only the identities in invoker_members, the grants other files in this stack make on the service by resource reference, and the grants the website and ai stacks make for their own runtime service accounts."
+  description = "Grant roles/run.invoker on the apis service to allUsers. True lets any caller reach the run.app URL with no token. False admits the website and ai runtime service accounts (granted in their own stacks), the grants other files in this stack make on the service by resource reference (dev's eval_reader.tf and sdk_e2e.tf), the identities in invoker_members, and people who hold a project role with run.routes.invoke and reach the service through `gcloud run services proxy`."
   type        = bool
-  default     = true
 }
 
 variable "invoker_members" {

@@ -50,7 +50,7 @@ gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref m
 
 ## Share migration
 
-The Job `dfo-prod-website-share-migrate` moves the website's `share` rows into dfo-apis's Presentation store once ("Share migration" in `infra/dfo-dev/website/README.md`). Apply `apis` first, since this stack grants the runtime account read on `dfo-prod-share-import-principal`, then run `scripts/handoff.sh dfo-prod website`, which writes `SHARE_MIGRATE_JOB_WEBSITE`, so the deploy moves the Job to the website image. After that deploy, run:
+The Job `dfo-prod-website-share-migrate` moves the website's `share` rows into dfo-apis's Presentation store once ("Share migration" in `infra/dfo-dev/website/README.md`). Apply `apis` first, since this stack grants the runtime account read on `dfo-prod-share-import-principal`, then run `scripts/handoff.sh dfo-prod website`, which writes `SHARE_MIGRATE_JOB_WEBSITE`, so the deploy moves the Job to the website image. Once dfo-apis serves the share import route and that deploy has moved the image, run:
 
 ```bash
 gcloud run jobs execute dfo-prod-website-share-migrate \
