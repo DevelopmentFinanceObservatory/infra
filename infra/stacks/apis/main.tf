@@ -147,6 +147,16 @@ module "apis_service" {
       version = google_secret_manager_secret_version.caller_hmac_key.version
     }
 
+    # Keys the query_hmac field of the search resolve log line. See
+    # search_query_hmac_key.tf.
+    SEARCH_QUERY_HMAC_KEY = {
+      secret_id = google_secret_manager_secret.search_query_hmac_key.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.search_query_hmac_key.version
+    }
+
     # Authenticates the share import route the website's share migration Job
     # calls. See share_import_principal.tf.
     PRESENTATION_SHARE_IMPORT_PRINCIPAL = {
