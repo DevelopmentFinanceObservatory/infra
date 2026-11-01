@@ -97,6 +97,31 @@ resource "google_cloud_run_v2_job" "datasets_maintenance" {
           value = tostring(local.datasets_operation_deadline_seconds)
         }
 
+        # What a task that re-probes dataset members reads: the graph, the
+        # SDMX endpoint, the UN System Data Commons and the origin catalogue,
+        # with the values the apis service (main.tf) and the datasets worker
+        # (datasets_worker.tf) read. DATASETS_GRAPH_TOKEN stays unset, as on
+        # both: the graph serves reads anonymously.
+        env {
+          name  = "DATASETS_GRAPH_BASE_URL"
+          value = var.datasets_graph_base_url
+        }
+
+        env {
+          name  = "DATASETS_SDMX_BASE_URL"
+          value = var.datasets_sdmx_base_url
+        }
+
+        env {
+          name  = "UN_GRAPH_BASE_URL"
+          value = var.un_graph_base_url
+        }
+
+        env {
+          name  = "ORIGIN_CATALOGUE_URI"
+          value = "gs://${google_storage_bucket.origin_catalogue.name}/"
+        }
+
         # The graph release main.tf mounts, under the same switch:
         # backfill-descriptions opens it, as the service does at startup. The
         # apis runtime identity reads the bucket through
