@@ -27,7 +27,7 @@ The planner binds to the infra repo's `plan` environment and the applier to its 
 
 - The `dc-api-key` secret, holding the Data Commons API key. The planner's access grant on it fails while the secret does not exist.
 
-- The `dfo-prod-telemetry-principals` secret, which `scripts/bootstrap-principals.sh` writes (see `infra/dfo-prod/telemetry/README.md`). `principals_secret_stacks` in `env.auto.tfvars` lists `foundation`, `ai` and `telemetry`, and the planner's access grant on each secret fails while that secret does not exist.
+- The `dfo-prod-telemetry-principals` secret, which `scripts/bootstrap-principals.sh` writes (see `infra/dfo-prod/telemetry/README.md`). `principals_secret_stacks` in `env.auto.tfvars` lists `foundation`, `apis`, `ai` and `telemetry`, and the planner's access grant on each secret fails while that secret does not exist.
 
 ## After the first apply
 

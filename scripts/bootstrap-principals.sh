@@ -3,12 +3,12 @@
 # Write a stack's hand-made principals secret from a local JSON file.
 #
 # A stack that grants or notifies people (foundation's applier impersonators,
-# ingestion operators and budget alert recipients, the ai stack's token
-# readers, the telemetry stack's reporting readers and alert recipients) reads
-# their addresses from a Secret Manager secret, so no address sits in this
-# public repository or in a plan log. The file is an object of objects of
-# strings, each inner object keyed by labels that name resources in Terraform
-# state and plan output, for example
+# ingestion operators and budget alert recipients, the apis stack's invokers,
+# the ai stack's token readers, the telemetry stack's reporting readers and
+# alert recipients) reads their addresses from a Secret Manager secret, so no
+# address sits in this public repository or in a plan log. The file is an
+# object of objects of strings, each inner object keyed by labels that name
+# resources in Terraform state and plan output, for example
 #   {"readers": {"team": "group:readers@example.org"},
 #    "alerts": {"team": "alerts@example.org"}}
 #

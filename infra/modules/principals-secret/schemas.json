@@ -7,6 +7,9 @@
     "member": "\\A((group|user|serviceAccount):[a-z0-9._+-]+@|domain:)[a-z0-9.-]+\\z"
   },
   "stacks": {
+    "apis": {
+      "invokers": {"form": "member", "min": 0}
+    },
     "ai": {
       "mcp_token_readers": {"form": "member", "min": 0},
       "studio_token_readers": {"form": "member", "min": 0}
