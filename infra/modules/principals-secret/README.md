@@ -1,6 +1,6 @@
 # principals-secret
 
-Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`, which holds the addresses the stack grants or notifies, and checks it at plan. No address sits in this repository or in a plan log: the module's output is sensitive, and every value prints in plan output as `(sensitive value)`. The `foundation`, `ai` and `telemetry` stacks call it with their stack name. Plan fails while the secret, or the planner's access to it, does not exist.
+Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`, which holds the addresses the stack grants or notifies, and checks it at plan. No address sits in this repository or in a plan log: the module's output is sensitive, and every value prints in plan output as `(sensitive value)`. The `foundation`, `apis`, `ai` and `telemetry` stacks call it with their stack name. Plan fails while the secret, or the planner's access to it, does not exist.
 
 `schemas.json` holds each stack's schema (its top-level keys, each with a value form and the fewest entries it holds), the label pattern, the pattern of each form, the member prefix pattern, and the minimum value length. `scripts/bootstrap-principals.sh` reads the same file, so the script and the module apply the same patterns. The patterns use only ASCII classes and the `\A` and `\z` anchors, which RE2 (Terraform's `regex`) and Oniguruma (jq's `test`) read the same way.
 
@@ -29,6 +29,7 @@ The script refuses a file that breaks a rule before any `gcloud` call. It then c
 A relabel with the same value needs a `moved` block for each resource the label keys, for example `moved { from = google_service_account_iam_member.applier_impersonator["old"] to = google_service_account_iam_member.applier_impersonator["new"] }`. Without one, the plan destroys one instance and creates the other on the same binding in no fixed order, and a delete that runs last revokes the member. Labels are not addresses, so the block is safe to commit. The resources each label keys:
 
 - foundation: `applier_impersonator` for an impersonator; the five `ingestion_*` resources for an ingestion operator, where `ingestion_viewer` holds one instance per role, keyed `"<label> <role>"`; `budget_email` for a budget alert recipient.
+- apis: `apis_invoker` and `apis_viewer` for an invoker.
 - ai: `studio_api_token_reader` or `mcp_api_token_readers`.
 - telemetry: `reporting_readers`, `reporting_readers_job_user` and `reporting_readers_mcp_tool_user` for a reader; `alert_email` for an alert recipient.
 

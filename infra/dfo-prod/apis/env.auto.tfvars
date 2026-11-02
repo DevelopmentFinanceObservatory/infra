@@ -38,12 +38,10 @@ datasets_worker_min_instances = 1
 # The run.app URL refuses anonymous callers. A caller reaches it with an ID
 # token minted as an identity holding roles/run.invoker on the service, or with
 # a person's own token through `gcloud run services proxy` under a project
-# role that carries run.routes.invoke. See "Caller authentication" in
-# infra/dfo-dev/apis/README.md.
+# role that carries run.routes.invoke. A person without one gets invoker and
+# viewer grants through the invokers object of dfo-prod-apis-principals. See
+# "Caller authentication" in infra/dfo-dev/apis/README.md.
 allow_unauthenticated = false
-# Principals no stack owns. The website and ai stacks grant their own runtime
-# accounts invoker on this service.
-invoker_members = []
 
 # One Gemini key per caller, each from its own AI Studio project.
 gemini_api_key_secret_id                  = "dfo-prod-apis-gemini-api-key"
