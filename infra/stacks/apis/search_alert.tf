@@ -5,12 +5,12 @@
 # alert. A Gemini key that Gemini rejects is one such case: every resolve logs
 # an engine infrastructure error and answers 503.
 
-# The apis service logs `Engine infrastructure error: <cause>` at ERROR for
-# every EngineInfraError a search route raises, such as Gemini rejecting the
-# key or the graph answering 500. The streaming resolve writes it on logger
-# search.engine.app. The JSON routes write it on dfo_platform.app, prefixed
-# `search: `. Cloud Run parses the service's JSON log lines, so the logger
-# name and message land in jsonPayload, and the filter matches both forms.
+# The apis service logs one line at ERROR for every EngineInfraError a search
+# route raises, such as Gemini rejecting the key or the graph answering 500,
+# with the field `event` set to `search_engine_infra_error`. The streaming
+# resolve and the JSON routes write it on different loggers with different
+# message text, and both carry the field. Cloud Run parses the service's JSON
+# log lines, so the field lands in jsonPayload.
 resource "google_logging_metric" "search_engine_infra_error" {
   name    = "${var.namespace}-search-engine-infra-error"
   project = var.project_id
@@ -19,8 +19,7 @@ resource "google_logging_metric" "search_engine_infra_error" {
     resource.labels.service_name="${module.apis_service.service_name}"
     resource.labels.location="${var.region}"
     severity=ERROR
-    jsonPayload.logger=("search.engine.app" OR "dfo_platform.app")
-    jsonPayload.message=~"^(search: )?Engine infrastructure error:"
+    jsonPayload.event="search_engine_infra_error"
   EOT
 
   metric_descriptor {
@@ -119,7 +118,7 @@ resource "google_monitoring_alert_policy" "search_failing" {
   documentation {
     mime_type = "text/markdown"
     content   = <<-EOT
-      Searches on ${module.apis_service.service_name} are failing. Read the service's errors: in Logs Explorer, filter on `resource.labels.service_name="${module.apis_service.service_name}" severity>=ERROR` and read the cause after `Engine infrastructure error:`.
+      Searches on ${module.apis_service.service_name} are failing. Read the service's errors: in Logs Explorer, filter on `resource.labels.service_name="${module.apis_service.service_name}" jsonPayload.event="search_engine_infra_error"` and read the cause after `Engine infrastructure error:`.
 
       `Gemini API error: 400 INVALID_ARGUMENT ... API key not valid`, 401 or 403 means Gemini rejects the key. The service reads the latest version of the `${data.google_secret_manager_secret.gemini.secret_id}` secret as GEMINI_API_KEY when an instance starts. Compare the version the failing revision started on with the one the previous revision ran on: `gcloud secrets versions list ${data.google_secret_manager_secret.gemini.secret_id} --project=${var.project_id}` shows when each was added, and `gcloud secrets versions access <version> --secret=${data.google_secret_manager_secret.gemini.secret_id} --project=${var.project_id} | wc -c` compares their lengths without printing the key. Add a corrected version or disable the bad one, then deploy a new revision so instances read it.
 
