@@ -107,6 +107,7 @@ refuses() {
 
 F=dfo-test-foundation-principals
 A=dfo-test-ai-principals
+V=dfo-test-apis-principals
 T=dfo-test-telemetry-principals
 G='"group:a@example.org"'
 G2='"group:b@example.org"'
@@ -146,6 +147,12 @@ refuses "ai case-only duplicate" "$A" '{"studio_token_readers": {"x": "group:a@e
 refuses "ai no-break space in an address" "$A" '{"studio_token_readers": {"x": "group:a b@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai non-ASCII address" "$A" '{"studio_token_readers": {"x": "group:é@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 
+accepts "apis" "$V" "{\"invokers\": {\"mason\": \"user:mason@example.org\", \"devs\": $G}}"
+accepts "apis with an empty object" "$V" '{"invokers": {}}'
+refuses "apis missing key" "$V" '{}' "missing top-level key invokers"
+refuses "apis ai file" "$V" '{"studio_token_readers": {}, "mcp_token_readers": {}}' "missing top-level key invokers"
+refuses "apis bare address" "$V" '{"invokers": {"x": "a@example.org"}}' "each invokers value must be"
+refuses "apis duplicate member" "$V" "{\"invokers\": {\"x\": $G, \"y\": $G}}" "invokers holds the same value"
 accepts "telemetry" "$T" "{\"readers\": {\"x\": $G, \"y\": $G2}, \"alerts\": {\"x\": \"a@example.org\"}}"
 refuses "telemetry missing readers" "$T" '{"alerts": {"x": "a@example.org"}}' "missing top-level key readers"
 refuses "telemetry empty alerts" "$T" "{\"readers\": {\"x\": $G}, \"alerts\": {}}" "alerts must hold at least 1 entry"
