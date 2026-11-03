@@ -77,11 +77,8 @@ jq -cjS '.[0]' <<<"$docs" >"$canonical"
 # Validate before anything is written, so a malformed file never becomes the
 # latest version the stack reads. The messages name keys only, never a value
 # or a label, since a bad label may be an address.
-problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c '{label, forms, prefix, min_length}' "$schemas")" '
-  {
-    member: "group:, user: or serviceAccount: before an address, or domain: before a domain, in lower-case ASCII",
-    email: "a bare email address in lower-case ASCII"
-  } as $says
+problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c '{label, forms, says, prefix, min_length}' "$schemas")" '
+  $patterns.says as $says
   | . as $doc
   | (keys[] as $key | select($schema | has($key) | not) | "unexpected top-level key \($key)"),
     ($schema | to_entries[] | .key as $k | .value as $rule | $patterns.forms[$rule.form] as $form

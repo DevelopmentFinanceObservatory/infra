@@ -360,10 +360,13 @@ module "apis_service" {
 }
 
 # Each member in the principals secret's invokers object, keyed by label, gets
-# roles/run.invoker here and roles/run.viewer below. Every other grant sits
-# beside the account it names: eval_reader.tf's and sdk_e2e.tf's in the dev apis
-# stack, and the website and ai runtime accounts' in those stacks, which apply
-# after this one.
+# roles/run.invoker here and roles/run.viewer below. The object holds people
+# (user: and group: members), who reach the service through
+# `gcloud run services proxy`, and the secret's schema refuses any other member.
+# Every other caller's grant sits beside the account it names: eval_reader.tf's
+# and sdk_e2e.tf's in the dev apis stack, and the website and ai runtime
+# accounts' in those stacks, which apply after this one. A grant for a machine
+# caller therefore never shares a (role, member) binding with a secret entry.
 resource "google_cloud_run_v2_service_iam_member" "apis_invoker" {
   for_each = toset(nonsensitive(keys(local.principals.invokers)))
   project  = var.project_id

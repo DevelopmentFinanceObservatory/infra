@@ -319,13 +319,7 @@ The readers and alert recipients live in the Secret Manager secret `dfo-prod-tel
 }
 ```
 
-To create the secret or change its members, write the JSON to a file outside the repository and run
-
-```sh
-scripts/bootstrap-principals.sh prod-fin-observatory dfo-prod-telemetry-principals principals.json
-```
-
-[`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states the rules the secret must meet, what the script does, and the relabel order.
+To create the secret or change its members, follow "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `prod-fin-observatory` and `dfo-prod-telemetry-principals`, and dispatch the apply with `--ref main` and `stack=telemetry`. That page also states the rules the secret must meet and the relabel order.
 
 ## Apply order
 

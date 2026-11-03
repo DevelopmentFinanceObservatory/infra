@@ -79,13 +79,7 @@ The studio and MCP token readers live in the Secret Manager secret `<namespace>-
 }
 ```
 
-To create the secret or change its members, write the JSON to a file outside the repository and run
-
-```sh
-scripts/bootstrap-principals.sh dev-fin-observatory dfo-dev-ai-principals principals.json
-```
-
-[`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states the rules the secret must meet, what the script does, the relabel order, and the `removed` block that moved the studio grant off member-keyed state.
+To create the secret or change its members, follow "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `dev-fin-observatory` and `dfo-dev-ai-principals`, and dispatch the apply with `--ref dev` and `stack=ai`. That page also states the rules the secret must meet, the relabel order, and the `removed` block that moved the studio grant off member-keyed state.
 
 ## Datasets first-party principal
 

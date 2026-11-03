@@ -4,15 +4,21 @@
   "min_length": 4,
   "forms": {
     "email": "\\A[a-z0-9._+-]+@[a-z0-9.-]+\\z",
-    "member": "\\A((group|user|serviceAccount):[a-z0-9._+-]+@|domain:)[a-z0-9.-]+\\z"
+    "member": "\\A((group|user|serviceAccount):[a-z0-9._+-]+@|domain:)[a-z0-9.-]+\\z",
+    "person": "\\A(group|user):[a-z0-9._+-]+@[a-z0-9.-]+\\z"
+  },
+  "says": {
+    "email": "a bare email address in lower-case ASCII",
+    "member": "group:, user: or serviceAccount: before an address, or domain: before a domain, in lower-case ASCII",
+    "person": "group: or user: before an address, in lower-case ASCII; a service account, workload identity principal or domain gets its own Terraform resource"
   },
   "stacks": {
-    "apis": {
-      "invokers": {"form": "member", "min": 0}
-    },
     "ai": {
       "mcp_token_readers": {"form": "member", "min": 0},
       "studio_token_readers": {"form": "member", "min": 0}
+    },
+    "apis": {
+      "invokers": {"form": "person", "min": 0}
     },
     "foundation": {
       "applier_impersonators": {"form": "member", "min": 0},
