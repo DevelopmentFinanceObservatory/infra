@@ -3,7 +3,8 @@
 # reaches GCP. The stub logs every call; the cases check that each secret
 # name suffix accepts its own schema, refuses every malformed file before any
 # gcloud call, and never echoes a value from the file. The `edit` cases run
-# the script with EDITOR set to a script that edits the file it is given.
+# the script with EDITOR set to a script that edits the file it is given, once
+# for each time the script opens it.
 #
 # With terraform on PATH, the parity section then feeds every schema case to
 # infra/modules/principals-secret under `terraform test` with a mocked
@@ -80,7 +81,7 @@ run() {
 # run_edit <project> <secret>: runs `edit`, setting the same variables.
 run_edit() {
     : >"$STUB_LOG"
-    rm -f "$STUB_WRITTEN" "$STUB_CREATED" "$EDITOR_PATH"
+    rm -f "$STUB_WRITTEN" "$STUB_CREATED" "$EDITOR_PATH" "$EDITOR_COUNT" "$EDITOR_SAW.2"
     status=0
     out=$("$SCRIPT_DIR/bootstrap-principals.sh" edit "$1" "$2" 2>&1) || status=$?
     calls=$(cat "$STUB_LOG")
@@ -278,23 +279,31 @@ check "a failed list on the file form shows gcloud's error" "$(says "PERMISSION_
 writes_nothing "a failed list on the file form"
 unset STUB_EXISTS STUB_LATEST
 
-# edit: the script reads the latest enabled version, opens $EDITOR on a copy,
-# and writes the edited copy. The editor is a script that records what it was
-# given, leaves a swap file beside it, and edits the file with $EDIT_JQ, or
-# replaces it with $EDIT_RAW, or exits with $EDIT_EXIT.
-export EDITOR_SAW="$WORK/editor-saw.json" EDITOR_PATH="$WORK/editor-path"
+# edit: the script reads the latest enabled version, opens the editor on a
+# copy, and writes the edited copy. The editor is a script that records the file
+# it was given (its last argument), leaves a swap file beside it, and edits the file with $EDIT_JQ on
+# its first run and $EDIT_JQ_2 (else $EDIT_JQ) on its second, or replaces it
+# with $EDIT_RAW, or exits with $EDIT_EXIT. VISUAL is unset so the tests
+# choose the editor through EDITOR.
+unset VISUAL
+export EDITOR_SAW="$WORK/editor-saw.json" EDITOR_PATH="$WORK/editor-path" EDITOR_COUNT="$WORK/editor-count"
 cat >"$WORK/editor" <<'EDITOR'
 #!/usr/bin/env bash
-cp "$1" "$EDITOR_SAW"
-echo "$1" >"$EDITOR_PATH"
-: >"$1.swp"
+file=${!#}
+n=$(($(cat "$EDITOR_COUNT" 2>/dev/null || echo 0) + 1))
+echo "$n" >"$EDITOR_COUNT"
+case "$n" in 1) cp "$file" "$EDITOR_SAW" ;; 2) cp "$file" "$EDITOR_SAW.2" ;; esac
+echo "$file" >"$EDITOR_PATH"
+: >"$file.swp"
 [ -z "${EDIT_EXIT:-}" ] || exit "$EDIT_EXIT"
-[ -z "${EDIT_RAW+x}" ] || printf '%s' "$EDIT_RAW" >"$1"
-[ -z "${EDIT_JQ:-}" ] || { jq "$EDIT_JQ" "$1" >"$1.new" && mv "$1.new" "$1"; }
+[ -z "${EDIT_RAW+x}" ] || printf '%s' "$EDIT_RAW" >"$file"
+filter=${EDIT_JQ:-}
+[ "$n" -lt 2 ] || filter=${EDIT_JQ_2:-$filter}
+[ -z "$filter" ] || { jq "$filter" "$file" >"$file.new" && mv "$file.new" "$file"; }
 exit 0
 EDITOR
 chmod +x "$WORK/editor"
-export EDITOR="$WORK/editor"
+export EDITOR="'$WORK/editor'"
 printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
 export STUB_EXISTS=1 STUB_LATEST=3
 
@@ -312,15 +321,51 @@ check "edit writes the edited canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/de
 check "edit lists the versions before and just before the write" "$(is "$(grep -c 'secrets versions list' "$STUB_LOG")" 2)"
 check "edit checks the version immediately before the write" "$(is "$(tail -n 2 "$STUB_LOG" | cut -d' ' -f2-4 | paste -sd, -)" 'secrets versions list,secrets versions add')"
 lacks "edit creates nothing" "secrets create"
+lacks "edit makes no IAM change" "add-iam-policy-binding"
 editor_dir_gone "edit"
 
 run_edit test-project "$V"
 check "edit with no change is accepted" "$(is "$status" 0)"
 check "edit with no change says so" "$(says "nothing written")"
+check "edit with no change says how to make the editor wait" "$(says "code --wait")"
 writes_nothing "edit with no change"
 editor_dir_gone "edit with no change"
 
-EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' run_edit test-project "$V"
+# A result whose canonical form is the stored version writes nothing, whatever
+# its whitespace.
+EDIT_RAW=$'{ "invokers" :\n  {"dev-1": "user:dev1@example.org"} }\n' run_edit test-project "$V"
+check "edit to whitespace only is accepted" "$(is "$status" 0)"
+check "edit to whitespace only says nothing was written" "$(says "nothing written")"
+writes_nothing "edit to whitespace only"
+
+# A refused copy is offered again, and a second edit that passes is written.
+EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' EDIT_JQ_2='.invokers = {"dev-1": "user:dev1@example.org", "x": "group:x@example.org"}' run_edit test-project "$V"
+check "edit refused, then corrected, is accepted" "$(is "$status" 0)"
+check "edit refused, then corrected, names the first problem" "$(says "each invokers value must be group: or user:")"
+check "edit refused, then corrected, opens the editor twice" "$(is "$(cat "$EDITOR_COUNT")" 2)"
+check "edit refused, then corrected, reopens the refused copy" "$(grep -q 'serviceAccount:x@p' "$EDITOR_SAW.2" && echo true || echo false)"
+check "edit refused, then corrected, writes the second edit" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"dev-1":"user:dev1@example.org","x":"group:x@example.org"}}')"
+editor_dir_gone "edit refused, then corrected"
+
+# Leaving a refused copy unchanged stops with nothing written.
+EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' EDIT_JQ_2='.' run_edit test-project "$V"
+check "edit refused, then left unchanged, is refused" "$(is "$status" 1)"
+check "edit refused, then left unchanged, opens the editor twice" "$(is "$(cat "$EDITOR_COUNT")" 2)"
+writes_nothing "edit refused, then left unchanged"
+editor_dir_gone "edit refused, then left unchanged"
+
+# The editor command runs through sh: a quoted path with a space works, and
+# VISUAL wins over EDITOR.
+mkdir "$WORK/dir with space"
+cp "$WORK/editor" "$WORK/dir with space/editor"
+EDITOR="'$WORK/dir with space/editor' --wait" EDIT_JQ='.invokers.x = "group:x@example.org"' run_edit test-project "$V"
+check "an EDITOR with a quoted path and an argument is run" "$(is "$status" 0)"
+has "an EDITOR with a quoted path and an argument writes the edit" "secrets versions add $V"
+VISUAL="'$WORK/editor'" EDITOR=false EDIT_JQ='.invokers.x = "group:x@example.org"' run_edit test-project "$V"
+check "VISUAL is run in place of EDITOR" "$(is "$status" 0)"
+has "VISUAL writes the edit" "secrets versions add $V"
+
+EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' EDIT_JQ_2='.' run_edit test-project "$V"
 check "edit adding a service account is refused" "$(is "$status" 1)"
 check "edit adding a service account names the problem" "$(says "each invokers value must be group: or user:")"
 check "edit adding a service account prints no address" "$([[ "$out" != *example.org* && "$out" != *iam.gserviceaccount.com* ]] && echo true || echo false)"

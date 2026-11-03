@@ -1,6 +1,6 @@
 {
   "label": "\\A[a-z0-9_-]+\\z",
-  "prefix": "\\A(group|user):",
+  "prefix": "\\A([A-Za-z]+:)+",
   "min_length": 4,
   "forms": {
     "email": {

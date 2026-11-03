@@ -121,6 +121,15 @@ check "an address with reserved characters exits 0" "$(is "$status" 0)"
 check "it is URL-encoded as encodeURIComponent does" "$(is "$(grep -cx "O'Neil%2B(x)%40example.org" <<<"$file" || true)" 1)"
 check "and lower-cased" "$(is "$(grep -cx "user%3ao'neil%2b(x)%40example.org" <<<"$file" || true)" 1)"
 
+# A value with a prefix the schemas do not accept is masked whole and as an
+# address, the same as one they accept.
+printf '%s' '{"a": {"b": "team:Lead@example.org"}}' >"$WORK/secrets/ns-ai-principals"
+run example-project "$OUT_FILE"
+rm "$WORK/secrets/ns-ai-principals"
+check "a value with an unaccepted prefix exits 0" "$(is "$status" 0)"
+check "it is masked whole" "$(is "$(grep -cx 'team:Lead@example.org' <<<"$file" || true)" 1)"
+check "and as an address" "$(is "$(grep -cx 'Lead@example.org' <<<"$file" || true)" 1)"
+
 # 3. A failed listing fails, and writes no file.
 export STUB_FAIL_LIST=1
 run example-project "$OUT_FILE"

@@ -23,7 +23,7 @@ The planner binds to the infra repo's `plan` environment and the applier to its 
 
   Dev's bucket has no such grant.
 
-- The `dfo-prod-foundation-principals` secret, which `scripts/bootstrap-principals.sh` writes, as `infra/dfo-dev/foundation/README.md` "Principals secret" describes, with `prod-fin-observatory` and `dfo-prod-foundation-principals` as its arguments. Prod's `ingestion_operators` object holds the ingestion group, and its `applier_impersonators` object is empty until the project owners who may impersonate the applier are added. Its `budget_alerts` object is empty until the budget has recipients beyond the billing admins. Plan fails while the secret does not exist.
+- The `dfo-prod-foundation-principals` secret in `prod-fin-observatory`, which `scripts/bootstrap-principals.sh` writes. "Writing the secret" in `infra/modules/principals-secret/README.md` gives the steps, and `infra/dfo-dev/foundation/README.md` "Principals secret" gives the keys. Create it with `scripts/bootstrap-principals.sh prod-fin-observatory dfo-prod-foundation-principals FILE`, and change its members with `scripts/bootstrap-principals.sh edit prod-fin-observatory dfo-prod-foundation-principals`. After the first manual apply, dispatch the apply with `--ref main` and `stack=foundation` for a change. Prod's `ingestion_operators` object holds the ingestion group, and its `applier_impersonators` object is empty until the project owners who may impersonate the applier are added. Its `budget_alerts` object is empty until the budget has recipients beyond the billing admins. Plan fails while the secret does not exist.
 
 - The `dc-api-key` secret, holding the Data Commons API key. The planner's access grant on it fails while the secret does not exist.
 

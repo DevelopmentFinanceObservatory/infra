@@ -31,10 +31,20 @@
 #
 # Change an existing secret:
 #   bootstrap-principals.sh edit PROJECT SECRET_NAME
-# The script reads the latest enabled version, opens ${EDITOR:-vi} on a copy in
-# a private temporary directory, validates the result, and adds it as the next
-# version. The directory and everything the editor leaves in it are removed on
-# every exit. A copy left unchanged writes nothing. A refused copy is discarded.
+# The script reads the latest enabled version, opens the editor ($VISUAL, else
+# $EDITOR, else vi, run through sh the way git runs its editor) on a copy in a
+# private temporary directory, validates the result, and adds it as the next
+# version. It needs only the rights to list, read and add versions; it makes no
+# IAM change. The editor must wait until the file is closed (for example
+# `code --wait`); an editor that returns at once leaves the copy unchanged,
+# which the script reports. A copy that breaks a rule is refused and the editor
+# opens again on the same copy; leaving a refused copy unchanged stops with
+# nothing written. A result whose canonical form equals the stored version
+# writes nothing.
+#
+# The script's copy lives in a private directory that it removes on every exit,
+# with anything the editor left beside it. An editor's own swap, backup or undo
+# files follow that editor's configuration and may sit elsewhere.
 #
 # Each version replaces the whole secret, so a write built from an older
 # version would drop the entries a newer one added. Just before it adds the
@@ -98,18 +108,18 @@ canonical="$work/canonical.json"
 validate() {
   local file=$1 label=$2 docs file_leaves parsed_leaves problems
 
-  docs=$(jq -cs . "$file") || { echo "error: $label is not valid JSON" >&2; exit 1; }
+  docs=$(jq -cs . "$file") || { echo "error: $label is not valid JSON" >&2; return 1; }
   jq -e 'length == 1 and (.[0] | type) == "object"' <<<"$docs" >/dev/null ||
-    { echo "error: $label must hold exactly one JSON object" >&2; exit 1; }
+    { echo "error: $label must hold exactly one JSON object" >&2; return 1; }
 
   # jq keeps the last of a repeated key, so a repeat shows as a leaf in the
   # file's event stream that the parsed object no longer has.
-  file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$file")
-  parsed_leaves=$(jq -c '[.[0] | tostream | select(length == 2)] | length' <<<"$docs")
+  file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$file") || return 1
+  parsed_leaves=$(jq -c '[.[0] | tostream | select(length == 2)] | length' <<<"$docs") || return 1
   [ "$file_leaves" = "$parsed_leaves" ] ||
-    { echo "error: $label repeats a key" >&2; exit 1; }
+    { echo "error: $label repeats a key" >&2; return 1; }
 
-  jq -cjS '.[0]' <<<"$docs" >"$canonical"
+  jq -cjS '.[0]' <<<"$docs" >"$canonical" || return 1
 
   # The messages name keys only, since a bad label may be an address.
   problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c . "$schemas")" '
@@ -125,11 +135,11 @@ validate() {
               (if any($obj[]; (type == "string") and (length < $patterns.min_length or (sub($patterns.prefix; "") | length) < $patterns.min_length)) then "each \($k) value and its address must be at least \($patterns.min_length) characters, so CI can mask them" else empty end),
               (if ([$obj[]] | length) != ([$obj[]] | unique | length) then "\($k) holds the same value under two labels" else empty end)
           end)
-  ' "$canonical")
+  ' "$canonical") || { echo "error: could not check $label against the $secret_name schema" >&2; return 1; }
   if [ -n "$problems" ]; then
     printf 'error: %s does not match the %s schema:\n' "$label" "$secret_name" >&2
     printf '  %s\n' "${problems//$'\n'/$'\n  '}" >&2
-    exit 1
+    return 1
   fi
 }
 
@@ -154,7 +164,7 @@ started_from=""
 if [ "$mode" = create ]; then
   # Validate before any gcloud call, so a malformed file never becomes the
   # latest version the stack reads.
-  validate "$json_file" "$json_file"
+  validate "$json_file" "$json_file" || exit 1
   if read_latest; then
     [ -z "$latest" ] ||
       { echo "error: $secret_name already has version $latest in $project; change it with: $(basename "$0") edit $project $secret_name" >&2; exit 1; }
@@ -172,22 +182,41 @@ else
     { echo "error: could not read version $started_from of $secret_name in $project" >&2; exit 1; }
 
   # Pretty-print for the editor; content that is not JSON opens as stored.
+  # $presented is the copy the editor was last given.
   edited="$work/principals.json"
+  presented="$work/presented.json"
   jq -S . "$work/current.json" >"$edited" 2>/dev/null || cp "$work/current.json" "$edited"
-  cp "$edited" "$work/before.json"
+  jq -cjS . "$work/current.json" >"$work/current.canonical" 2>/dev/null || : >"$work/current.canonical"
+  cp "$edited" "$presented"
 
-  read -ra editor <<<"${EDITOR:-vi}"
-  "${editor[@]}" "$edited" || { echo "error: the editor exited with an error; nothing was written" >&2; exit 1; }
+  refused=""
+  while true; do
+    sh -c "${VISUAL:-${EDITOR:-vi}} \"\$@\"" sh "$edited" ||
+      { echo "error: the editor exited with an error; nothing was written" >&2; exit 1; }
+    if cmp -s "$presented" "$edited"; then
+      if [ -n "$refused" ]; then
+        echo "error: the refused copy was left unchanged; nothing was written" >&2
+        exit 1
+      fi
+      echo "no change to ${secret_name} version ${started_from}; nothing written. If your editor returned before you saved, set EDITOR to a command that waits (for example \`code --wait\`)."
+      exit 0
+    fi
+    validate "$edited" "the edited file" && break
+    refused=1
+    cp "$edited" "$presented"
+    echo "the editor opens again on the same copy; leave it unchanged to stop with nothing written" >&2
+  done
 
-  if cmp -s "$work/before.json" "$edited"; then
+  if cmp -s "$canonical" "$work/current.canonical"; then
     echo "no change to ${secret_name} version ${started_from}; nothing written"
     exit 0
   fi
-  validate "$edited" "the edited file"
 fi
 
-gcloud secrets add-iam-policy-binding "$secret_name" --project="$project" \
-  --member="$planner" --role="roles/secretmanager.secretAccessor" >/dev/null
+if [ "$mode" = create ]; then
+  gcloud secrets add-iam-policy-binding "$secret_name" --project="$project" \
+    --member="$planner" --role="roles/secretmanager.secretAccessor" >/dev/null
+fi
 
 # The check runs immediately before the write.
 read_latest || { echo "error: $secret_name no longer exists in $project" >&2; exit 1; }
@@ -202,4 +231,4 @@ fi
 
 gcloud secrets versions add "$secret_name" --project="$project" --data-file="$canonical"
 
-echo "${secret_name} in ${project} has a new latest version in canonical form, readable by ${planner}"
+echo "${secret_name} in ${project} has a new latest version in canonical form"

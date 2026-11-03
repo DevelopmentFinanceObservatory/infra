@@ -13,12 +13,14 @@
 # For every secret in <project> whose name ends in `-principals`, this reads
 # the latest version and, for each string value at any depth, prints
 # `::add-mask::` for the value and for its address, the value with its type
-# prefix removed. The principals schemas accept only `group:` and `user:`
-# prefixes; the strip takes any leading `word:` so that a hand-made secret
-# outside the schemas still masks its address. Each of the two is
-# also masked lower-cased, since the provider and IAM lower-case emails in
-# ids and policy reads, and URL-encoded (`@` as `%40`, `:` as `%3A`) in both
-# cases. The Actions runner masks them in every later log line of the job.
+# prefix removed. The strip pattern is `prefix` in
+# infra/modules/principals-secret/schemas.json, the file the module and
+# scripts/bootstrap-principals.sh read; it removes a leading run of `word:`
+# prefixes. The schemas accept only `group:` and `user:`, so a hand-made
+# secret outside them still has its address masked. Each of the two is also
+# masked lower-cased, since the provider and IAM lower-case emails in ids and
+# policy reads, and URL-encoded (`@` as `%40`, `:` as `%3A`) in both cases. The
+# Actions runner masks them in every later log line of the job.
 # Masks cover logs only, so it also writes every form, one per line, to
 # <out-file>, from which .github/scripts/redact-principals.js strips them out
 # of the plan and apply comments and job summaries. Nothing else prints a
@@ -64,6 +66,12 @@ out_file="$2"
 command -v gcloud >/dev/null || { echo "::error::gcloud not found." >&2; exit 1; }
 command -v jq >/dev/null || { echo "::error::jq not found." >&2; exit 1; }
 
+schemas="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/infra/modules/principals-secret/schemas.json"
+prefix="$(jq -er '.prefix' "$schemas")" || {
+    echo "::error::Could not read the member prefix pattern from $schemas." >&2
+    exit 1
+}
+
 # A plain assignment, so a failed listing stops the script rather than
 # passing as a project with no secrets.
 listing="$(gcloud secrets list --project="$project" --format='value(name.basename())')" || {
@@ -83,17 +91,17 @@ for name in ${secrets[@]+"${secrets[@]}"}; do
         echo "::error::Could not read the latest version of $name in $project. The identity needs roles/secretmanager.secretAccessor on it." >&2
         exit 1
     }
-    # Each member and its address, the member with its type prefixes
+    # Each member and its address, the member with its type prefix
     # removed, in four more forms: lower-cased, since the provider and IAM
     # lower-case emails in ids and policy reads, and URL-encoded with
     # encodeURIComponent's escapes (jq's @uri also escapes !'()*), from each
     # case. The error messages name the secret, never the value.
-    forms="$(jq -r --arg name "$name" '
+    forms="$(jq -r --arg name "$name" --arg prefix "$prefix" '
         def enc: @uri | gsub("%21"; "!") | gsub("%27"; "'"'"'") | gsub("%28"; "(") | gsub("%29"; ")") | gsub("%2A"; "*");
         if type != "object" then error("\($name) is not a JSON object") else . end
         | .. | strings
         | if test("[\r\n]") or length < 4 then error("\($name) holds a value shorter than 4 characters or spanning lines") else . end
-        | [., sub("^([A-Za-z]+:)+"; "")]
+        | [., sub($prefix; "")]
         | if (.[1] | length) < 4 then error("\($name) holds a member whose address is shorter than 4 characters") else . end
         | .[]
         | ., ascii_downcase, enc, (enc | ascii_downcase), (ascii_downcase | enc)

@@ -2,7 +2,7 @@
 
 Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`, which holds the addresses the stack grants or notifies, and checks it at plan. No address sits in this repository or in a plan log: the module's output is sensitive, and every value prints in plan output as `(sensitive value)`. The `foundation`, `apis`, `ai` and `telemetry` stacks call it with their stack name. Plan fails while the secret, or the planner's access to it, does not exist.
 
-`schemas.json` holds each stack's schema (its top-level keys, each with a value form and the fewest entries it holds), the label pattern, the pattern of each form with a sentence saying what it accepts, the type prefix pattern, and the minimum value length. `scripts/bootstrap-principals.sh` reads the same file, so the script and the module apply the same patterns. The patterns use only ASCII classes and the `\A` and `\z` anchors, which RE2 (Terraform's `regex`) and Oniguruma (jq's `test`) read the same way.
+`schemas.json` holds each stack's schema (its top-level keys, each with a value form and the fewest entries it holds), the label pattern, the pattern of each form with a sentence saying what it accepts, the member type prefix pattern, and the minimum value length. `scripts/bootstrap-principals.sh` and `scripts/mask-principals.sh` read the same file, so the module and both scripts apply the same patterns. The patterns use only ASCII classes and the `\A` and `\z` anchors, which RE2 (Terraform's `regex`) and Oniguruma (jq's `test`) read the same way.
 
 ## Rules
 
@@ -16,7 +16,7 @@ Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`
 
 ## Writing the secret
 
-Each write adds a version that replaces the whole secret, and the next apply of the stack revokes the grant of any entry the new version omits. `scripts/bootstrap-principals.sh` therefore starts every change from the latest version and keeps the addresses off disk outside a private temporary directory.
+Each write adds a version that replaces the whole secret, and the next apply of the stack revokes the grant of any entry the new version omits. `scripts/bootstrap-principals.sh` therefore starts every change from the latest version. The script's copy lives in a private temporary directory that it removes on exit; an editor's own swap, backup or undo files follow that editor's configuration.
 
 Create a secret from a file that holds every key of the stack's schema, each an object (empty where the stack has no entries). Keep the file outside the repository and remove it afterwards:
 
@@ -32,7 +32,7 @@ Change an existing secret with `edit`:
 scripts/bootstrap-principals.sh edit <project> <namespace>-<stack>-principals
 ```
 
-The script reads the latest enabled version, opens `${EDITOR:-vi}` on a copy in a private temporary directory, validates the result against the rules above, and adds it as the next version. It removes the directory, with anything the editor left in it, on every exit. A copy left unchanged writes nothing, and a copy that breaks a rule is refused and discarded, so run `edit` again.
+The script reads the latest enabled version, opens `${VISUAL:-${EDITOR:-vi}}` on a copy in a private temporary directory, validates the result against the rules above, and adds it as the next version. It runs the editor through `sh` the way git does, so a command with a quoted path or arguments works. The editor must wait until the file is closed: set `EDITOR` to a command such as `code --wait` for a graphical editor, since one that returns at once leaves the copy unchanged and the script reports "no change". The script removes the directory, with anything the editor left in it, on every exit. A copy whose canonical form equals the stored version writes nothing. A copy that breaks a rule is refused and the editor opens again on the same copy; leaving a refused copy unchanged stops with nothing written. `edit` needs only the rights to list, read and add versions, and makes no IAM change.
 
 Just before it adds the version, the script reads the latest enabled version again and refuses to write when another operator's version has landed since it read. Secret Manager's AddSecretVersion takes no etag, so the check and the write are two calls, and a concurrent writer can only interleave within that gap.
 
