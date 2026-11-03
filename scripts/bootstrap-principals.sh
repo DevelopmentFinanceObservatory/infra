@@ -48,10 +48,9 @@
 # version. It needs only the rights to list, read and add versions; it makes no
 # IAM change. The editor must wait until the file is closed (for example
 # `code --wait`); an editor that returns at once leaves the copy unchanged,
-# which the script reports. A stored version whose bytes are canonical opens
-# pretty-printed; any other stored version (unsorted keys, extra whitespace, a
-# repeated key) opens as its raw bytes, so the editor shows what is stored and
-# validation sees every key. A copy that breaks a rule is refused and the
+# which the script reports. A stored version opens pretty-printed, except one
+# that repeats a key, which opens as its raw bytes: pretty-printing would drop
+# the repeat before validation could see it. A copy that breaks a rule is refused and the
 # editor opens again on the same copy; leaving a refused copy unchanged stops
 # with nothing written. A result whose canonical form equals the stored
 # version's bytes writes nothing. An unchanged save of a version whose bytes
@@ -125,21 +124,27 @@ trap 'rm -rf "$work"' EXIT
 trap 'exit 1' HUP INT TERM
 canonical="$work/canonical.json"
 
+# repeats_key <file>: succeeds when a JSON object in the file holds the same key
+# twice. jq keeps the last of a repeated key, so a repeat shows as a leaf in the
+# file's event stream that the parsed documents no longer have. Fails for a file
+# that is not valid JSON.
+repeats_key() {
+  local file_leaves parsed_leaves
+  file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$1" 2>/dev/null) || return 1
+  parsed_leaves=$(jq -cs '[.[] | tostream | select(length == 2)] | length' "$1" 2>/dev/null) || return 1
+  [ "$file_leaves" != "$parsed_leaves" ]
+}
+
 # validate <file> <label>: refuses, naming <label>, content that breaks a rule;
 # otherwise leaves jq's compact, key-sorted form of the one object in $canonical.
 validate() {
-  local file=$1 label=$2 docs file_leaves parsed_leaves problems
+  local file=$1 label=$2 docs problems
 
   docs=$(jq -cs . "$file") || { echo "error: $label is not valid JSON" >&2; return 1; }
   jq -e 'length == 1 and (.[0] | type) == "object"' <<<"$docs" >/dev/null ||
     { echo "error: $label must hold exactly one JSON object" >&2; return 1; }
 
-  # jq keeps the last of a repeated key, so a repeat shows as a leaf in the
-  # file's event stream that the parsed object no longer has.
-  file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$file") || return 1
-  parsed_leaves=$(jq -c '[.[0] | tostream | select(length == 2)] | length' <<<"$docs") || return 1
-  [ "$file_leaves" = "$parsed_leaves" ] ||
-    { echo "error: $label repeats a key" >&2; return 1; }
+  ! repeats_key "$file" || { echo "error: $label repeats a key" >&2; return 1; }
 
   jq -cjS '.[0]' <<<"$docs" >"$canonical" || return 1
 
@@ -201,26 +206,26 @@ add_version() {
 
 # grant_planner: gives the planner secretAccessor on the secret; adding a
 # binding that exists changes nothing. The planner account is created by the
-# foundation stack, so before that apply the grant fails. Any failure exits 1
-# and names the grant command to run once the cause is fixed.
+# foundation stack, so before that apply the grant fails. Any failure shows
+# gcloud's error, exits 1 and names the grant command to run once the cause is
+# fixed.
 grant_planner() {
-  local err="$work/grant.err" again
+  local err="$work/grant.err" again cause
   again="$(basename "$0") grant $project $secret_name"
   if gcloud secrets add-iam-policy-binding "$secret_name" --project="$project" \
     --member="$planner" --role="roles/secretmanager.secretAccessor" >/dev/null 2>"$err"; then
     return 0
   fi
+  cat "$err" >&2
   if grep -q 'does not exist' "$err"; then
     echo "error: the service account ${planner#serviceAccount:} does not exist yet; the foundation stack creates it." >&2
+    cause="foundation's first apply has created the planner account"
   else
-    cat "$err" >&2
     echo "error: could not grant ${planner#serviceAccount:} access to $secret_name in $project" >&2
+    cause="you hold secretmanager.secrets.setIamPolicy on the secret, or have corrected the secret name"
   fi
-  if [ "$mode" = create ]; then
-    echo "$secret_name and its version are written. Once the cause is fixed (foundation's first apply creates the planner account), run: $again" >&2
-  else
-    echo "Once the cause is fixed (foundation's first apply creates the planner account), run: $again" >&2
-  fi
+  [ "$mode" != create ] || echo "$secret_name and its version are written." >&2
+  echo "Once $cause, run: $again" >&2
   exit 1
 }
 
@@ -261,15 +266,13 @@ started_from=$latest
 gcloud secrets versions access "$started_from" --secret="$secret_name" --project="$project" >"$work/current.json" ||
   { echo "error: could not read version $started_from of $secret_name in $project" >&2; exit 1; }
 
-# The editor gets the stored bytes unless they are already canonical, in which
-# case it gets the pretty-printed form. Pretty-printing a version that is not
-# canonical would drop a repeated key before validation could see it.
-# $presented is the copy the editor was last given.
+# The editor gets the pretty-printed stored version, or its raw bytes when it
+# repeats a key or is not valid JSON, since pretty-printing would drop the
+# repeat before validation could see it. $presented is the copy the editor was
+# last given.
 edited="$work/principals.json"
 presented="$work/presented.json"
-if jq -cjS . "$work/current.json" 2>/dev/null | cmp -s - "$work/current.json"; then
-  jq -S . "$work/current.json" >"$edited"
-else
+if repeats_key "$work/current.json" || ! jq -S . "$work/current.json" >"$edited" 2>/dev/null; then
   cp "$work/current.json" "$edited"
 fi
 cp "$edited" "$presented"

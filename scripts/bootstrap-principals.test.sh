@@ -308,11 +308,21 @@ lacks "a rerun after a failed grant creates nothing" "secrets create"
 # The planner account does not exist until foundation applies.
 STUB_GRANT_FAIL=missing run test-project "$V" "{\"invokers\": {\"x\": $G}}"
 check "a missing planner exits non-zero" "$(is "$status" 1)"
+check "a missing planner shows gcloud's error" "$(says "INVALID_ARGUMENT")"
 check "a missing planner names the account" "$(says "dfo-infra-planner@test-project.iam.gserviceaccount.com")"
 check "a missing planner says foundation creates it" "$(says "foundation stack creates it")"
 check "a missing planner says the secret and its version are written" "$(says "$V and its version are written")"
 check "a missing planner names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
 has "a missing planner leaves the version written" "versions add $V"
+
+# Any other grant failure shows gcloud's error and names the IAM right the
+# operator needs, without blaming the missing planner account.
+STUB_GRANT_FAIL=denied run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a denied grant shows gcloud's error" "$(says "PERMISSION_DENIED")"
+check "a denied grant names the IAM right" "$(says "secretmanager.secrets.setIamPolicy")"
+check "a denied grant does not blame the planner account" "$([[ "$out" != *foundation* ]] && echo true || echo false)"
+check "a denied grant says the secret and its version are written" "$(says "$V and its version are written")"
+check "a denied grant names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
 
 # grant on its own adds only the planner binding; it reads and writes no
 # version, creates nothing, and repeats harmlessly.
@@ -326,10 +336,15 @@ check "grant, repeated, makes the same single call" "$(is "$(wc -l <"$STUB_LOG" 
 STUB_GRANT_FAIL=missing run_grant test-project "$V"
 check "grant with the planner missing exits non-zero" "$(is "$status" 1)"
 check "grant with the planner missing says foundation creates it" "$(says "foundation stack creates it")"
+check "grant with the planner missing shows gcloud's error" "$(says "INVALID_ARGUMENT")"
+check "grant with the planner missing does not claim a version was written" "$([[ "$out" != *"its version are written"* ]] && echo true || echo false)"
 check "grant with the planner missing names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
 STUB_GRANT_FAIL=denied run_grant test-project "$V"
 check "grant refused by IAM exits non-zero" "$(is "$status" 1)"
 check "grant refused by IAM shows gcloud's error" "$(says "PERMISSION_DENIED")"
+check "grant refused by IAM names the IAM right" "$(says "secretmanager.secrets.setIamPolicy")"
+check "grant refused by IAM names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
+check "grant refused by IAM does not claim a version was written" "$([[ "$out" != *"its version are written"* ]] && echo true || echo false)"
 run_grant Bad_Project "$V"
 check "grant of a bad project id makes no gcloud call" "$(is "$calls" "")"
 run_grant test-project dfo-test-website-principals
@@ -421,12 +436,12 @@ check "edit to whitespace only is accepted" "$(is "$status" 0)"
 check "edit to whitespace only says nothing was written" "$(says "nothing written")"
 writes_nothing "edit to whitespace only"
 
-# A stored version that is not byte-canonical opens as its raw bytes, and a
-# save that changes nothing writes its canonical form.
-printf '%s' '{ "invokers": {"zz": "user:z@example.org", "aa": "user:a@example.org"} }' >"$STUB_CONTENT"
+# A stored version that is not byte-canonical but repeats no key opens
+# pretty-printed, and a save that changes nothing writes its canonical form.
+printf '%s' '{"invokers":{"zz":"user:z@example.org","aa":"user:a@example.org"}}' >"$STUB_CONTENT"
 run_edit test-project "$V"
 check "edit saving a non-canonical stored version unchanged is accepted" "$(is "$status" 0)"
-check "edit gives the editor a non-canonical stored version as its raw bytes" "$(cmp -s "$EDITOR_SAW" "$STUB_CONTENT" && echo true || echo false)"
+check "edit gives the editor a non-canonical stored version pretty-printed" "$(is "$(cat "$EDITOR_SAW")" "$(jq -S . "$STUB_CONTENT")")"
 check "edit saving a non-canonical stored version unchanged writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"aa":"user:a@example.org","zz":"user:z@example.org"}}')"
 check "edit saving a non-canonical stored version unchanged opens the editor once" "$(is "$(cat "$EDITOR_COUNT")" 1)"
 
@@ -443,6 +458,16 @@ writes_nothing "edit saving a repeated-key stored version unchanged"
 EDIT_JQ_2='.' run_edit test-project "$V"
 check "edit dropping a repeated key is accepted" "$(is "$status" 0)"
 check "edit dropping a repeated key writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"x":"user:y@example.org"}}')"
+printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+
+# A stored version of two JSON documents is never taken for canonical: it
+# opens pretty-printed, and saved unchanged it is refused until it holds one.
+printf '%s' '{"invokers":{"a":"user:a@example.org"}}{"invokers":{"a":"user:a@example.org"}}' >"$STUB_CONTENT"
+run_edit test-project "$V"
+check "edit saving a two-document stored version unchanged is refused" "$(is "$status" 1)"
+check "edit saving a two-document stored version unchanged names the problem" "$(says "exactly one JSON object")"
+check "edit gives the editor a two-document stored version pretty-printed" "$(is "$(cat "$EDITOR_SAW")" "$(jq -S . "$STUB_CONTENT")")"
+writes_nothing "edit saving a two-document stored version unchanged"
 printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
 
 # A refused copy is offered again, and a second edit that passes is written.
