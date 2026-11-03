@@ -70,7 +70,7 @@ Humans who call the MCP mounts directly, and whoever configures the e2e test dae
 
 ## Principals secret
 
-The studio and MCP token readers live in the Secret Manager secret `<namespace>-ai-principals` (`dfo-dev-ai-principals` here, `dfo-prod-ai-principals` in prod). Each environment needs it, and an environment with no readers of a kind holds an empty object for it. Both objects hold IAM members:
+The studio and MCP token readers live in the Secret Manager secret `<namespace>-ai-principals` (`dfo-dev-ai-principals` here, `dfo-prod-ai-principals` in prod). Each environment needs it, and an environment with no readers of a kind holds an empty object for it. Both objects hold people, each `group:` or `user:` followed by an address. A service account gets its own Terraform resource in the stack that owns it, as [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states:
 
 ```json
 {
@@ -79,13 +79,7 @@ The studio and MCP token readers live in the Secret Manager secret `<namespace>-
 }
 ```
 
-To create the secret or change its members, write the JSON to a file outside the repository and run
-
-```sh
-scripts/bootstrap-principals.sh dev-fin-observatory dfo-dev-ai-principals principals.json
-```
-
-[`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states the rules the secret must meet, what the script does, the relabel order, and the `removed` block that moved the studio grant off member-keyed state.
+To create the secret, follow "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `dev-fin-observatory` and `dfo-dev-ai-principals`. To change its members, run `scripts/bootstrap-principals.sh edit dev-fin-observatory dfo-dev-ai-principals`. Then dispatch the apply with `--ref dev` and `stack=ai`. That page also states the rules the secret must meet, the relabel order, and the `removed` block that moved the studio grant off member-keyed state.
 
 ## Datasets first-party principal
 

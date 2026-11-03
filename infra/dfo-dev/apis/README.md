@@ -95,7 +95,7 @@ The Skills surface reads the same graph the Search surface reads, through Search
 Cloud Run IAM is the service's only identity boundary. Each `roles/run.invoker` grant on the service sits in the stack that owns the identity it names:
 
 - `allow_unauthenticated`, set in this stack's `env.auto.tfvars`, grants it to `allUsers`. It is `false` in dfo-dev and dfo-prod, so the service refuses anonymous callers.
-- `invoker_members`, set in the same file, grants it to each listed identity. It holds principals no stack owns and is empty in both environments.
+- The `invokers` object of the `<namespace>-apis-principals` secret (`dfo-dev-apis-principals` here, `dfo-prod-apis-principals` in prod) grants it to each member listed, as `google_cloud_run_v2_service_iam_member.apis_invoker` in `main.tf`, and `roles/run.viewer` as `apis_viewer`, which `gcloud run services proxy` needs to read the service first. It holds the people and groups no stack owns, as `user:` and `group:` members only, so no address sits in this repository. See "Adding a developer" below.
 - The `website` and `ai` stacks grant it to their own runtime service accounts, as `google_cloud_run_v2_service_iam_member.website_apis_invoker` in `infra/stacks/website/main.tf` and `google_cloud_run_v2_service_iam_member.ai_apis_invoker` in `infra/stacks/ai/main.tf`. Each names this service through its `apis_service_name` variable, copied from this stack's `service_name` output. `apply.yml` applies this stack first, so the service exists before either grant, and this stack names no account another stack creates.
 - In dfo-dev, `eval_reader.tf` grants it to `dfo-dev-apis-eval-reader` and `sdk_e2e.tf` to `dfo-dev-sdk-e2e`, each by resource reference. The first serves the apis repository's eval jobs. The second serves the sdk repository's end-to-end workflow, and only a run on that repository's `refs/heads/main` can mint it, matched on `attribute.repo_ref`. The sdk repository has an entry in the `foundation` stack's `github_repositories` so the shared pool admits its tokens, and `dfo_sdk_repository_id` here copies that entry's id.
 
@@ -107,9 +107,9 @@ The Data Commons service is a second service callers reach. `dcp_access.tf` gran
 
 The website and ai services mint tokens from the metadata server as their runtime accounts. In dfo-dev the apis repository's eval jobs mint them as `dfo-dev-apis-eval-reader` from the workflow's WIF credentials, and the sdk repository's end-to-end workflow mints them as `dfo-dev-sdk-e2e`. The Data Commons prototype calls the website's proxy and holds no grant on this service.
 
-To add a caller, grant `roles/run.invoker` on this service in the caller's own stack, or add a principal no stack owns to `invoker_members`. Cloud Run refuses a caller with no token or no grant before the app logs the request, so find those callers in the 401 and 403 lines of the `run.googleapis.com/requests` log. The apis service logs each admitted request as `dfo_platform.request` with `caller_token_present`, the unverified `email` and `aud` of the token, and the user agent, which shows the identity an admitted caller used.
+To add a caller, grant `roles/run.invoker` on this service in the caller's own stack, or add a person or group to the `invokers` object of the apis principals secret. Cloud Run refuses a caller with no token or no grant before the app logs the request, so find those callers in the 401 and 403 lines of the `run.googleapis.com/requests` log. The apis service logs each admitted request as `dfo_platform.request` with `caller_token_present`, the unverified `email` and `aud` of the token, and the user agent, which shows the identity an admitted caller used.
 
-A developer reaches dfo-dev through a local proxy that attaches their own token, with a project role that carries `run.routes.invoke`, such as `roles/editor`, and points local base URLs at `http://localhost:8083`:
+A developer reaches dfo-dev through a local proxy that attaches their own token, with a project role that carries `run.routes.invoke`, such as `roles/editor`, or with an `invokers` grant, and points local base URLs at `http://localhost:8083`:
 
 ```bash
 gcloud run services proxy dfo-dev-apis --region northamerica-northeast1 --project dev-fin-observatory --port 8083
@@ -124,6 +124,21 @@ gcloud run services add-iam-policy-binding dfo-dev-apis --region northamerica-no
 ```
 
 The stack's IAM grants are additive `google_cloud_run_v2_service_iam_member` resources, so the next apply neither removes the manual binding nor reports it, and Terraform cannot see an `allUsers` binding made by hand. Remove it with `remove-iam-policy-binding` and the same arguments once the caller is fixed. The removal takes about two minutes to take effect. Setting `allow_unauthenticated = true` in `env.auto.tfvars` instead makes Terraform own the binding. "Caller authentication" in `infra/dfo-prod/apis/README.md` gives the prod command.
+
+### Adding a developer
+
+A developer without a project role that carries `run.routes.invoke` needs an entry in the `invokers` object. The object takes `user:` and `group:` members only, because it grants people who reach the service through the proxy. A service account, workload identity principal or domain that calls the service gets its own grant in the stack that owns it. Label each entry by role, such as `dev-1` or `devs`, since labels appear in plan output and public plan comments:
+
+```json
+{
+  "invokers": {
+    "dev-1": "user:dev1@example.org",
+    "devs": "group:devs@example.org"
+  }
+}
+```
+
+Add the entry with `scripts/bootstrap-principals.sh edit dev-fin-observatory dfo-dev-apis-principals`, then dispatch the apply with `--ref dev` and `stack=apis`, as "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) describes. The same page states the rules the secret must meet. The apply grants each member `roles/run.invoker` and `roles/run.viewer` on the service, and the developer then runs the proxy.
 
 ## APIs
 

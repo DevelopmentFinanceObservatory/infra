@@ -59,6 +59,21 @@ locals {
   alert_notification_channels = data.google_monitoring_notification_channel.alerts[*].name
 }
 
+# The service's invokers that no stack owns, such as a group of developers,
+# read from a hand-made secret. The module holds the rules and this stack's
+# schema, and scripts/bootstrap-principals.sh writes it.
+module "principals" {
+  source = "../../modules/principals-secret"
+
+  project_id = var.project_id
+  namespace  = var.namespace
+  stack      = "apis"
+}
+
+locals {
+  principals = module.principals.principals
+}
+
 # The service's Gemini API key secret, created outside Terraform and only
 # referenced here. See var.gemini_api_key_secret_id.
 data "google_secret_manager_secret" "gemini" {
@@ -344,17 +359,34 @@ module "apis_service" {
   }
 }
 
-# One invoker grant per identity in var.invoker_members. Every other grant sits
-# beside the account it names: eval_reader.tf's and sdk_e2e.tf's in the dev apis
-# stack, and the website and ai runtime accounts' in those stacks, which apply
-# after this one.
+# Each member in the principals secret's invokers object, keyed by label, gets
+# roles/run.invoker here and roles/run.viewer below. The schema accepts only
+# group: and user: members, so each entry names a person or a group of people,
+# who reach the service through `gcloud run services proxy`. A person who also
+# holds either role through a hand-made binding loses it when the entry is
+# removed, so grant people through the secret only.
+# Every machine caller's grant sits beside the account it names: eval_reader.tf's
+# and sdk_e2e.tf's in the dev apis stack, and the website and ai runtime
+# accounts' in those stacks, which apply after this one.
 resource "google_cloud_run_v2_service_iam_member" "apis_invoker" {
-  for_each = toset(var.invoker_members)
+  for_each = toset(nonsensitive(keys(local.principals.invokers)))
   project  = var.project_id
   location = var.region
   name     = module.apis_service.service_name
   role     = "roles/run.invoker"
-  member   = each.value
+  member   = local.principals.invokers[each.key]
+}
+
+# `gcloud run services proxy` reads the service (run.services.get) before it
+# proxies, and roles/run.invoker lacks that permission, so a person who reaches
+# the service through the proxy needs the viewer role as well.
+resource "google_cloud_run_v2_service_iam_member" "apis_viewer" {
+  for_each = toset(nonsensitive(keys(local.principals.invokers)))
+  project  = var.project_id
+  location = var.region
+  name     = module.apis_service.service_name
+  role     = "roles/run.viewer"
+  member   = local.principals.invokers[each.key]
 }
 
 # The tag the apis service is running, read fresh on every plan and

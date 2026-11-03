@@ -31,12 +31,10 @@ stateless_deletion_protection = false
 
 # False refuses anonymous callers. Each caller sends an ID token minted as an
 # identity holding run.invoker; see "Caller authentication" in
-# infra/dfo-dev/apis/README.md.
+# infra/dfo-dev/apis/README.md. Developers without a project role that carries
+# run.routes.invoke get invoker and viewer grants through the invokers object
+# of dfo-dev-apis-principals.
 allow_unauthenticated = false
-# Principals no stack owns. The website and ai stacks grant their own runtime
-# accounts invoker on this service, and developers reach it through
-# `gcloud run services proxy` on their project role.
-invoker_members = []
 
 # Unpauses the graph release builder's Scheduler trigger and enables its
 # alert policies. The deployed dfo-apis image carries graph_release.job.

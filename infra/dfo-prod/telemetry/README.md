@@ -306,11 +306,11 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 
 ## Readers
 
-The principals secret's `readers` object lists the readers of `dfo_reporting` as IAM member strings. Each gets `READER` on `dfo_reporting`, and `roles/bigquery.jobUser` and `roles/mcp.toolUser` on the project, and no access to `logs_daily`, `dfo_logs`, `searchconsole`, or any other source dataset.
+The principals secret's `readers` object lists the readers of `dfo_reporting` as people, each `group:` or `user:` followed by an address. Each gets `READER` on `dfo_reporting`, and `roles/bigquery.jobUser` and `roles/mcp.toolUser` on the project, and no access to `logs_daily`, `dfo_logs`, `searchconsole`, or any other source dataset.
 
 ## Principals secret
 
-The readers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. `readers` holds IAM members and `alerts` at least one bare address:
+The readers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. `readers` holds people (`group:` or `user:` followed by an address) and `alerts` at least one bare address. A service account gets its own Terraform resource in the stack that owns it, as [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states:
 
 ```json
 {
@@ -319,13 +319,7 @@ The readers and alert recipients live in the Secret Manager secret `dfo-prod-tel
 }
 ```
 
-To create the secret or change its members, write the JSON to a file outside the repository and run
-
-```sh
-scripts/bootstrap-principals.sh prod-fin-observatory dfo-prod-telemetry-principals principals.json
-```
-
-[`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states the rules the secret must meet, what the script does, and the relabel order.
+To create the secret, follow "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `prod-fin-observatory` and `dfo-prod-telemetry-principals`. To change its members, run `scripts/bootstrap-principals.sh edit prod-fin-observatory dfo-prod-telemetry-principals`. Then dispatch the apply with `--ref main` and `stack=telemetry`. That page also states the rules the secret must meet and the relabel order.
 
 ## Apply order
 

@@ -1,42 +1,98 @@
 #!/usr/bin/env bash
 #
-# Write a stack's hand-made principals secret from a local JSON file.
+# Create or change a stack's hand-made principals secret.
 #
 # A stack that grants or notifies people (foundation's applier impersonators,
-# ingestion operators and budget alert recipients, the ai stack's token
-# readers, the telemetry stack's reporting readers and alert recipients) reads
-# their addresses from a Secret Manager secret, so no address sits in this
-# public repository or in a plan log. The file is an object of objects of
-# strings, each inner object keyed by labels that name resources in Terraform
-# state and plan output, for example
+# ingestion operators and budget alert recipients, the apis stack's invokers,
+# the ai stack's token readers, the telemetry stack's reporting readers and
+# alert recipients) reads their addresses from a Secret Manager secret, so no
+# address sits in this public repository or in a plan log. The secret is an
+# object of objects of strings, each inner object keyed by labels that name
+# resources in Terraform state and plan output, for example
 #   {"readers": {"team": "group:readers@example.org"},
 #    "alerts": {"team": "alerts@example.org"}}
 #
 # The stack in the secret name picks its schema from
 # infra/modules/principals-secret/schemas.json, which also holds the label
 # and value patterns. infra/modules/principals-secret/README.md states the
-# rules; the script refuses a file that breaks one before any gcloud call,
-# then writes jq's compact, key-sorted form of the one object it checked, so
-# the stack reads exactly what passed.
+# rules. The script refuses content that breaks one before it writes, then
+# writes jq's compact, key-sorted form of the one object it checked, so the
+# stack reads exactly what passed.
 #
-# This creates the secret when it is absent, adds that canonical form as a new
-# version, and grants the dfo-infra-planner service account secretAccessor on
-# it. The foundation stack makes the same grant (principals_planner), but the
-# stack's first plan can run before foundation applies. Safe to rerun; each
-# run adds a version, and the stack reads the latest.
+# Create a secret from a local file:
+#   bootstrap-principals.sh PROJECT SECRET_NAME JSON_FILE
+# The script validates the file, creates the secret if it is missing, adds the
+# canonical form as the first version when the secret has no enabled version,
+# and then grants the dfo-infra-planner service account secretAccessor on it.
+# A secret that already has a version is left as it is when the file's
+# canonical form equals the latest version, so a rerun completes a partial
+# create. When the content differs, the script refuses and points at `edit`.
+# Every step is skipped or repeated harmlessly, so the same command finishes a
+# create that stopped part way. The grant comes last because the planner
+# account does not exist until the foundation stack first applies. When the
+# grant fails, the secret and its version are already written. The script
+# exits 1 and names the `grant` command to run once the cause is fixed. The
+# foundation stack makes the same grant (principals_planner), but the stack's
+# first plan can run before foundation applies.
 #
-# Usage: bootstrap-principals.sh PROJECT SECRET_NAME JSON_FILE
-#   e.g. bootstrap-principals.sh prod-fin-observatory dfo-prod-telemetry-principals principals.json
+# Grant the planner on its own:
+#   bootstrap-principals.sh grant PROJECT SECRET_NAME
+# This adds the dfo-infra-planner secretAccessor binding that create ends with.
+# It is idempotent and writes no version.
+#
+# Change an existing secret:
+#   bootstrap-principals.sh edit PROJECT SECRET_NAME
+# The script reads the latest enabled version, opens the editor ($VISUAL, else
+# $EDITOR, else vi, run through sh the way git runs its editor) on a copy in a
+# private temporary directory, validates the result, and adds it as the next
+# version. It needs only the rights to list, read and add versions, and makes
+# no IAM change. The editor must wait until the file is closed (for example
+# `code --wait`). An editor that returns at once leaves the copy unchanged,
+# which the script reports. A stored version opens pretty-printed, except one
+# that repeats a key, which opens as its raw bytes, since pretty-printing would
+# drop the repeat before validation could see it. A copy that breaks a rule is
+# refused and the editor opens again on the same copy. Leaving a refused copy
+# unchanged stops with nothing written. A result whose canonical form equals
+# the stored version's bytes writes nothing. An unchanged save of a version
+# whose bytes are not canonical writes its canonical form. Any non-zero editor
+# exit stops with nothing written, as git does with a commit message. macOS
+# /usr/bin/vi can exit 1 after :wq when a command error happened in the
+# session. Running `edit` again, or setting EDITOR, is the remedy.
+#
+# The script's copy lives in a private directory that it removes on every exit,
+# with anything the editor left beside it. An editor's own swap, backup or undo
+# files follow that editor's configuration and may sit elsewhere.
+#
+# Each version replaces the whole secret, so a write built from an older
+# version would drop the entries a newer one added. Just before it adds the
+# version, the script reads the latest enabled version again and refuses to
+# write when it is not the one it started from. AddSecretVersion takes no
+# etag, so the check and the write are two calls and a concurrent writer can
+# only interleave within that gap.
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
+usage() {
   echo "usage: $(basename "$0") PROJECT SECRET_NAME JSON_FILE" >&2
+  echo "       $(basename "$0") edit PROJECT SECRET_NAME" >&2
+  echo "       $(basename "$0") grant PROJECT SECRET_NAME" >&2
   exit 2
-fi
+}
+
+mode=create
+case "${1:-}" in
+edit | grant)
+  mode=$1
+  shift
+  [ "$#" -eq 2 ] || usage
+  ;;
+*)
+  [ "$#" -eq 3 ] || usage
+  json_file=$3
+  ;;
+esac
 
 project=$1
 secret_name=$2
-json_file=$3
 
 planner="serviceAccount:dfo-infra-planner@${project}.iam.gserviceaccount.com"
 
@@ -44,7 +100,9 @@ for cmd in gcloud jq; do
   command -v "$cmd" >/dev/null || { echo "error: $cmd not found on PATH" >&2; exit 1; }
 done
 
-[ -f "$json_file" ] || { echo "error: $json_file is not a file" >&2; exit 1; }
+if [ "$mode" = create ]; then
+  [ -f "$json_file" ] || { echo "error: $json_file is not a file" >&2; exit 1; }
+fi
 
 [[ "$project" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || { echo "error: $project is not a GCP project id" >&2; exit 1; }
 [[ "$secret_name" =~ ^[A-Za-z0-9_-]{1,255}$ ]] || { echo "error: $secret_name is not a Secret Manager secret name" >&2; exit 1; }
@@ -59,57 +117,214 @@ schema=$(jq -ce --arg stack "$stack" '.stacks[$stack] // empty' "$schemas") || {
   exit 1
 }
 
-docs=$(jq -cs . "$json_file") || { echo "error: $json_file is not valid JSON" >&2; exit 1; }
-jq -e 'length == 1 and (.[0] | type) == "object"' <<<"$docs" >/dev/null ||
-  { echo "error: $json_file must hold exactly one JSON object" >&2; exit 1; }
+# One private directory holds every file the script and the editor touch. It
+# goes on any exit, including an interrupt.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+trap 'exit 1' HUP INT TERM
+canonical="$work/canonical.json"
 
-# jq keeps the last of a repeated key, so a repeat shows as a leaf in the
-# file's event stream that the parsed object no longer has.
-file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$json_file")
-parsed_leaves=$(jq -c '[.[0] | tostream | select(length == 2)] | length' <<<"$docs")
-[ "$file_leaves" = "$parsed_leaves" ] ||
-  { echo "error: $json_file repeats a key" >&2; exit 1; }
+# repeats_key <file>: returns 0 when a JSON object in the file holds the same
+# key twice, 1 when it holds none, and 2 when either jq call fails (a file that
+# is not valid JSON, or jq itself failing), leaving jq's error, which gives
+# positions and not content, in $work/repeats.err. jq keeps the last of a
+# repeated key, so a repeat shows as a leaf in the file's event stream that the
+# parsed documents no longer have.
+repeats_key() {
+  local file_leaves parsed_leaves
+  file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$1" 2>"$work/repeats.err") || return 2
+  parsed_leaves=$(jq -cs '[.[] | tostream | select(length == 2)] | length' "$1" 2>"$work/repeats.err") || return 2
+  [ "$file_leaves" = "$parsed_leaves" ] && return 1
+  return 0
+}
 
-canonical=$(mktemp)
-trap 'rm -f "$canonical"' EXIT
-jq -cjS '.[0]' <<<"$docs" >"$canonical"
+# validate <file> <label>: refuses, naming <label>, content that breaks a rule.
+# Otherwise it leaves jq's compact, key-sorted form of the one object in $canonical.
+validate() {
+  local file=$1 label=$2 docs problems repeat_status=0
 
-# Validate before anything is written, so a malformed file never becomes the
-# latest version the stack reads. The messages name keys only, never a value
-# or a label, since a bad label may be an address.
-problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c '{label, forms, prefix, min_length}' "$schemas")" '
-  {
-    member: "group:, user: or serviceAccount: before an address, or domain: before a domain, in lower-case ASCII",
-    email: "a bare email address in lower-case ASCII"
-  } as $says
-  | . as $doc
-  | (keys[] as $key | select($schema | has($key) | not) | "unexpected top-level key \($key)"),
-    ($schema | to_entries[] | .key as $k | .value as $rule | $patterns.forms[$rule.form] as $form
-      | if ($doc | has($k) | not) then "missing top-level key \($k)"
-        elif ($doc[$k] | type) != "object" then "\($k) must be an object"
-        else $doc[$k] as $obj
-          | (if ($obj | length) < $rule.min then "\($k) must hold at least \($rule.min) entry" else empty end),
-            (if any($obj | keys[]; test($patterns.label) | not) then "\($k) has a label outside lower-case letters, digits, hyphens and underscores" else empty end),
-            (if any($obj[]; (type != "string") or (test($form) | not)) then "each \($k) value must be \($says[$rule.form])" else empty end),
-            (if any($obj[]; (type == "string") and (length < $patterns.min_length or (sub($patterns.prefix; "") | length) < $patterns.min_length)) then "each \($k) value and its address must be at least \($patterns.min_length) characters, so CI can mask them" else empty end),
-            (if ([$obj[]] | length) != ([$obj[]] | unique | length) then "\($k) holds the same value under two labels" else empty end)
-        end)
-' "$canonical")
-if [ -n "$problems" ]; then
-  printf 'error: %s does not match the %s schema:\n' "$json_file" "$secret_name" >&2
-  printf '  %s\n' "${problems//$'\n'/$'\n  '}" >&2
+  docs=$(jq -cs . "$file") || { echo "error: $label is not valid JSON" >&2; return 1; }
+  jq -e 'length == 1 and (.[0] | type) == "object"' <<<"$docs" >/dev/null ||
+    { echo "error: $label must hold exactly one JSON object" >&2; return 1; }
+
+  repeats_key "$file" || repeat_status=$?
+  case "$repeat_status" in
+  0) echo "error: $label repeats a key" >&2; return 1 ;;
+  1) ;;
+  *) cat "$work/repeats.err" >&2; echo "error: could not check $label for a repeated key" >&2; return 1 ;;
+  esac
+
+  jq -cjS '.[0]' <<<"$docs" >"$canonical" || return 1
+
+  # The messages name the schema's keys, counts and positions, never text from
+  # the file, since a label or a top-level key may be an address. A position
+  # counts the top-level keys in the file's own order, from 1.
+  problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c . "$schemas")" \
+    --argjson order "$(jq -c '.[0] | keys_unsorted' <<<"$docs")" '
+    . as $doc
+    | ([$order | to_entries[] | select(.value as $key | $schema | has($key) | not) | .key + 1] as $extra
+        | if ($extra | length) == 0 then empty
+          else "\($extra | length) unexpected top-level \(if ($extra | length) == 1 then "key at position" else "keys at positions" end) \($extra | join(", "))" end),
+      ($schema | to_entries[] | .key as $k | .value as $rule | $patterns.forms[$rule.form] as $form
+        | if ($doc | has($k) | not) then "missing top-level key \($k)"
+          elif ($doc[$k] | type) != "object" then "\($k) must be an object"
+          else $doc[$k] as $obj
+            | (if ($obj | length) < $rule.min then "\($k) must hold at least \($rule.min) entry" else empty end),
+              (if any($obj | keys[]; test($patterns.label) | not) then "\($k) has a label outside lower-case letters, digits, hyphens and underscores" else empty end),
+              (if any($obj[]; (type != "string") or (test($form.pattern) | not)) then "each \($k) value must be \($form.says)" else empty end),
+              (if any($obj[]; (type == "string") and (length < $patterns.min_length or (sub($patterns.prefix; "") | length) < $patterns.min_length)) then "each \($k) value and its address must be at least \($patterns.min_length) characters, so CI can mask them" else empty end),
+              (if ([$obj[]] | length) != ([$obj[]] | unique | length) then "\($k) holds the same value under two labels" else empty end)
+          end)
+  ' "$canonical") || { echo "error: could not check $label against the $secret_name schema" >&2; return 1; }
+  if [ -n "$problems" ]; then
+    printf 'error: %s does not match the %s schema:\n' "$label" "$secret_name" >&2
+    printf '  %s\n' "${problems//$'\n'/$'\n  '}" >&2
+    return 1
+  fi
+}
+
+# read_latest: sets $latest to the number of the secret's latest enabled
+# version, empty when it has none. Returns 1 when the secret does not exist.
+# Any other failure shows gcloud's error and exits.
+read_latest() {
+  local err="$work/versions-list.err"
+  if latest=$(gcloud secrets versions list "$secret_name" --project="$project" \
+    --filter="state:ENABLED" --sort-by="~createTime" --limit=1 --format="value(name.basename())" 2>"$err"); then
+    return 0
+  fi
+  if grep -q NOT_FOUND "$err"; then
+    return 1
+  fi
+  cat "$err" >&2
+  echo "error: could not list the versions of $secret_name in $project" >&2
   exit 1
+}
+
+# add_version <started_from>: checks, immediately before the write, that the
+# latest enabled version is still the one the change started from (empty for a
+# first version), then adds $canonical as the next version.
+add_version() {
+  local started_from=$1
+  read_latest || { echo "error: $secret_name no longer exists in $project" >&2; exit 1; }
+  if [ "$latest" != "$started_from" ]; then
+    if [ -z "$started_from" ]; then
+      echo "error: $secret_name now has version $latest; change it with: $(basename "$0") edit $project $secret_name" >&2
+    else
+      echo "error: the latest version of $secret_name is $latest, not $started_from; run edit again to start from it" >&2
+    fi
+    exit 1
+  fi
+  gcloud secrets versions add "$secret_name" --project="$project" --data-file="$canonical"
+}
+
+# grant_planner: gives the planner secretAccessor on the secret. Adding a
+# binding that exists changes nothing. The planner account is created by the
+# foundation stack, so before that apply the grant fails. Any failure shows
+# gcloud's error, exits 1 and names the grant command to run once the cause is
+# fixed.
+grant_planner() {
+  local err="$work/grant.err" again cause
+  again="$(basename "$0") grant $project $secret_name"
+  if gcloud secrets add-iam-policy-binding "$secret_name" --project="$project" \
+    --member="$planner" --role="roles/secretmanager.secretAccessor" >/dev/null 2>"$err"; then
+    return 0
+  fi
+  cat "$err" >&2
+  if grep -q 'does not exist' "$err"; then
+    echo "error: the service account ${planner#serviceAccount:} does not exist yet; the foundation stack creates it." >&2
+    cause="foundation's first apply has created the planner account"
+  else
+    echo "error: could not grant ${planner#serviceAccount:} access to $secret_name in $project" >&2
+    cause="you hold secretmanager.secrets.getIamPolicy and secretmanager.secrets.setIamPolicy on the secret (roles/secretmanager.admin holds both)"
+    [ "$mode" = create ] || cause+=", or have corrected the secret name"
+  fi
+  [ "$mode" != create ] || echo "$secret_name and its version are written." >&2
+  echo "Once $cause, run: $again" >&2
+  exit 1
+}
+
+if [ "$mode" = grant ]; then
+  grant_planner
+  echo "${planner#serviceAccount:} can read ${secret_name} in ${project}"
+  exit 0
 fi
 
-if gcloud secrets describe "$secret_name" --project="$project" >/dev/null 2>&1; then
-  echo "secret ${secret_name} exists in ${project}"
-else
-  gcloud secrets create "$secret_name" --project="$project" --replication-policy=automatic
+if [ "$mode" = create ]; then
+  # Validate before any gcloud call, so a malformed file never becomes the
+  # latest version the stack reads.
+  validate "$json_file" "$json_file" || exit 1
+  if ! read_latest; then
+    gcloud secrets create "$secret_name" --project="$project" --replication-policy=automatic
+    latest=""
+  fi
+  if [ -n "$latest" ]; then
+    gcloud secrets versions access "$latest" --secret="$secret_name" --project="$project" >"$work/current.json" ||
+      { echo "error: could not read version $latest of $secret_name in $project" >&2; exit 1; }
+    cmp -s "$canonical" "$work/current.json" ||
+      { echo "error: $secret_name already has version $latest in $project with content that differs from $json_file; change it with: $(basename "$0") edit $project $secret_name" >&2; exit 1; }
+    echo "${secret_name} in ${project} already holds this content as version ${latest}"
+  else
+    add_version ""
+    echo "${secret_name} in ${project} has its first version in canonical form"
+  fi
+  grant_planner
+  exit 0
 fi
 
-gcloud secrets versions add "$secret_name" --project="$project" --data-file="$canonical"
+read_latest ||
+  { echo "error: $secret_name does not exist in $project; create it with: $(basename "$0") $project $secret_name JSON_FILE" >&2; exit 1; }
+[ -n "$latest" ] ||
+  { echo "error: $secret_name has no enabled version in $project; write one with: $(basename "$0") $project $secret_name JSON_FILE" >&2; exit 1; }
+started_from=$latest
 
-gcloud secrets add-iam-policy-binding "$secret_name" --project="$project" \
-  --member="$planner" --role="roles/secretmanager.secretAccessor" >/dev/null
+gcloud secrets versions access "$started_from" --secret="$secret_name" --project="$project" >"$work/current.json" ||
+  { echo "error: could not read version $started_from of $secret_name in $project" >&2; exit 1; }
 
-echo "${secret_name} in ${project} holds the canonical form of ${json_file} as its latest version, readable by ${planner}"
+# The editor gets the pretty-printed stored version, or its raw bytes when it
+# repeats a key, is not valid JSON, or could not be checked for a repeat, since
+# pretty-printing would drop a repeat before validation could see it.
+# $presented is the copy the editor was last given.
+edited="$work/principals.json"
+presented="$work/presented.json"
+repeat_status=0
+repeats_key "$work/current.json" || repeat_status=$?
+if [ "$repeat_status" -ne 1 ] || ! jq -S . "$work/current.json" >"$edited" 2>/dev/null; then
+  cp "$work/current.json" "$edited"
+fi
+cp "$edited" "$presented"
+
+refused=""
+unchanged=""
+while true; do
+  editor_status=0
+  sh -c "${VISUAL:-${EDITOR:-vi}} \"\$@\"" sh "$edited" || editor_status=$?
+  unchanged=""
+  cmp -s "$presented" "$edited" && unchanged=1
+  if [ "$editor_status" -ne 0 ]; then
+    echo "error: the editor exited with status $editor_status; nothing was written. Run edit again, or set EDITOR to another editor." >&2
+    exit 1
+  fi
+  if [ -n "$unchanged" ] && [ -n "$refused" ]; then
+    echo "error: the refused copy was left unchanged; nothing was written" >&2
+    exit 1
+  fi
+  validate "$edited" "the edited file" && break
+  refused=1
+  cp "$edited" "$presented"
+  echo "the editor opens again on the same copy; leave it unchanged to stop with nothing written" >&2
+done
+
+# The stored bytes, not their canonical form, decide: a stored version that is
+# not canonical is rewritten by any save.
+if cmp -s "$canonical" "$work/current.json"; then
+  if [ -n "$unchanged" ]; then
+    echo "no change to ${secret_name} version ${started_from}; nothing written. If your editor returned before you saved, set EDITOR to a command that waits (for example \`code --wait\`)."
+  else
+    echo "no change to ${secret_name} version ${started_from}; nothing written"
+  fi
+  exit 0
+fi
+
+add_version "$started_from"
+
+echo "${secret_name} in ${project} has a new latest version in canonical form"
