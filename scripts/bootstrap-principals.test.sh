@@ -32,7 +32,9 @@ export STUB_LOG="$WORK/calls.log" STUB_WRITTEN="$WORK/written.json" STUB_CREATED
 # $STUB_LATEST, the latest enabled version number (empty for none), on the
 # first list call and $STUB_RECHECK (default $STUB_LATEST) on later ones.
 # `secrets versions access N` prints the file $STUB_CONTENT when N is
-# $STUB_LATEST and fails otherwise. Every other call succeeds.
+# $STUB_LATEST and fails otherwise. `secrets add-iam-policy-binding` fails
+# when $STUB_GRANT_FAIL is "missing" (the planner account does not exist) or
+# any other value (PERMISSION_DENIED). Every other call succeeds.
 cat >"$WORK/bin/gcloud" <<'STUB'
 #!/usr/bin/env bash
 echo "gcloud $*" >>"$STUB_LOG"
@@ -56,6 +58,19 @@ case "$1 $2 $3" in
     cat "$STUB_CONTENT"
     ;;
 "secrets create "*) touch "$STUB_CREATED" ;;
+"secrets add-iam-policy-binding "*)
+    case "${STUB_GRANT_FAIL:-}" in
+    "") ;;
+    missing)
+        echo "ERROR: (gcloud.secrets.add-iam-policy-binding) INVALID_ARGUMENT: Service account dfo-infra-planner@test-project.iam.gserviceaccount.com does not exist." >&2
+        exit 1
+        ;;
+    *)
+        echo "ERROR: (gcloud.secrets.add-iam-policy-binding) PERMISSION_DENIED: caller lacks access" >&2
+        exit 1
+        ;;
+    esac
+    ;;
 esac
 for a in "$@"; do case "$a" in --data-file=*) cp "${a#--data-file=}" "$STUB_WRITTEN" ;; esac; done
 exit 0
@@ -250,40 +265,66 @@ for args in \
     check "the stub refuses a versions list call with $args" "$(is "$status" 2)"
 done
 
-# Creating a secret: it is created, the planner is granted access, and the
-# version is added, in that order, so a rerun after a failed run completes.
+# Creating a secret: it is created, gets its first version, and then the
+# planner is granted access, in that order. The grant comes last because the
+# planner account may not exist yet, and a rerun completes whichever step failed.
 accepts "apis secret created" "$V" "{\"invokers\": {\"x\": $G}}"
 has "apis secret created is created" "secrets create $V --project=test-project"
-check "apis secret created is created before it is granted" "$([ "$(line_of 'secrets create')" -lt "$(line_of 'add-iam-policy-binding')" ] && echo true || echo false)"
-check "apis secret created is granted before it gets a version" "$([ "$(line_of 'add-iam-policy-binding')" -lt "$(line_of 'versions add')" ] && echo true || echo false)"
+check "apis secret created is created before it gets a version" "$([ "$(line_of 'secrets create')" -lt "$(line_of 'versions add')" ] && echo true || echo false)"
+check "apis secret created gets a version before it is granted" "$([ "$(line_of 'versions add')" -lt "$(line_of 'add-iam-policy-binding')" ] && echo true || echo false)"
 
+# A stored version that differs from the file is refused before any write.
 export STUB_EXISTS=1 STUB_LATEST=3
+printf '%s' '{"invokers":{"y":"group:y@example.org"}}' >"$STUB_CONTENT"
 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
-check "file form on a secret with a version is refused" "$(is "$status" 1)"
-check "file form on a secret with a version names the version" "$(says "already has version 3")"
-check "file form on a secret with a version points to edit" "$(says "edit test-project $V")"
-writes_nothing "file form on a secret with a version"
+check "file form on a secret with different content is refused" "$(is "$status" 1)"
+check "file form on a secret with different content names the version" "$(says "already has version 3")"
+check "file form on a secret with different content points to edit" "$(says "edit test-project $V")"
+writes_nothing "file form on a secret with different content"
+unset STUB_EXISTS STUB_LATEST
 
-STUB_LATEST="" accepts "apis secret left without a version" "$V" "{\"invokers\": {\"x\": $G}}"
+# The grant fails after the version is written; the same command, rerun, adds
+# only the grant.
+STUB_GRANT_FAIL=denied run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a failed grant exits non-zero" "$(is "$status" 1)"
+check "a failed grant shows gcloud's error" "$(says "PERMISSION_DENIED")"
+has "a failed grant follows the version" "versions add $V"
+cp "$STUB_WRITTEN" "$STUB_CONTENT"
+STUB_EXISTS=1 STUB_LATEST=1 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a rerun after a failed grant completes" "$(is "$status" 0)"
+has "a rerun after a failed grant grants" "add-iam-policy-binding $V"
+lacks "a rerun after a failed grant adds no version" "versions add"
+lacks "a rerun after a failed grant creates nothing" "secrets create"
+
+# The planner account does not exist until foundation applies.
+STUB_GRANT_FAIL=missing run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a missing planner exits non-zero" "$(is "$status" 1)"
+check "a missing planner names the account" "$(says "dfo-infra-planner@test-project.iam.gserviceaccount.com")"
+check "a missing planner says foundation creates it" "$(says "foundation stack creates it")"
+check "a missing planner says to rerun the same command" "$(says "rerun the same command")"
+has "a missing planner leaves the version written" "versions add $V"
+
+export STUB_EXISTS=1 STUB_LATEST=""
+accepts "apis secret left without a version" "$V" "{\"invokers\": {\"x\": $G}}"
 lacks "apis secret left without a version is not created again" "secrets create"
 has "apis secret left without a version is granted" "add-iam-policy-binding $V"
+unset STUB_EXISTS STUB_LATEST
 
-STUB_LATEST="" STUB_RECHECK=2 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+STUB_EXISTS=1 STUB_LATEST="" STUB_RECHECK=2 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
 check "a version added during a first write is refused" "$(is "$status" 1)"
 check "a version added during a first write names it" "$(says "now has version 2")"
 lacks "a version added during a first write adds none" "versions add"
 
-STUB_LIST_FAIL=1 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+STUB_EXISTS=1 STUB_LIST_FAIL=1 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
 check "a failed list on the file form exits non-zero" "$(is "$status" 1)"
 check "a failed list on the file form shows gcloud's error" "$(says "PERMISSION_DENIED")"
 writes_nothing "a failed list on the file form"
-unset STUB_EXISTS STUB_LATEST
 
 # edit: the script reads the latest enabled version, opens the editor on a
 # copy, and writes the edited copy. The editor is a script that records the file
 # it was given (its last argument), leaves a swap file beside it, and edits the file with $EDIT_JQ on
 # its first run and $EDIT_JQ_2 (else $EDIT_JQ) on its second, or replaces it
-# with $EDIT_RAW, or exits with $EDIT_EXIT. VISUAL is unset so the tests
+# with $EDIT_RAW, then exits with $EDIT_EXIT (default 0). VISUAL is unset so the tests
 # choose the editor through EDITOR.
 unset VISUAL
 export EDITOR_SAW="$WORK/editor-saw.json" EDITOR_PATH="$WORK/editor-path" EDITOR_COUNT="$WORK/editor-count"
@@ -295,12 +336,11 @@ echo "$n" >"$EDITOR_COUNT"
 case "$n" in 1) cp "$file" "$EDITOR_SAW" ;; 2) cp "$file" "$EDITOR_SAW.2" ;; esac
 echo "$file" >"$EDITOR_PATH"
 : >"$file.swp"
-[ -z "${EDIT_EXIT:-}" ] || exit "$EDIT_EXIT"
 [ -z "${EDIT_RAW+x}" ] || printf '%s' "$EDIT_RAW" >"$file"
 filter=${EDIT_JQ:-}
 [ "$n" -lt 2 ] || filter=${EDIT_JQ_2:-$filter}
 [ -z "$filter" ] || { jq "$filter" "$file" >"$file.new" && mv "$file.new" "$file"; }
-exit 0
+exit "${EDIT_EXIT:-0}"
 EDITOR
 chmod +x "$WORK/editor"
 export EDITOR="'$WORK/editor'"
@@ -337,6 +377,14 @@ EDIT_RAW=$'{ "invokers" :\n  {"dev-1": "user:dev1@example.org"} }\n' run_edit te
 check "edit to whitespace only is accepted" "$(is "$status" 0)"
 check "edit to whitespace only says nothing was written" "$(says "nothing written")"
 writes_nothing "edit to whitespace only"
+
+# A stored version that is not byte-canonical is rewritten by a save that
+# changes nothing, and a stored version that is canonical is not.
+printf '%s' '{ "invokers": {"zz": "user:z@example.org", "aa": "user:a@example.org"} }' >"$STUB_CONTENT"
+EDIT_JQ='.' run_edit test-project "$V"
+check "edit saving a non-canonical stored version unchanged is accepted" "$(is "$status" 0)"
+check "edit saving a non-canonical stored version unchanged writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"aa":"user:a@example.org","zz":"user:z@example.org"}}')"
+printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
 
 # A refused copy is offered again, and a second edit that passes is written.
 EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' EDIT_JQ_2='.invokers = {"dev-1": "user:dev1@example.org", "x": "group:x@example.org"}' run_edit test-project "$V"
@@ -377,10 +425,23 @@ check "edit to an empty file is refused" "$(is "$status" 1)"
 check "edit to an empty file names the problem" "$(says "exactly one JSON object")"
 lacks "edit to an empty file adds no version" "versions add"
 
+# A non-zero editor exit with an unchanged copy writes nothing; with a changed
+# copy it draws a warning and the copy goes on to validation and the write.
 EDIT_EXIT=1 run_edit test-project "$V"
-check "edit with a failing editor is refused" "$(is "$status" 1)"
-lacks "edit with a failing editor adds no version" "versions add"
-editor_dir_gone "edit with a failing editor"
+check "edit with a failing editor and no change is refused" "$(is "$status" 1)"
+check "edit with a failing editor and no change names the status" "$(says "status 1")"
+lacks "edit with a failing editor and no change adds no version" "versions add"
+editor_dir_gone "edit with a failing editor and no change"
+
+EDIT_EXIT=1 EDIT_JQ='.invokers.x = "group:x@example.org"' run_edit test-project "$V"
+check "edit with a failing editor and a changed copy is accepted" "$(is "$status" 0)"
+check "edit with a failing editor and a changed copy warns with the status" "$(says "warning: the editor exited with status 1")"
+check "edit with a failing editor and a changed copy writes it" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"dev-1":"user:dev1@example.org","x":"group:x@example.org"}}')"
+editor_dir_gone "edit with a failing editor and a changed copy"
+
+EDIT_EXIT=1 EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' EDIT_JQ_2='.' run_edit test-project "$V"
+check "edit with a failing editor and an invalid copy is refused" "$(is "$status" 1)"
+lacks "edit with a failing editor and an invalid copy adds no version" "versions add"
 
 EDIT_JQ='.invokers.x = "group:x@example.org"' STUB_RECHECK=4 run_edit test-project "$V"
 check "edit over a newer version is refused" "$(is "$status" 1)"
