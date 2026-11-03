@@ -114,12 +114,13 @@ G2='"group:b@example.org"'
 FE='"ingestion_operators": {}, "budget_alerts": {}'
 
 accepts "foundation" "$F" "{\"applier_impersonators\": {\"appliers\": $G}, $FE}"
-accepts "foundation with budget alerts and a domain member" "$F" '{"applier_impersonators": {}, "ingestion_operators": {"org": "domain:example.org"}, "budget_alerts": {"finance": "a@example.org"}}'
-accepts "foundation, unordered and spaced" "$F" $'{ "budget_alerts" : {},\n  "ingestion_operators": {"b": "user:b@example.org", "a": "serviceAccount:x@p.iam.gserviceaccount.com"},\n  "applier_impersonators": {} }\n'
+accepts "foundation with budget alerts" "$F" '{"applier_impersonators": {}, "ingestion_operators": {"ops": "group:ops@example.org"}, "budget_alerts": {"finance": "a@example.org"}}'
+accepts "foundation, unordered and spaced" "$F" $'{ "budget_alerts" : {},\n  "ingestion_operators": {"b": "user:b@example.org", "a": "group:a@example.org"},\n  "applier_impersonators": {} }\n'
 refuses "foundation missing key" "$F" '{"applier_impersonators": {}}' "missing top-level key ingestion_operators"
 refuses "foundation missing budget_alerts" "$F" '{"applier_impersonators": {}, "ingestion_operators": {}}' "missing top-level key budget_alerts"
 refuses "foundation extra key" "$F" "{\"applier_impersonators\": {}, $FE, \"readers\": {}}" "unexpected top-level key readers"
 refuses "foundation bare address" "$F" "{\"applier_impersonators\": {\"x\": \"a@example.org\"}, $FE}" "each applier_impersonators value must be"
+refuses "foundation service account" "$F" '{"applier_impersonators": {}, "ingestion_operators": {"x": "serviceAccount:x@p.iam.gserviceaccount.com"}, "budget_alerts": {}}' "each ingestion_operators value must be group: or user:"
 refuses "foundation domain member with an address" "$F" "{\"applier_impersonators\": {\"x\": \"domain:a@example.org\"}, $FE}" "each applier_impersonators value must be"
 refuses "foundation duplicate member" "$F" "{\"applier_impersonators\": {}, \"ingestion_operators\": {\"x\": $G, \"y\": $G}, \"budget_alerts\": {}}" "ingestion_operators holds the same value under two labels"
 refuses "foundation address as label" "$F" "{\"applier_impersonators\": {\"a@example.org\": $G}, $FE}" "applier_impersonators has a label outside"
@@ -138,16 +139,16 @@ refuses "ai unknown prefix" "$A" '{"studio_token_readers": {"x": "team:a@example
 refuses "ai non-string member" "$A" '{"studio_token_readers": {"x": 1}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai bool member" "$A" '{"studio_token_readers": {"x": true}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai null member" "$A" '{"studio_token_readers": {"x": null}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
-accepts "ai member with a 4-character address" "$A" '{"studio_token_readers": {"x": "group:a@bc", "y": "domain:ab.c"}, "mcp_token_readers": {}}'
+accepts "ai member with a 4-character address" "$A" '{"studio_token_readers": {"x": "group:a@bc", "y": "user:a@bc"}, "mcp_token_readers": {}}'
 refuses "ai member with a 3-character address" "$A" '{"studio_token_readers": {"x": "group:a@b"}, "mcp_token_readers": {}}' "at least 4 characters"
-refuses "ai domain with a 3-character domain" "$A" '{"studio_token_readers": {"x": "domain:a.b"}, "mcp_token_readers": {}}' "at least 4 characters"
+refuses "ai service account" "$A" '{"studio_token_readers": {}, "mcp_token_readers": {"x": "serviceAccount:x@p.iam.gserviceaccount.com"}}' "each mcp_token_readers value must be group: or user:"
 refuses "ai duplicate member" "$A" "{\"studio_token_readers\": {}, \"mcp_token_readers\": {\"x\": $G, \"y\": $G}}" "mcp_token_readers holds the same value"
 refuses "ai upper-case address" "$A" '{"studio_token_readers": {"x": "group:A@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai case-only duplicate" "$A" '{"studio_token_readers": {"x": "group:a@example.org", "y": "group:A@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai no-break space in an address" "$A" '{"studio_token_readers": {"x": "group:a b@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai non-ASCII address" "$A" '{"studio_token_readers": {"x": "group:é@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 
-accepts "apis" "$V" "{\"invokers\": {\"mason\": \"user:mason@example.org\", \"devs\": $G}}"
+accepts "apis" "$V" "{\"invokers\": {\"dev-1\": \"user:dev1@example.org\", \"devs\": $G}}"
 accepts "apis with an empty object" "$V" '{"invokers": {}}'
 refuses "apis missing key" "$V" '{}' "missing top-level key invokers"
 refuses "apis ai file" "$V" '{"studio_token_readers": {}, "mcp_token_readers": {}}' "missing top-level key invokers"

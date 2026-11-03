@@ -77,9 +77,8 @@ jq -cjS '.[0]' <<<"$docs" >"$canonical"
 # Validate before anything is written, so a malformed file never becomes the
 # latest version the stack reads. The messages name keys only, never a value
 # or a label, since a bad label may be an address.
-problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c '{label, forms, says, prefix, min_length}' "$schemas")" '
-  $patterns.says as $says
-  | . as $doc
+problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c . "$schemas")" '
+  . as $doc
   | (keys[] as $key | select($schema | has($key) | not) | "unexpected top-level key \($key)"),
     ($schema | to_entries[] | .key as $k | .value as $rule | $patterns.forms[$rule.form] as $form
       | if ($doc | has($k) | not) then "missing top-level key \($k)"
@@ -87,7 +86,7 @@ problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c '{label,
         else $doc[$k] as $obj
           | (if ($obj | length) < $rule.min then "\($k) must hold at least \($rule.min) entry" else empty end),
             (if any($obj | keys[]; test($patterns.label) | not) then "\($k) has a label outside lower-case letters, digits, hyphens and underscores" else empty end),
-            (if any($obj[]; (type != "string") or (test($form) | not)) then "each \($k) value must be \($says[$rule.form])" else empty end),
+            (if any($obj[]; (type != "string") or (test($form.pattern) | not)) then "each \($k) value must be \($form.says)" else empty end),
             (if any($obj[]; (type == "string") and (length < $patterns.min_length or (sub($patterns.prefix; "") | length) < $patterns.min_length)) then "each \($k) value and its address must be at least \($patterns.min_length) characters, so CI can mask them" else empty end),
             (if ([$obj[]] | length) != ([$obj[]] | unique | length) then "\($k) holds the same value under two labels" else empty end)
         end)

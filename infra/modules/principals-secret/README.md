@@ -2,15 +2,15 @@
 
 Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`, which holds the addresses the stack grants or notifies, and checks it at plan. No address sits in this repository or in a plan log: the module's output is sensitive, and every value prints in plan output as `(sensitive value)`. The `foundation`, `apis`, `ai` and `telemetry` stacks call it with their stack name. Plan fails while the secret, or the planner's access to it, does not exist.
 
-`schemas.json` holds each stack's schema (its top-level keys, each with a value form and the fewest entries it holds), the label pattern, the pattern of each form with a sentence saying what it accepts, the member prefix pattern, and the minimum value length. `scripts/bootstrap-principals.sh` reads the same file, so the script and the module apply the same patterns. The patterns use only ASCII classes and the `\A` and `\z` anchors, which RE2 (Terraform's `regex`) and Oniguruma (jq's `test`) read the same way.
+`schemas.json` holds each stack's schema (its top-level keys, each with a value form and the fewest entries it holds), the label pattern, the pattern of each form with a sentence saying what it accepts, the type prefix pattern, and the minimum value length. `scripts/bootstrap-principals.sh` reads the same file, so the script and the module apply the same patterns. The patterns use only ASCII classes and the `\A` and `\z` anchors, which RE2 (Terraform's `regex`) and Oniguruma (jq's `test`) read the same way.
 
 ## Rules
 
 - The secret is one JSON object whose keys are exactly the stack's schema keys, each holding an object.
 - The secret holds the compact, key-sorted JSON the script writes. For the characters the rules allow, that matches `jsonencode` byte for byte, so a version written any other way fails plan. The rule catches a repeated key, which `jsondecode` settles silently.
-- Each inner object maps labels to values. A label holds only lower-case letters, digits, hyphens and underscores. Labels key the stack's resources, since Terraform rejects sensitive `for_each` keys, so they appear in resource addresses, plan output and public plan comments, and an address cannot be one. Name a label by role, such as `dev-1` or `devs`, never by a person.
-- A value is a string. A `member` value is one of the fixed prefixes `group:`, `user:` or `serviceAccount:` (which keeps its capital) followed by an address, or `domain:` followed by a domain. A `person` value is `group:` or `user:` followed by an address. The `apis` stack's `invokers` object takes `person` values, because it grants people who reach the service through `gcloud run services proxy`. A service account, a workload identity principal (`principal://` or `principalSet://`) or a domain that calls the service gets a named Terraform resource in the stack that owns it, such as `infra/stacks/apis/eval_reader.tf`, so that removing a secret entry can never destroy a binding another resource manages. An `email` value is a bare address with no prefix. The address or domain is lower-case ASCII. Lower case makes the duplicate check exact, since IAM compares addresses without regard to case, and keeps CI's masking of each value exact.
-- Each value, and its address with the member prefix removed, is at least `min_length` characters (4), the shortest `scripts/mask-principals.sh` can mask. The mask step reads every principals secret in the project, so a shorter value would block every CI plan there.
+- Each inner object maps labels to values. A label holds only lower-case letters, digits, hyphens and underscores. Labels key the stack's resources, since Terraform rejects sensitive `for_each` keys, so they appear in resource addresses, plan output and public plan comments, and an address cannot be one. Name a label by role, such as `dev-1` or `devs`.
+- A value is a string. A `person` value is `group:` or `user:` followed by an address. Every object that grants IAM takes `person` values: `applier_impersonators`, `ingestion_operators`, `mcp_token_readers`, `studio_token_readers`, `readers` and `invokers`. A service account, a workload identity principal (`principal://` or `principalSet://`) or a domain gets a named Terraform resource in the stack that owns it, such as `infra/stacks/apis/eval_reader.tf`. The schema rules out machine members only, so the entries are people. A person who also holds the same role through a hand-made binding loses it when the entry is removed, so grant people through the secret only. An `email` value is a bare address with no prefix. The address is lower-case ASCII. Lower case makes the duplicate check exact, since IAM compares addresses without regard to case, and keeps CI's masking of each value exact.
+- Each value, and its address with the type prefix removed, is at least `min_length` characters (4), the shortest `scripts/mask-principals.sh` can mask. The mask step reads every principals secret in the project, so a shorter value would block every CI plan there.
 - Each object holds at least its schema's minimum. Telemetry's `alerts` needs one entry, and every other object may be empty.
 - No value appears under two labels of one object, since removing either label would revoke both.
 
@@ -18,14 +18,17 @@ Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`
 
 Each run of the script adds a version that replaces the whole secret. A file that omits an existing entry drops it, and the next apply of the stack revokes its grant. The file therefore starts from the latest version and lives outside the repository.
 
-To change an existing secret, read the latest version into a temporary file, edit it, and write it back:
+To change an existing secret, read the latest version into a temporary file:
 
 ```sh
 f=$(mktemp)
 gcloud secrets versions access latest --secret <namespace>-<stack>-principals --project <project> > "$f"
-# add, change or remove entries in "$f"
-scripts/bootstrap-principals.sh <project> <namespace>-<stack>-principals "$f"
-rm "$f"
+```
+
+Add, change or remove entries in `"$f"`, then write it and remove the file once the script succeeds:
+
+```sh
+scripts/bootstrap-principals.sh <project> <namespace>-<stack>-principals "$f" && rm "$f"
 ```
 
 To create a secret, write a file that holds every key of the stack's schema, each an object (empty where the stack has no entries), and run the same script command.
@@ -38,7 +41,7 @@ Writing the secret starts no apply. Dispatch the `Terraform Apply` workflow with
 gh workflow run apply.yml --ref <dev or main> -f stack=<stack>
 ```
 
-The apply moves the stack's grants to the new members.
+The apply moves the stack's grants to the new members. A relabel is the exception: an apply that runs between the new version and the merge of the `moved` blocks can revoke members, so follow the order in [Relabelling](#relabelling) and dispatch no apply before the merge.
 
 ## Relabelling
 

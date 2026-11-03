@@ -12,7 +12,7 @@ Four secrets, each with at least one version:
 
 - `dfo-prod-ai-gemini-api-key`, the service's Gemini API key, from its own AI Studio project on the DFO billing account. `data.google_secret_manager_secret.gemini` fails plan until it exists.
 - `dfo-prod-langfuse-public-key` and `dfo-prod-langfuse-secret-key`, a Langfuse Cloud EU key pair.
-- `dfo-prod-ai-principals`, the studio and MCP token readers, which `scripts/bootstrap-principals.sh` writes, as "Writing the secret" in `infra/modules/principals-secret/README.md` describes, with `prod-fin-observatory` and `dfo-prod-ai-principals` as its arguments. Both objects are empty until someone needs a token. Plan fails while the secret does not exist.
+- `dfo-prod-ai-principals`, the studio and MCP token readers, which `scripts/bootstrap-principals.sh` writes, as "Writing the secret" in `infra/modules/principals-secret/README.md` describes, with `prod-fin-observatory` and `dfo-prod-ai-principals` as its arguments, and dispatch the apply with `--ref main` and `stack=ai`. Both objects are empty until someone needs a token. Plan fails while the secret does not exist.
 
 ## Langfuse export
 

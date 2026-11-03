@@ -127,7 +127,7 @@ The stack's IAM grants are additive `google_cloud_run_v2_service_iam_member` res
 
 ### Adding a developer
 
-A developer without a project role that carries `run.routes.invoke` needs an entry in the `invokers` object. The object takes `user:` and `group:` members only, because it grants people who reach the service through the proxy. A service account, workload identity principal or domain that calls the service gets its own grant in the stack that owns it. Label each entry by role, such as `dev-1` or `devs`, never by a person, since labels appear in plan output and public plan comments:
+A developer without a project role that carries `run.routes.invoke` needs an entry in the `invokers` object. The object takes `user:` and `group:` members only, because it grants people who reach the service through the proxy. A service account, workload identity principal or domain that calls the service gets its own grant in the stack that owns it. Label each entry by role, such as `dev-1` or `devs`, since labels appear in plan output and public plan comments:
 
 ```json
 {

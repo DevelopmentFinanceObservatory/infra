@@ -11,8 +11,8 @@ terraform {
 }
 
 # A stack's hand-made principals secret. README.md states the rules the
-# postconditions below check, and schemas.json holds the label pattern, the
-# pattern of each value form with a sentence saying what it accepts, the type
+# postconditions below check, and schemas.json holds the label pattern, each
+# value form's pattern with a sentence saying what it accepts, the type
 # prefix pattern, the shortest value or address CI can mask (min_length), and
 # each stack's schema: its top-level keys, each with a form and the fewest
 # entries it holds. scripts/bootstrap-principals.sh reads the same file, so
@@ -54,10 +54,10 @@ data "google_secret_manager_secret_version" "this" {
           # jsonencode tests the JSON type itself: only a string encodes with
           # a leading quote, where regex would convert a number or bool.
           for value in values(jsondecode(self.secret_data)[key]) :
-          startswith(jsonencode(value), "\"") && can(regex(local.schemas.forms[rule.form], value))
+          startswith(jsonencode(value), "\"") && can(regex(local.schemas.forms[rule.form].pattern, value))
         ]
       ])), false)
-      error_message = "Every value in ${local.secret} must be a string that matches its object's form: ${join("; ", [for key in sort(keys(local.schema)) : "${key} holds ${local.schemas.says[local.schema[key].form]}"])}."
+      error_message = "Every value in ${local.secret} must be a string that matches its object's form: ${join("; ", [for key in sort(keys(local.schema)) : "${key} holds ${local.schemas.forms[local.schema[key].form].says}"])}."
     }
     postcondition {
       # The same minimum scripts/mask-principals.sh needs to mask a value and
