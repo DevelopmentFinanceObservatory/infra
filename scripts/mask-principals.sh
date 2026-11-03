@@ -13,7 +13,9 @@
 # For every secret in <project> whose name ends in `-principals`, this reads
 # the latest version and, for each string value at any depth, prints
 # `::add-mask::` for the value and for its address, the value with its type
-# prefix (`group:`, `user:`, `serviceAccount:`) removed. Each of the two is
+# prefix removed. The principals schemas accept only `group:` and `user:`
+# prefixes; the strip takes any leading `word:` so that a hand-made secret
+# outside the schemas still masks its address. Each of the two is
 # also masked lower-cased, since the provider and IAM lower-case emails in
 # ids and policy reads, and URL-encoded (`@` as `%40`, `:` as `%3A`) in both
 # cases. The Actions runner masks them in every later log line of the job.

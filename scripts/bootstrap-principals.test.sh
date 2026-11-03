@@ -23,11 +23,14 @@ mkdir "$WORK/bin" "$WORK/parity"
 export STUB_LOG="$WORK/calls.log" STUB_WRITTEN="$WORK/written.json"
 
 # gcloud: logs its arguments and copies the file `versions add` sends.
-# `secrets describe` fails, as for a new secret; every other call succeeds.
+# `secrets describe` fails, as for a new secret, unless $STUB_EXISTS is set;
+# `secrets versions list` prints $STUB_LATEST, the latest version number; every
+# other call succeeds.
 cat >"$WORK/bin/gcloud" <<'STUB'
 #!/usr/bin/env bash
 echo "gcloud $*" >>"$STUB_LOG"
-[ "$1 $2" = "secrets describe" ] && exit 1
+[ "$1 $2" = "secrets describe" ] && [ -z "${STUB_EXISTS:-}" ] && exit 1
+[ "$1 $2 $3" = "secrets versions list" ] && echo "${STUB_LATEST:-}"
 for a in "$@"; do case "$a" in --data-file=*) cp "${a#--data-file=}" "$STUB_WRITTEN" ;; esac; done
 exit 0
 STUB
@@ -45,7 +48,9 @@ run() {
     rm -f "$STUB_WRITTEN"
     printf '%s' "$3" >"$WORK/principals.json"
     status=0
-    out=$("$SCRIPT_DIR/bootstrap-principals.sh" "$1" "$2" "$WORK/principals.json" 2>&1) || status=$?
+    # $FLAGS is empty or the script's leading flags, split on purpose.
+    # shellcheck disable=SC2086
+    out=$("$SCRIPT_DIR/bootstrap-principals.sh" ${FLAGS:-} "$1" "$2" "$WORK/principals.json" 2>&1) || status=$?
     calls=$(cat "$STUB_LOG")
 }
 
@@ -120,7 +125,6 @@ refuses "foundation missing key" "$F" '{"applier_impersonators": {}}' "missing t
 refuses "foundation missing budget_alerts" "$F" '{"applier_impersonators": {}, "ingestion_operators": {}}' "missing top-level key budget_alerts"
 refuses "foundation extra key" "$F" "{\"applier_impersonators\": {}, $FE, \"readers\": {}}" "unexpected top-level key readers"
 refuses "foundation bare address" "$F" "{\"applier_impersonators\": {\"x\": \"a@example.org\"}, $FE}" "each applier_impersonators value must be"
-refuses "foundation service account" "$F" '{"applier_impersonators": {}, "ingestion_operators": {"x": "serviceAccount:x@p.iam.gserviceaccount.com"}, "budget_alerts": {}}' "each ingestion_operators value must be group: or user:"
 refuses "foundation domain member with an address" "$F" "{\"applier_impersonators\": {\"x\": \"domain:a@example.org\"}, $FE}" "each applier_impersonators value must be"
 refuses "foundation duplicate member" "$F" "{\"applier_impersonators\": {}, \"ingestion_operators\": {\"x\": $G, \"y\": $G}, \"budget_alerts\": {}}" "ingestion_operators holds the same value under two labels"
 refuses "foundation address as label" "$F" "{\"applier_impersonators\": {\"a@example.org\": $G}, $FE}" "applier_impersonators has a label outside"
@@ -141,7 +145,6 @@ refuses "ai bool member" "$A" '{"studio_token_readers": {"x": true}, "mcp_token_
 refuses "ai null member" "$A" '{"studio_token_readers": {"x": null}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 accepts "ai member with a 4-character address" "$A" '{"studio_token_readers": {"x": "group:a@bc", "y": "user:a@bc"}, "mcp_token_readers": {}}'
 refuses "ai member with a 3-character address" "$A" '{"studio_token_readers": {"x": "group:a@b"}, "mcp_token_readers": {}}' "at least 4 characters"
-refuses "ai service account" "$A" '{"studio_token_readers": {}, "mcp_token_readers": {"x": "serviceAccount:x@p.iam.gserviceaccount.com"}}' "each mcp_token_readers value must be group: or user:"
 refuses "ai duplicate member" "$A" "{\"studio_token_readers\": {}, \"mcp_token_readers\": {\"x\": $G, \"y\": $G}}" "mcp_token_readers holds the same value"
 refuses "ai upper-case address" "$A" '{"studio_token_readers": {"x": "group:A@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai case-only duplicate" "$A" '{"studio_token_readers": {"x": "group:a@example.org", "y": "group:A@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
@@ -153,9 +156,6 @@ accepts "apis with an empty object" "$V" '{"invokers": {}}'
 refuses "apis missing key" "$V" '{}' "missing top-level key invokers"
 refuses "apis ai file" "$V" '{"studio_token_readers": {}, "mcp_token_readers": {}}' "missing top-level key invokers"
 refuses "apis bare address" "$V" '{"invokers": {"x": "a@example.org"}}' "each invokers value must be"
-refuses "apis service account" "$V" '{"invokers": {"x": "serviceAccount:x@p.iam.gserviceaccount.com"}}' "each invokers value must be group: or user:"
-refuses "apis domain" "$V" '{"invokers": {"x": "domain:example.org"}}' "each invokers value must be group: or user:"
-refuses "apis workload identity principal" "$V" '{"invokers": {"x": "principalSet://iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/*"}}' "each invokers value must be group: or user:"
 refuses "apis duplicate member" "$V" "{\"invokers\": {\"x\": $G, \"y\": $G}}" "invokers holds the same value"
 accepts "telemetry" "$T" "{\"readers\": {\"x\": $G, \"y\": $G2}, \"alerts\": {\"x\": \"a@example.org\"}}"
 refuses "telemetry missing readers" "$T" '{"alerts": {"x": "a@example.org"}}' "missing top-level key readers"
@@ -189,6 +189,31 @@ refuses_machine_members "$A" studio_token_readers '{"mcp_token_readers": {}}'
 refuses_machine_members "$A" mcp_token_readers '{"studio_token_readers": {}}'
 refuses_machine_members "$V" invokers '{}'
 refuses_machine_members "$T" readers '{"alerts": {"x": "a@example.org"}}'
+
+# --expect-version: an existing secret with a version takes the number the
+# file was built from and refuses a write when the latest version has moved on.
+export STUB_EXISTS=1 STUB_LATEST=3
+FLAGS="--expect-version 3" accepts "apis secret at the expected version" "$V" "{\"invokers\": {\"x\": $G}}"
+check "apis secret at the expected version reads the versions" "$([[ "$calls" == *"secrets versions list $V --project=test-project"* ]] && echo true || echo false)"
+
+# refuses_write <label> <message> <json>: exits 1 naming <message> and adds no
+# version and grants nothing.
+refuses_write() {
+    run test-project "$V" "$3"
+    check "$1 is refused" "$(is "$status" 1)"
+    check "$1 names the problem" "$(says "$2")"
+    check "$1 writes nothing" "$([[ "$calls" != *"versions add"* && "$calls" != *"secrets create"* && "$calls" != *"add-iam-policy-binding"* ]] && echo true || echo false)"
+}
+FLAGS="--expect-version 2" refuses_write "expected version older than the latest" "latest version of $V is 3, not 2" "{\"invokers\": {\"x\": $G}}"
+FLAGS="--expect-version 4" refuses_write "expected version newer than the latest" "latest version of $V is 3, not 4" "{\"invokers\": {\"x\": $G}}"
+FLAGS="" refuses_write "existing secret without --expect-version" "pass --expect-version" "{\"invokers\": {\"x\": $G}}"
+FLAGS="--expect-version latest" refuses_write "non-numeric --expect-version" "--expect-version takes a version number" "{\"invokers\": {\"x\": $G}}"
+check "non-numeric --expect-version makes no gcloud call" "$(is "$calls" "")"
+STUB_LATEST="" FLAGS="--expect-version 1" refuses_write "--expect-version on a secret with no version" "has no enabled version" "{\"invokers\": {\"x\": $G}}"
+STUB_LATEST="" FLAGS="" accepts "apis secret with no version" "$V" "{\"invokers\": {\"x\": $G}}"
+unset STUB_EXISTS STUB_LATEST
+FLAGS="--expect-version 1" refuses_write "--expect-version on a new secret" "does not exist" "{\"invokers\": {\"x\": $G}}"
+FLAGS=""
 
 refuses "concatenated objects" "$F" "{\"applier_impersonators\": {}, $FE}{\"applier_impersonators\": {}, $FE}" "exactly one JSON object"
 refuses "empty file" "$F" '' "exactly one JSON object"

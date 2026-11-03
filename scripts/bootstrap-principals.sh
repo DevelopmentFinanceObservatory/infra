@@ -22,17 +22,32 @@
 # This creates the secret when it is absent, adds that canonical form as a new
 # version, and grants the dfo-infra-planner service account secretAccessor on
 # it. The foundation stack makes the same grant (principals_planner), but the
-# stack's first plan can run before foundation applies. Safe to rerun; each
-# run adds a version, and the stack reads the latest.
+# stack's first plan can run before foundation applies. Each run adds a
+# version, and the stack reads the latest.
 #
-# Usage: bootstrap-principals.sh PROJECT SECRET_NAME JSON_FILE
-#   e.g. bootstrap-principals.sh prod-fin-observatory dfo-prod-telemetry-principals principals.json
+# Each version replaces the whole secret, so a file built from an older version
+# would drop the entries a newer one added. For a secret that has a version,
+# --expect-version N names the version the file was built from, and the script
+# refuses to write when the latest version is not N. A secret with no version
+# takes no --expect-version.
+#
+# Usage: bootstrap-principals.sh [--expect-version N] PROJECT SECRET_NAME JSON_FILE
+#   e.g. bootstrap-principals.sh --expect-version 3 prod-fin-observatory dfo-prod-telemetry-principals principals.json
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
-  echo "usage: $(basename "$0") PROJECT SECRET_NAME JSON_FILE" >&2
+usage() {
+  echo "usage: $(basename "$0") [--expect-version N] PROJECT SECRET_NAME JSON_FILE" >&2
   exit 2
+}
+
+expect_version=""
+if [ "${1:-}" = "--expect-version" ]; then
+  [ "$#" -ge 2 ] || usage
+  expect_version=$2
+  [[ "$expect_version" =~ ^[1-9][0-9]*$ ]] || { echo "error: --expect-version takes a version number, such as 3" >&2; exit 1; }
+  shift 2
 fi
+[ "$#" -eq 3 ] || usage
 
 project=$1
 secret_name=$2
@@ -99,7 +114,22 @@ fi
 
 if gcloud secrets describe "$secret_name" --project="$project" >/dev/null 2>&1; then
   echo "secret ${secret_name} exists in ${project}"
+  # The latest enabled version is the one the stack and `versions access
+  # latest` read.
+  latest=$(gcloud secrets versions list "$secret_name" --project="$project" \
+    --filter="state=enabled" --sort-by="~createTime" --limit=1 --format="value(name.basename())") ||
+    { echo "error: could not list the versions of $secret_name in $project" >&2; exit 1; }
+  if [ -z "$latest" ]; then
+    [ -z "$expect_version" ] || { echo "error: $secret_name has no enabled version, so --expect-version has nothing to match" >&2; exit 1; }
+  elif [ -z "$expect_version" ]; then
+    echo "error: $secret_name has versions; pass --expect-version with the version number the file was built from" >&2
+    exit 1
+  elif [ "$latest" != "$expect_version" ]; then
+    echo "error: the latest version of $secret_name is $latest, not $expect_version; read it again and apply the change to it" >&2
+    exit 1
+  fi
 else
+  [ -z "$expect_version" ] || { echo "error: $secret_name does not exist, so --expect-version has nothing to match" >&2; exit 1; }
   gcloud secrets create "$secret_name" --project="$project" --replication-policy=automatic
 fi
 

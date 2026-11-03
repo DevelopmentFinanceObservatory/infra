@@ -9,7 +9,7 @@ Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`
 - The secret is one JSON object whose keys are exactly the stack's schema keys, each holding an object.
 - The secret holds the compact, key-sorted JSON the script writes. For the characters the rules allow, that matches `jsonencode` byte for byte, so a version written any other way fails plan. The rule catches a repeated key, which `jsondecode` settles silently.
 - Each inner object maps labels to values. A label holds only lower-case letters, digits, hyphens and underscores. Labels key the stack's resources, since Terraform rejects sensitive `for_each` keys, so they appear in resource addresses, plan output and public plan comments, and an address cannot be one. Name a label by role, such as `dev-1` or `devs`.
-- A value is a string. A `person` value is `group:` or `user:` followed by an address. Every object that grants IAM takes `person` values: `applier_impersonators`, `ingestion_operators`, `mcp_token_readers`, `studio_token_readers`, `readers` and `invokers`. A service account, a workload identity principal (`principal://` or `principalSet://`) or a domain gets a named Terraform resource in the stack that owns it, such as `infra/stacks/apis/eval_reader.tf`. The schema rules out machine members only, so the entries are people. A person who also holds the same role through a hand-made binding loses it when the entry is removed, so grant people through the secret only. An `email` value is a bare address with no prefix. The address is lower-case ASCII. Lower case makes the duplicate check exact, since IAM compares addresses without regard to case, and keeps CI's masking of each value exact.
+- A value is a string. A `person` value is `group:` or `user:` followed by an address. Every object that grants IAM takes `person` values: `applier_impersonators`, `ingestion_operators`, `mcp_token_readers`, `studio_token_readers`, `readers` and `invokers`. A service account, a workload identity principal (`principal://` or `principalSet://`) or a domain gets a named Terraform resource in the stack that owns it, such as `infra/stacks/apis/eval_reader.tf`. The schema accepts only `group:` and `user:` members, so each entry names a person or a group of people. A person who also holds the same role through a hand-made binding loses it when the entry is removed, so grant people through the secret only. An `email` value is a bare address with no prefix. The address is lower-case ASCII. Lower case makes the duplicate check exact, since IAM compares addresses without regard to case, and keeps CI's masking of each value exact.
 - Each value, and its address with the type prefix removed, is at least `min_length` characters (4), the shortest `scripts/mask-principals.sh` can mask. The mask step reads every principals secret in the project, so a shorter value would block every CI plan there.
 - Each object holds at least its schema's minimum. Telemetry's `alerts` needs one entry, and every other object may be empty.
 - No value appears under two labels of one object, since removing either label would revoke both.
@@ -18,24 +18,27 @@ Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`
 
 Each run of the script adds a version that replaces the whole secret. A file that omits an existing entry drops it, and the next apply of the stack revokes its grant. The file therefore starts from the latest version and lives outside the repository.
 
-To change an existing secret, read the latest version into a temporary file. A failed read removes the file, so an empty one never reaches the script:
+To change an existing secret, read its latest version number, then that version, into a temporary file. A failed read removes the file, so an empty one never reaches the script. Reading the version by number keeps the file and the number from the same version, even when someone else writes between the two calls:
 
 ```sh
 f=$(mktemp)
-gcloud secrets versions access latest --secret <namespace>-<stack>-principals --project <project> > "$f" || { rm -f "$f"; false; }
+v=$(gcloud secrets versions describe latest --secret <namespace>-<stack>-principals --project <project> --format='value(name.basename())') &&
+gcloud secrets versions access "$v" --secret <namespace>-<stack>-principals --project <project> > "$f" || { rm -f "$f"; false; }
 ```
 
-Add, change or remove entries in `"$f"`, then write it:
+Add, change or remove entries in `"$f"`, then write it, passing the version you read:
 
 ```sh
-scripts/bootstrap-principals.sh <project> <namespace>-<stack>-principals "$f"
+scripts/bootstrap-principals.sh --expect-version "$v" <project> <namespace>-<stack>-principals "$f"
 ```
 
-To create a secret, make a file with `f=$(mktemp)`, write into it every key of the stack's schema, each an object (empty where the stack has no entries), and run the same script command.
+The script refuses to write when the latest version is no longer `$v`, since another operator's write in between would otherwise be lost. Read the secret again and redo the edit on the newer version.
+
+To create a secret, make a file with `f=$(mktemp)`, write into it every key of the stack's schema, each an object (empty where the stack has no entries), and run the same command without `--expect-version`, which only a secret that already has a version takes.
 
 The file holds every address, so run `rm -f "$f"` when you finish, whether the script wrote the version or refused the file.
 
-The script refuses an empty file and any other file that breaks a rule before any `gcloud` call. It then creates the secret if it is absent, adds the file's compact, key-sorted form as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. The foundation stack makes the same grant for each stack in `principals_secret_stacks`, but a stack's first plan can run before that apply.
+The script refuses an empty file and any other file that breaks a rule before any `gcloud` call. It then creates the secret if it is absent, checks `--expect-version` against the latest version, adds the file's compact, key-sorted form as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. The foundation stack makes the same grant for each stack in `principals_secret_stacks`, but a stack's first plan can run before that apply.
 
 Writing the secret starts no apply. Dispatch the `Terraform Apply` workflow with `stack` set to the stack's name, on the branch of the environment: `dev` for dfo-dev and `main` for dfo-prod.
 
