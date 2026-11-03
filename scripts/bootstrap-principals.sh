@@ -126,13 +126,14 @@ canonical="$work/canonical.json"
 
 # repeats_key <file>: returns 0 when a JSON object in the file holds the same
 # key twice, 1 when it holds none, and 2 when either jq call fails (a file that
-# is not valid JSON, or jq itself failing). jq keeps the last of a repeated key,
+# is not valid JSON, or jq itself failing), leaving jq's error, which gives
+# positions and not content, in $work/repeats.err. jq keeps the last of a repeated key,
 # so a repeat shows as a leaf in the file's event stream that the parsed
 # documents no longer have.
 repeats_key() {
   local file_leaves parsed_leaves
-  file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$1" 2>/dev/null) || return 2
-  parsed_leaves=$(jq -cs '[.[] | tostream | select(length == 2)] | length' "$1" 2>/dev/null) || return 2
+  file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$1" 2>"$work/repeats.err") || return 2
+  parsed_leaves=$(jq -cs '[.[] | tostream | select(length == 2)] | length' "$1" 2>"$work/repeats.err") || return 2
   [ "$file_leaves" = "$parsed_leaves" ] && return 1
   return 0
 }
@@ -150,15 +151,20 @@ validate() {
   case "$repeat_status" in
   0) echo "error: $label repeats a key" >&2; return 1 ;;
   1) ;;
-  *) echo "error: could not check $label for a repeated key" >&2; return 1 ;;
+  *) cat "$work/repeats.err" >&2; echo "error: could not check $label for a repeated key" >&2; return 1 ;;
   esac
 
   jq -cjS '.[0]' <<<"$docs" >"$canonical" || return 1
 
-  # The messages name keys only, since a bad label may be an address.
-  problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c . "$schemas")" '
+  # The messages name the schema's keys, counts and positions, never text from
+  # the file, since a label or a top-level key may be an address. A position
+  # counts the top-level keys in the file's own order, from 1.
+  problems=$(jq -r --argjson schema "$schema" --argjson patterns "$(jq -c . "$schemas")" \
+    --argjson order "$(jq -c '.[0] | keys_unsorted' <<<"$docs")" '
     . as $doc
-    | (keys[] as $key | select($schema | has($key) | not) | "unexpected top-level key \($key)"),
+    | ([$order | to_entries[] | select(.value as $key | $schema | has($key) | not) | .key + 1] as $extra
+        | if ($extra | length) == 0 then empty
+          else "\($extra | length) unexpected top-level \(if ($extra | length) == 1 then "key at position" else "keys at positions" end) \($extra | join(", "))" end),
       ($schema | to_entries[] | .key as $k | .value as $rule | $patterns.forms[$rule.form] as $form
         | if ($doc | has($k) | not) then "missing top-level key \($k)"
           elif ($doc[$k] | type) != "object" then "\($k) must be an object"
@@ -229,7 +235,7 @@ grant_planner() {
     cause="foundation's first apply has created the planner account"
   else
     echo "error: could not grant ${planner#serviceAccount:} access to $secret_name in $project" >&2
-    cause="you hold secretmanager.secrets.setIamPolicy on the secret"
+    cause="you hold secretmanager.secrets.getIamPolicy and secretmanager.secrets.setIamPolicy on the secret (roles/secretmanager.admin holds both)"
     [ "$mode" = create ] || cause+=", or have corrected the secret name"
   fi
   [ "$mode" != create ] || echo "$secret_name and its version are written." >&2

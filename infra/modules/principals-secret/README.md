@@ -32,7 +32,7 @@ Grant the planner on its own with `grant`:
 scripts/bootstrap-principals.sh grant <project> <namespace>-<stack>-principals
 ```
 
-`grant` adds the `dfo-infra-planner` `roles/secretmanager.secretAccessor` binding that create ends with. It is idempotent, so it is safe to run again, and it writes no version. If it fails, it exits 1 with gcloud's error and the same command to run once the cause is fixed: foundation's first apply when the planner account is missing, otherwise the operator holding `secretmanager.secrets.setIamPolicy` on the secret.
+`grant` adds the `dfo-infra-planner` `roles/secretmanager.secretAccessor` binding that create ends with. It is idempotent, so it is safe to run again, and it writes no version. If it fails, it exits 1 with gcloud's error and the same command to run once the cause is fixed: foundation's first apply when the planner account is missing, otherwise the operator holding `secretmanager.secrets.getIamPolicy` and `secretmanager.secrets.setIamPolicy` on the secret, as `roles/secretmanager.admin` does.
 
 Change an existing secret with `edit`:
 

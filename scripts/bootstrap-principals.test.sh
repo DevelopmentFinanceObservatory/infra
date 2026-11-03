@@ -83,7 +83,7 @@ export PATH="$WORK/bin:$PATH"
 mkdir "$WORK/jqfail"
 cat >"$WORK/jqfail/jq" <<STUB
 #!/usr/bin/env bash
-for a in "\$@"; do [ "\$a" != --stream ] || exit 3; done
+for a in "\$@"; do [ "\$a" != --stream ] || { echo "jq: stub failure at line 1, column 2" >&2; exit 3; }; done
 exec "$(command -v jq)" "\$@"
 STUB
 chmod +x "$WORK/jqfail/jq"
@@ -190,7 +190,8 @@ accepts "foundation with budget alerts" "$F" '{"applier_impersonators": {}, "ing
 accepts "foundation, unordered and spaced" "$F" $'{ "budget_alerts" : {},\n  "ingestion_operators": {"b": "user:b@example.org", "a": "group:a@example.org"},\n  "applier_impersonators": {} }\n'
 refuses "foundation missing key" "$F" '{"applier_impersonators": {}}' "missing top-level key ingestion_operators"
 refuses "foundation missing budget_alerts" "$F" '{"applier_impersonators": {}, "ingestion_operators": {}}' "missing top-level key budget_alerts"
-refuses "foundation extra key" "$F" "{\"applier_impersonators\": {}, $FE, \"readers\": {}}" "unexpected top-level key readers"
+refuses "foundation extra key" "$F" "{\"applier_impersonators\": {}, $FE, \"readers\": {}}" "1 unexpected top-level key at position 4"
+refuses "foundation address-shaped extra keys" "$F" "{\"x@example.org\": {}, \"applier_impersonators\": {}, $FE, \"y@example.org\": {}}" "2 unexpected top-level keys at positions 1, 5"
 refuses "foundation bare address" "$F" "{\"applier_impersonators\": {\"x\": \"a@example.org\"}, $FE}" "each applier_impersonators value must be"
 refuses "foundation domain member with an address" "$F" "{\"applier_impersonators\": {\"x\": \"domain:a@example.org\"}, $FE}" "each applier_impersonators value must be"
 refuses "foundation duplicate member" "$F" "{\"applier_impersonators\": {}, \"ingestion_operators\": {\"x\": $G, \"y\": $G}, \"budget_alerts\": {}}" "ingestion_operators holds the same value under two labels"
@@ -319,6 +320,7 @@ lacks "a rerun after a failed grant creates nothing" "secrets create"
 PATH="$WORK/jqfail:$PATH" run test-project "$V" "{\"invokers\": {\"x\": $G}}"
 check "a failed repeated-key check is refused" "$(is "$status" 1)"
 check "a failed repeated-key check says it could not check" "$(says "could not check")"
+check "a failed repeated-key check shows jq's error" "$(says "jq: stub failure at line 1, column 2")"
 check "a failed repeated-key check makes no gcloud call" "$(is "$calls" "")"
 
 # The planner account does not exist until foundation applies.
@@ -336,6 +338,7 @@ has "a missing planner leaves the version written" "versions add $V"
 STUB_GRANT_FAIL=denied run test-project "$V" "{\"invokers\": {\"x\": $G}}"
 check "a denied grant shows gcloud's error" "$(says "PERMISSION_DENIED")"
 check "a denied grant names the IAM right" "$(says "secretmanager.secrets.setIamPolicy")"
+check "a denied grant names the read right the binding needs" "$(says "secretmanager.secrets.getIamPolicy")"
 check "a denied grant does not blame the planner account" "$([[ "$out" != *foundation* ]] && echo true || echo false)"
 check "a denied grant on a secret the script just created does not suggest a wrong secret name" "$([[ "$out" != *"corrected the secret name"* ]] && echo true || echo false)"
 check "a denied grant says the secret and its version are written" "$(says "$V and its version are written")"
