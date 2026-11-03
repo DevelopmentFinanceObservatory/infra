@@ -303,7 +303,7 @@ check "file form on a secret with different content points to edit" "$(says "edi
 writes_nothing "file form on a secret with different content"
 unset STUB_EXISTS STUB_LATEST
 
-# The grant fails after the version is written; the same command, rerun, adds
+# The grant fails after the version is written. The same command, rerun, adds
 # only the grant.
 STUB_GRANT_FAIL=denied run test-project "$V" "{\"invokers\": {\"x\": $G}}"
 check "a failed grant exits non-zero" "$(is "$status" 1)"
@@ -344,7 +344,7 @@ check "a denied grant on a secret the script just created does not suggest a wro
 check "a denied grant says the secret and its version are written" "$(says "$V and its version are written")"
 check "a denied grant names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
 
-# grant on its own adds only the planner binding; it reads and writes no
+# grant on its own adds only the planner binding. It reads and writes no
 # version, creates nothing, and repeats harmlessly.
 run_grant test-project "$V"
 check "grant is accepted" "$(is "$status" 0)"
@@ -374,7 +374,7 @@ status=0
 out=$("$SCRIPT_DIR/bootstrap-principals.sh" grant test-project 2>&1) || status=$?
 check "grant with a missing secret name prints usage" "$(is "$status" 2)"
 
-# A create whose grant failed leaves the version; `grant` then completes it
+# A create whose grant failed leaves the version, and `grant` then completes it
 # without a second version.
 STUB_GRANT_FAIL=missing run test-project "$V" "{\"invokers\": {\"x\": $G}}"
 has "a create with a failed grant wrote the version" "versions add $V"

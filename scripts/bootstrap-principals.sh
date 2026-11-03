@@ -15,7 +15,7 @@
 # The stack in the secret name picks its schema from
 # infra/modules/principals-secret/schemas.json, which also holds the label
 # and value patterns. infra/modules/principals-secret/README.md states the
-# rules; the script refuses content that breaks one before it writes, then
+# rules. The script refuses content that breaks one before it writes, then
 # writes jq's compact, key-sorted form of the one object it checked, so the
 # stack reads exactly what passed.
 #
@@ -26,11 +26,11 @@
 # and then grants the dfo-infra-planner service account secretAccessor on it.
 # A secret that already has a version is left as it is when the file's
 # canonical form equals the latest version, so a rerun completes a partial
-# create; when the content differs the script refuses and points at `edit`.
+# create. When the content differs, the script refuses and points at `edit`.
 # Every step is skipped or repeated harmlessly, so the same command finishes a
 # create that stopped part way. The grant comes last because the planner
 # account does not exist until the foundation stack first applies. When the
-# grant fails, the secret and its version are already written; the script
+# grant fails, the secret and its version are already written. The script
 # exits 1 and names the `grant` command to run once the cause is fixed. The
 # foundation stack makes the same grant (principals_planner), but the stack's
 # first plan can run before foundation applies.
@@ -45,19 +45,19 @@
 # The script reads the latest enabled version, opens the editor ($VISUAL, else
 # $EDITOR, else vi, run through sh the way git runs its editor) on a copy in a
 # private temporary directory, validates the result, and adds it as the next
-# version. It needs only the rights to list, read and add versions; it makes no
-# IAM change. The editor must wait until the file is closed (for example
-# `code --wait`); an editor that returns at once leaves the copy unchanged,
+# version. It needs only the rights to list, read and add versions, and makes
+# no IAM change. The editor must wait until the file is closed (for example
+# `code --wait`). An editor that returns at once leaves the copy unchanged,
 # which the script reports. A stored version opens pretty-printed, except one
-# that repeats a key, which opens as its raw bytes: pretty-printing would drop
-# the repeat before validation could see it. A copy that breaks a rule is refused and the
-# editor opens again on the same copy; leaving a refused copy unchanged stops
-# with nothing written. A result whose canonical form equals the stored
-# version's bytes writes nothing. An unchanged save of a version whose bytes
-# are not canonical writes its canonical form. Any non-zero editor exit stops
-# with nothing written, as git does with a commit message; macOS /usr/bin/vi
-# can exit 1 after :wq when a command error happened in the session, and
-# running `edit` again, or setting EDITOR, is the remedy.
+# that repeats a key, which opens as its raw bytes, since pretty-printing would
+# drop the repeat before validation could see it. A copy that breaks a rule is
+# refused and the editor opens again on the same copy. Leaving a refused copy
+# unchanged stops with nothing written. A result whose canonical form equals
+# the stored version's bytes writes nothing. An unchanged save of a version
+# whose bytes are not canonical writes its canonical form. Any non-zero editor
+# exit stops with nothing written, as git does with a commit message. macOS
+# /usr/bin/vi can exit 1 after :wq when a command error happened in the
+# session. Running `edit` again, or setting EDITOR, is the remedy.
 #
 # The script's copy lives in a private directory that it removes on every exit,
 # with anything the editor left beside it. An editor's own swap, backup or undo
@@ -127,9 +127,9 @@ canonical="$work/canonical.json"
 # repeats_key <file>: returns 0 when a JSON object in the file holds the same
 # key twice, 1 when it holds none, and 2 when either jq call fails (a file that
 # is not valid JSON, or jq itself failing), leaving jq's error, which gives
-# positions and not content, in $work/repeats.err. jq keeps the last of a repeated key,
-# so a repeat shows as a leaf in the file's event stream that the parsed
-# documents no longer have.
+# positions and not content, in $work/repeats.err. jq keeps the last of a
+# repeated key, so a repeat shows as a leaf in the file's event stream that the
+# parsed documents no longer have.
 repeats_key() {
   local file_leaves parsed_leaves
   file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$1" 2>"$work/repeats.err") || return 2
@@ -138,8 +138,8 @@ repeats_key() {
   return 0
 }
 
-# validate <file> <label>: refuses, naming <label>, content that breaks a rule;
-# otherwise leaves jq's compact, key-sorted form of the one object in $canonical.
+# validate <file> <label>: refuses, naming <label>, content that breaks a rule.
+# Otherwise it leaves jq's compact, key-sorted form of the one object in $canonical.
 validate() {
   local file=$1 label=$2 docs problems repeat_status=0
 
@@ -217,7 +217,7 @@ add_version() {
   gcloud secrets versions add "$secret_name" --project="$project" --data-file="$canonical"
 }
 
-# grant_planner: gives the planner secretAccessor on the secret; adding a
+# grant_planner: gives the planner secretAccessor on the secret. Adding a
 # binding that exists changes nothing. The planner account is created by the
 # foundation stack, so before that apply the grant fails. Any failure shows
 # gcloud's error, exits 1 and names the grant command to run once the cause is
