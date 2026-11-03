@@ -124,27 +124,34 @@ trap 'rm -rf "$work"' EXIT
 trap 'exit 1' HUP INT TERM
 canonical="$work/canonical.json"
 
-# repeats_key <file>: succeeds when a JSON object in the file holds the same key
-# twice. jq keeps the last of a repeated key, so a repeat shows as a leaf in the
-# file's event stream that the parsed documents no longer have. Fails for a file
-# that is not valid JSON.
+# repeats_key <file>: returns 0 when a JSON object in the file holds the same
+# key twice, 1 when it holds none, and 2 when either jq call fails (a file that
+# is not valid JSON, or jq itself failing). jq keeps the last of a repeated key,
+# so a repeat shows as a leaf in the file's event stream that the parsed
+# documents no longer have.
 repeats_key() {
   local file_leaves parsed_leaves
-  file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$1" 2>/dev/null) || return 1
-  parsed_leaves=$(jq -cs '[.[] | tostream | select(length == 2)] | length' "$1" 2>/dev/null) || return 1
-  [ "$file_leaves" != "$parsed_leaves" ]
+  file_leaves=$(jq -cn --stream '[inputs | select(length == 2)] | length' "$1" 2>/dev/null) || return 2
+  parsed_leaves=$(jq -cs '[.[] | tostream | select(length == 2)] | length' "$1" 2>/dev/null) || return 2
+  [ "$file_leaves" = "$parsed_leaves" ] && return 1
+  return 0
 }
 
 # validate <file> <label>: refuses, naming <label>, content that breaks a rule;
 # otherwise leaves jq's compact, key-sorted form of the one object in $canonical.
 validate() {
-  local file=$1 label=$2 docs problems
+  local file=$1 label=$2 docs problems repeat_status=0
 
   docs=$(jq -cs . "$file") || { echo "error: $label is not valid JSON" >&2; return 1; }
   jq -e 'length == 1 and (.[0] | type) == "object"' <<<"$docs" >/dev/null ||
     { echo "error: $label must hold exactly one JSON object" >&2; return 1; }
 
-  ! repeats_key "$file" || { echo "error: $label repeats a key" >&2; return 1; }
+  repeats_key "$file" || repeat_status=$?
+  case "$repeat_status" in
+  0) echo "error: $label repeats a key" >&2; return 1 ;;
+  1) ;;
+  *) echo "error: could not check $label for a repeated key" >&2; return 1 ;;
+  esac
 
   jq -cjS '.[0]' <<<"$docs" >"$canonical" || return 1
 
@@ -222,7 +229,8 @@ grant_planner() {
     cause="foundation's first apply has created the planner account"
   else
     echo "error: could not grant ${planner#serviceAccount:} access to $secret_name in $project" >&2
-    cause="you hold secretmanager.secrets.setIamPolicy on the secret, or have corrected the secret name"
+    cause="you hold secretmanager.secrets.setIamPolicy on the secret"
+    [ "$mode" = create ] || cause+=", or have corrected the secret name"
   fi
   [ "$mode" != create ] || echo "$secret_name and its version are written." >&2
   echo "Once $cause, run: $again" >&2
@@ -267,12 +275,14 @@ gcloud secrets versions access "$started_from" --secret="$secret_name" --project
   { echo "error: could not read version $started_from of $secret_name in $project" >&2; exit 1; }
 
 # The editor gets the pretty-printed stored version, or its raw bytes when it
-# repeats a key or is not valid JSON, since pretty-printing would drop the
-# repeat before validation could see it. $presented is the copy the editor was
-# last given.
+# repeats a key, is not valid JSON, or could not be checked for a repeat, since
+# pretty-printing would drop a repeat before validation could see it.
+# $presented is the copy the editor was last given.
 edited="$work/principals.json"
 presented="$work/presented.json"
-if repeats_key "$work/current.json" || ! jq -S . "$work/current.json" >"$edited" 2>/dev/null; then
+repeat_status=0
+repeats_key "$work/current.json" || repeat_status=$?
+if [ "$repeat_status" -ne 1 ] || ! jq -S . "$work/current.json" >"$edited" 2>/dev/null; then
   cp "$work/current.json" "$edited"
 fi
 cp "$edited" "$presented"

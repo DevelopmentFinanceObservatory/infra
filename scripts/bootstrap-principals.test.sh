@@ -78,6 +78,16 @@ STUB
 chmod +x "$WORK/bin/gcloud"
 export PATH="$WORK/bin:$PATH"
 
+# A jq that fails on --stream and otherwise runs the real one. A case puts it
+# first on PATH to make the repeated-key check fail while the file is valid.
+mkdir "$WORK/jqfail"
+cat >"$WORK/jqfail/jq" <<STUB
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" != --stream ] || exit 3; done
+exec "$(command -v jq)" "\$@"
+STUB
+chmod +x "$WORK/jqfail/jq"
+
 failures=0
 cases=0
 parity_cases=0
@@ -305,6 +315,12 @@ has "a rerun after a failed grant grants" "add-iam-policy-binding $V"
 lacks "a rerun after a failed grant adds no version" "versions add"
 lacks "a rerun after a failed grant creates nothing" "secrets create"
 
+# A repeated-key check that cannot run refuses the file instead of passing it.
+PATH="$WORK/jqfail:$PATH" run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a failed repeated-key check is refused" "$(is "$status" 1)"
+check "a failed repeated-key check says it could not check" "$(says "could not check")"
+check "a failed repeated-key check makes no gcloud call" "$(is "$calls" "")"
+
 # The planner account does not exist until foundation applies.
 STUB_GRANT_FAIL=missing run test-project "$V" "{\"invokers\": {\"x\": $G}}"
 check "a missing planner exits non-zero" "$(is "$status" 1)"
@@ -321,6 +337,7 @@ STUB_GRANT_FAIL=denied run test-project "$V" "{\"invokers\": {\"x\": $G}}"
 check "a denied grant shows gcloud's error" "$(says "PERMISSION_DENIED")"
 check "a denied grant names the IAM right" "$(says "secretmanager.secrets.setIamPolicy")"
 check "a denied grant does not blame the planner account" "$([[ "$out" != *foundation* ]] && echo true || echo false)"
+check "a denied grant on a secret the script just created does not suggest a wrong secret name" "$([[ "$out" != *"corrected the secret name"* ]] && echo true || echo false)"
 check "a denied grant says the secret and its version are written" "$(says "$V and its version are written")"
 check "a denied grant names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
 
@@ -343,6 +360,7 @@ STUB_GRANT_FAIL=denied run_grant test-project "$V"
 check "grant refused by IAM exits non-zero" "$(is "$status" 1)"
 check "grant refused by IAM shows gcloud's error" "$(says "PERMISSION_DENIED")"
 check "grant refused by IAM names the IAM right" "$(says "secretmanager.secrets.setIamPolicy")"
+check "grant refused by IAM suggests checking the secret name" "$(says "corrected the secret name")"
 check "grant refused by IAM names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
 check "grant refused by IAM does not claim a version was written" "$([[ "$out" != *"its version are written"* ]] && echo true || echo false)"
 run_grant Bad_Project "$V"
@@ -459,6 +477,15 @@ EDIT_JQ_2='.' run_edit test-project "$V"
 check "edit dropping a repeated key is accepted" "$(is "$status" 0)"
 check "edit dropping a repeated key writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"x":"user:y@example.org"}}')"
 printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+
+# A stored version whose repeated-key check cannot run opens as its raw bytes,
+# and is refused when saved unchanged.
+printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+PATH="$WORK/jqfail:$PATH" run_edit test-project "$V"
+check "edit with a failed repeated-key check is refused" "$(is "$status" 1)"
+check "edit with a failed repeated-key check says it could not check" "$(says "could not check")"
+check "edit gives the editor the raw bytes when the repeated-key check fails" "$(cmp -s "$EDITOR_SAW" "$STUB_CONTENT" && echo true || echo false)"
+writes_nothing "edit with a failed repeated-key check"
 
 # A stored version of two JSON documents is never taken for canonical: it
 # opens pretty-printed, and saved unchanged it is refused until it holds one.
