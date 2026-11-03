@@ -70,7 +70,7 @@ Humans who call the MCP mounts directly, and whoever configures the e2e test dae
 
 ## Principals secret
 
-The studio and MCP token readers live in the Secret Manager secret `<namespace>-ai-principals` (`dfo-dev-ai-principals` here, `dfo-prod-ai-principals` in prod). Each environment needs it, and an environment with no readers of a kind holds an empty object for it. Both objects hold IAM members:
+The studio and MCP token readers live in the Secret Manager secret `<namespace>-ai-principals` (`dfo-dev-ai-principals` here, `dfo-prod-ai-principals` in prod). Each environment needs it, and an environment with no readers of a kind holds an empty object for it. Both objects hold people, each `group:` or `user:` followed by an address. A service account gets its own Terraform resource in the stack that owns it, as [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states:
 
 ```json
 {

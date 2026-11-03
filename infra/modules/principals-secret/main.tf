@@ -57,7 +57,7 @@ data "google_secret_manager_secret_version" "this" {
           startswith(jsonencode(value), "\"") && can(regex(local.schemas.forms[rule.form].pattern, value))
         ]
       ])), false)
-      error_message = "Every value in ${local.secret} must be a string that matches its object's form: ${join("; ", [for key in sort(keys(local.schema)) : "${key} holds ${local.schemas.forms[local.schema[key].form].says}"])}."
+      error_message = "Every value in ${local.secret} must be a string that matches its object's form. ${join(" ", [for form in sort(distinct([for rule in values(local.schema) : rule.form])) : "Each value in ${join(", ", sort([for key, rule in local.schema : key if rule.form == form]))} must be ${local.schemas.forms[form].says}."])}"
     }
     postcondition {
       # The same minimum scripts/mask-principals.sh needs to mask a value and

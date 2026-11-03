@@ -168,6 +168,28 @@ refuses "telemetry number alert" "$T" '{"readers": {}, "alerts": {"x": 1234}}' "
 refuses "telemetry duplicate alert" "$T" '{"readers": {}, "alerts": {"x": "a@example.org", "y": "a@example.org"}}' "alerts holds the same value"
 refuses "telemetry alert with a trailing space" "$T" '{"readers": {}, "alerts": {"x": "a@example.org "}}' "each alerts value must be a bare email address"
 
+# Every object that takes person values refuses each machine member type, so
+# loosening any of them fails a row here. <base> holds the stack's other keys.
+machine_members=(
+    'serviceAccount:x@p.iam.gserviceaccount.com'
+    'domain:example.org'
+    'principalSet://iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/*'
+)
+refuses_machine_members() {
+    local secret=$1 object=$2 base=$3 member
+    for member in "${machine_members[@]}"; do
+        refuses "$secret $object with a ${member%%:*} member" "$secret" \
+            "$(jq -c --arg k "$object" --arg m "$member" '.[$k] = {x: $m}' <<<"$base")" \
+            "each $object value must be group: or user:"
+    done
+}
+refuses_machine_members "$F" applier_impersonators "{\"ingestion_operators\": {}, \"budget_alerts\": {}}"
+refuses_machine_members "$F" ingestion_operators '{"applier_impersonators": {}, "budget_alerts": {}}'
+refuses_machine_members "$A" studio_token_readers '{"mcp_token_readers": {}}'
+refuses_machine_members "$A" mcp_token_readers '{"studio_token_readers": {}}'
+refuses_machine_members "$V" invokers '{}'
+refuses_machine_members "$T" readers '{"alerts": {"x": "a@example.org"}}'
+
 refuses "concatenated objects" "$F" "{\"applier_impersonators\": {}, $FE}{\"applier_impersonators\": {}, $FE}" "exactly one JSON object"
 refuses "empty file" "$F" '' "exactly one JSON object"
 refuses "whitespace-only file" "$F" $' \n' "exactly one JSON object"

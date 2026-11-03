@@ -18,22 +18,24 @@ Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`
 
 Each run of the script adds a version that replaces the whole secret. A file that omits an existing entry drops it, and the next apply of the stack revokes its grant. The file therefore starts from the latest version and lives outside the repository.
 
-To change an existing secret, read the latest version into a temporary file:
+To change an existing secret, read the latest version into a temporary file. A failed read removes the file, so an empty one never reaches the script:
 
 ```sh
 f=$(mktemp)
-gcloud secrets versions access latest --secret <namespace>-<stack>-principals --project <project> > "$f"
+gcloud secrets versions access latest --secret <namespace>-<stack>-principals --project <project> > "$f" || { rm -f "$f"; false; }
 ```
 
-Add, change or remove entries in `"$f"`, then write it and remove the file once the script succeeds:
+Add, change or remove entries in `"$f"`, then write it:
 
 ```sh
-scripts/bootstrap-principals.sh <project> <namespace>-<stack>-principals "$f" && rm "$f"
+scripts/bootstrap-principals.sh <project> <namespace>-<stack>-principals "$f"
 ```
 
-To create a secret, write a file that holds every key of the stack's schema, each an object (empty where the stack has no entries), and run the same script command.
+To create a secret, make a file with `f=$(mktemp)`, write into it every key of the stack's schema, each an object (empty where the stack has no entries), and run the same script command.
 
-The script refuses a file that breaks a rule before any `gcloud` call. It then creates the secret if it is absent, adds the file's compact, key-sorted form as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. The foundation stack makes the same grant for each stack in `principals_secret_stacks`, but a stack's first plan can run before that apply.
+The file holds every address, so run `rm -f "$f"` when you finish, whether the script wrote the version or refused the file.
+
+The script refuses an empty file and any other file that breaks a rule before any `gcloud` call. It then creates the secret if it is absent, adds the file's compact, key-sorted form as the latest version, and grants `dfo-infra-planner` `roles/secretmanager.secretAccessor` on it. The foundation stack makes the same grant for each stack in `principals_secret_stacks`, but a stack's first plan can run before that apply.
 
 Writing the secret starts no apply. Dispatch the `Terraform Apply` workflow with `stack` set to the stack's name, on the branch of the environment: `dev` for dfo-dev and `main` for dfo-prod.
 

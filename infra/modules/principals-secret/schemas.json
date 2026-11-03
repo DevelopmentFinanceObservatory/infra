@@ -9,7 +9,7 @@
     },
     "person": {
       "pattern": "\\A(group|user):[a-z0-9._+-]+@[a-z0-9.-]+\\z",
-      "says": "group: or user: before an address, in lower-case ASCII; a service account, workload identity principal or domain gets its own Terraform resource"
+      "says": "group: or user: before an address, in lower-case ASCII. A service account, workload identity principal or domain gets its own Terraform resource"
     }
   },
   "stacks": {
