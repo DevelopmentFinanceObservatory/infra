@@ -102,6 +102,15 @@ run_edit() {
     calls=$(cat "$STUB_LOG")
 }
 
+# run_grant <project> <secret>: runs `grant`, setting the same variables.
+run_grant() {
+    : >"$STUB_LOG"
+    rm -f "$STUB_WRITTEN" "$STUB_CREATED"
+    status=0
+    out=$("$SCRIPT_DIR/bootstrap-principals.sh" grant "$1" "$2" 2>&1) || status=$?
+    calls=$(cat "$STUB_LOG")
+}
+
 check() {
     cases=$((cases + 1))
     if [ "$2" = true ]; then
@@ -301,8 +310,41 @@ STUB_GRANT_FAIL=missing run test-project "$V" "{\"invokers\": {\"x\": $G}}"
 check "a missing planner exits non-zero" "$(is "$status" 1)"
 check "a missing planner names the account" "$(says "dfo-infra-planner@test-project.iam.gserviceaccount.com")"
 check "a missing planner says foundation creates it" "$(says "foundation stack creates it")"
-check "a missing planner says to rerun the same command" "$(says "rerun the same command")"
+check "a missing planner says the secret and its version are written" "$(says "$V and its version are written")"
+check "a missing planner names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
 has "a missing planner leaves the version written" "versions add $V"
+
+# grant on its own adds only the planner binding; it reads and writes no
+# version, creates nothing, and repeats harmlessly.
+run_grant test-project "$V"
+check "grant is accepted" "$(is "$status" 0)"
+has "grant binds the planner as secretAccessor" "secrets add-iam-policy-binding $V --project=test-project --member=serviceAccount:dfo-infra-planner@test-project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor"
+check "grant makes one gcloud call" "$(is "$(wc -l <"$STUB_LOG" | tr -d ' ')" 1)"
+run_grant test-project "$V"
+check "grant, repeated, is accepted" "$(is "$status" 0)"
+check "grant, repeated, makes the same single call" "$(is "$(wc -l <"$STUB_LOG" | tr -d ' ')" 1)"
+STUB_GRANT_FAIL=missing run_grant test-project "$V"
+check "grant with the planner missing exits non-zero" "$(is "$status" 1)"
+check "grant with the planner missing says foundation creates it" "$(says "foundation stack creates it")"
+check "grant with the planner missing names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
+STUB_GRANT_FAIL=denied run_grant test-project "$V"
+check "grant refused by IAM exits non-zero" "$(is "$status" 1)"
+check "grant refused by IAM shows gcloud's error" "$(says "PERMISSION_DENIED")"
+run_grant Bad_Project "$V"
+check "grant of a bad project id makes no gcloud call" "$(is "$calls" "")"
+run_grant test-project dfo-test-website-principals
+check "grant of an unknown stack makes no gcloud call" "$(is "$calls" "")"
+status=0
+out=$("$SCRIPT_DIR/bootstrap-principals.sh" grant test-project 2>&1) || status=$?
+check "grant with a missing secret name prints usage" "$(is "$status" 2)"
+
+# A create whose grant failed leaves the version; `grant` then completes it
+# without a second version.
+STUB_GRANT_FAIL=missing run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+has "a create with a failed grant wrote the version" "versions add $V"
+run_grant test-project "$V"
+check "grant after a failed create completes" "$(is "$status" 0)"
+lacks "grant after a failed create adds no version" "versions add"
 
 export STUB_EXISTS=1 STUB_LATEST=""
 accepts "apis secret left without a version" "$V" "{\"invokers\": {\"x\": $G}}"
@@ -356,6 +398,7 @@ editor_dir_gone() {
 EDIT_JQ=".invokers[\"devs\"] = \"group:devs@example.org\"" run_edit test-project "$V"
 check "edit is accepted" "$(is "$status" 0)"
 check "edit gives the editor the stored version" "$(is "$(jq -cS . "$EDITOR_SAW")" "$(jq -cS . "$STUB_CONTENT")")"
+check "edit pretty-prints a stored version whose bytes are canonical" "$(is "$(cat "$EDITOR_SAW")" "$(jq -S . "$STUB_CONTENT")")"
 has "edit reads the version it listed" "secrets versions access 3 --secret=$V --project=test-project"
 check "edit writes the edited canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"dev-1":"user:dev1@example.org","devs":"group:devs@example.org"}}')"
 check "edit lists the versions before and just before the write" "$(is "$(grep -c 'secrets versions list' "$STUB_LOG")" 2)"
@@ -378,12 +421,28 @@ check "edit to whitespace only is accepted" "$(is "$status" 0)"
 check "edit to whitespace only says nothing was written" "$(says "nothing written")"
 writes_nothing "edit to whitespace only"
 
-# A stored version that is not byte-canonical is rewritten by a save that
-# changes nothing, and a stored version that is canonical is not.
+# A stored version that is not byte-canonical opens as its raw bytes, and a
+# save that changes nothing writes its canonical form.
 printf '%s' '{ "invokers": {"zz": "user:z@example.org", "aa": "user:a@example.org"} }' >"$STUB_CONTENT"
-EDIT_JQ='.' run_edit test-project "$V"
+run_edit test-project "$V"
 check "edit saving a non-canonical stored version unchanged is accepted" "$(is "$status" 0)"
+check "edit gives the editor a non-canonical stored version as its raw bytes" "$(cmp -s "$EDITOR_SAW" "$STUB_CONTENT" && echo true || echo false)"
 check "edit saving a non-canonical stored version unchanged writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"aa":"user:a@example.org","zz":"user:z@example.org"}}')"
+check "edit saving a non-canonical stored version unchanged opens the editor once" "$(is "$(cat "$EDITOR_COUNT")" 1)"
+
+# A stored version with a repeated key is refused when saved unchanged, since
+# validation sees the repeat, and the editor opens again on the same copy. An
+# edit that drops the repeat is written.
+printf '%s' '{"invokers":{"x":"user:x@example.org","x":"user:y@example.org"}}' >"$STUB_CONTENT"
+run_edit test-project "$V"
+check "edit saving a repeated-key stored version unchanged is refused" "$(is "$status" 1)"
+check "edit saving a repeated-key stored version unchanged names the repeat" "$(says "repeats a key")"
+check "edit saving a repeated-key stored version unchanged opens the editor twice" "$(is "$(cat "$EDITOR_COUNT")" 2)"
+check "edit gives the editor a repeated-key stored version as its raw bytes" "$(cmp -s "$EDITOR_SAW" "$STUB_CONTENT" && echo true || echo false)"
+writes_nothing "edit saving a repeated-key stored version unchanged"
+EDIT_JQ_2='.' run_edit test-project "$V"
+check "edit dropping a repeated key is accepted" "$(is "$status" 0)"
+check "edit dropping a repeated key writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"x":"user:y@example.org"}}')"
 printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
 
 # A refused copy is offered again, and a second edit that passes is written.
@@ -425,23 +484,20 @@ check "edit to an empty file is refused" "$(is "$status" 1)"
 check "edit to an empty file names the problem" "$(says "exactly one JSON object")"
 lacks "edit to an empty file adds no version" "versions add"
 
-# A non-zero editor exit with an unchanged copy writes nothing; with a changed
-# copy it draws a warning and the copy goes on to validation and the write.
+# Any non-zero editor exit stops with nothing written, whether the copy
+# changed or not.
 EDIT_EXIT=1 run_edit test-project "$V"
 check "edit with a failing editor and no change is refused" "$(is "$status" 1)"
 check "edit with a failing editor and no change names the status" "$(says "status 1")"
-lacks "edit with a failing editor and no change adds no version" "versions add"
+writes_nothing "edit with a failing editor and no change"
 editor_dir_gone "edit with a failing editor and no change"
 
 EDIT_EXIT=1 EDIT_JQ='.invokers.x = "group:x@example.org"' run_edit test-project "$V"
-check "edit with a failing editor and a changed copy is accepted" "$(is "$status" 0)"
-check "edit with a failing editor and a changed copy warns with the status" "$(says "warning: the editor exited with status 1")"
-check "edit with a failing editor and a changed copy writes it" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"dev-1":"user:dev1@example.org","x":"group:x@example.org"}}')"
+check "edit with a failing editor and a changed copy is refused" "$(is "$status" 1)"
+check "edit with a failing editor and a changed copy names the status" "$(says "status 1")"
+check "edit with a failing editor and a changed copy checks no version" "$(is "$(grep -c 'secrets versions list' "$STUB_LOG")" 1)"
+writes_nothing "edit with a failing editor and a changed copy"
 editor_dir_gone "edit with a failing editor and a changed copy"
-
-EDIT_EXIT=1 EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' EDIT_JQ_2='.' run_edit test-project "$V"
-check "edit with a failing editor and an invalid copy is refused" "$(is "$status" 1)"
-lacks "edit with a failing editor and an invalid copy adds no version" "versions add"
 
 EDIT_JQ='.invokers.x = "group:x@example.org"' STUB_RECHECK=4 run_edit test-project "$V"
 check "edit over a newer version is refused" "$(is "$status" 1)"

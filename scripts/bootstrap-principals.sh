@@ -29,10 +29,16 @@
 # create; when the content differs the script refuses and points at `edit`.
 # Every step is skipped or repeated harmlessly, so the same command finishes a
 # create that stopped part way. The grant comes last because the planner
-# account does not exist until the foundation stack first applies; the script
-# then says so, and the same command run after that apply adds the grant. The
+# account does not exist until the foundation stack first applies. When the
+# grant fails, the secret and its version are already written; the script
+# exits 1 and names the `grant` command to run once the cause is fixed. The
 # foundation stack makes the same grant (principals_planner), but the stack's
 # first plan can run before foundation applies.
+#
+# Grant the planner on its own:
+#   bootstrap-principals.sh grant PROJECT SECRET_NAME
+# This adds the dfo-infra-planner secretAccessor binding that create ends with.
+# It is idempotent and writes no version.
 #
 # Change an existing secret:
 #   bootstrap-principals.sh edit PROJECT SECRET_NAME
@@ -42,14 +48,17 @@
 # version. It needs only the rights to list, read and add versions; it makes no
 # IAM change. The editor must wait until the file is closed (for example
 # `code --wait`); an editor that returns at once leaves the copy unchanged,
-# which the script reports. A copy that breaks a rule is refused and the editor
-# opens again on the same copy; leaving a refused copy unchanged stops with
-# nothing written. A result whose canonical form equals the stored version's
-# bytes writes nothing, so a stored version that is not byte-canonical (an
-# unsorted, spaced or repeated-key document) is rewritten in canonical form by
-# any save that validates. An editor that exits non-zero but saved a changed
-# copy (macOS vi does after any command error) draws a warning and the copy is
-# used; a non-zero exit with the copy unchanged stops with nothing written.
+# which the script reports. A stored version whose bytes are canonical opens
+# pretty-printed; any other stored version (unsorted keys, extra whitespace, a
+# repeated key) opens as its raw bytes, so the editor shows what is stored and
+# validation sees every key. A copy that breaks a rule is refused and the
+# editor opens again on the same copy; leaving a refused copy unchanged stops
+# with nothing written. A result whose canonical form equals the stored
+# version's bytes writes nothing. An unchanged save of a version whose bytes
+# are not canonical writes its canonical form. Any non-zero editor exit stops
+# with nothing written, as git does with a commit message; macOS /usr/bin/vi
+# can exit 1 after :wq when a command error happened in the session, and
+# running `edit` again, or setting EDITOR, is the remedy.
 #
 # The script's copy lives in a private directory that it removes on every exit,
 # with anything the editor left beside it. An editor's own swap, backup or undo
@@ -66,18 +75,22 @@ set -euo pipefail
 usage() {
   echo "usage: $(basename "$0") PROJECT SECRET_NAME JSON_FILE" >&2
   echo "       $(basename "$0") edit PROJECT SECRET_NAME" >&2
+  echo "       $(basename "$0") grant PROJECT SECRET_NAME" >&2
   exit 2
 }
 
 mode=create
-if [ "${1:-}" = "edit" ]; then
-  mode=edit
+case "${1:-}" in
+edit | grant)
+  mode=$1
   shift
   [ "$#" -eq 2 ] || usage
-else
+  ;;
+*)
   [ "$#" -eq 3 ] || usage
   json_file=$3
-fi
+  ;;
+esac
 
 project=$1
 secret_name=$2
@@ -186,23 +199,36 @@ add_version() {
   gcloud secrets versions add "$secret_name" --project="$project" --data-file="$canonical"
 }
 
-# grant_planner: gives the planner secretAccessor on the secret. The planner
-# account is created by the foundation stack, so before that apply the grant
-# fails and the script says to rerun it.
+# grant_planner: gives the planner secretAccessor on the secret; adding a
+# binding that exists changes nothing. The planner account is created by the
+# foundation stack, so before that apply the grant fails. Any failure exits 1
+# and names the grant command to run once the cause is fixed.
 grant_planner() {
-  local err="$work/grant.err"
-  if gcloud secrets add-iam-policy-binding "$secret_name" --project="$project"     --member="$planner" --role="roles/secretmanager.secretAccessor" >/dev/null 2>"$err"; then
+  local err="$work/grant.err" again
+  again="$(basename "$0") grant $project $secret_name"
+  if gcloud secrets add-iam-policy-binding "$secret_name" --project="$project" \
+    --member="$planner" --role="roles/secretmanager.secretAccessor" >/dev/null 2>"$err"; then
     return 0
   fi
   if grep -q 'does not exist' "$err"; then
     echo "error: the service account ${planner#serviceAccount:} does not exist yet; the foundation stack creates it." >&2
-    echo "$secret_name and its version are in place. After foundation's first apply, rerun the same command to add the grant." >&2
-    exit 1
+  else
+    cat "$err" >&2
+    echo "error: could not grant ${planner#serviceAccount:} access to $secret_name in $project" >&2
   fi
-  cat "$err" >&2
-  echo "error: could not grant ${planner#serviceAccount:} access to $secret_name in $project; rerun the same command once it is fixed" >&2
+  if [ "$mode" = create ]; then
+    echo "$secret_name and its version are written. Once the cause is fixed (foundation's first apply creates the planner account), run: $again" >&2
+  else
+    echo "Once the cause is fixed (foundation's first apply creates the planner account), run: $again" >&2
+  fi
   exit 1
 }
+
+if [ "$mode" = grant ]; then
+  grant_planner
+  echo "${planner#serviceAccount:} can read ${secret_name} in ${project}"
+  exit 0
+fi
 
 if [ "$mode" = create ]; then
   # Validate before any gcloud call, so a malformed file never becomes the
@@ -235,11 +261,17 @@ started_from=$latest
 gcloud secrets versions access "$started_from" --secret="$secret_name" --project="$project" >"$work/current.json" ||
   { echo "error: could not read version $started_from of $secret_name in $project" >&2; exit 1; }
 
-# Pretty-print for the editor; content that is not JSON opens as stored.
+# The editor gets the stored bytes unless they are already canonical, in which
+# case it gets the pretty-printed form. Pretty-printing a version that is not
+# canonical would drop a repeated key before validation could see it.
 # $presented is the copy the editor was last given.
 edited="$work/principals.json"
 presented="$work/presented.json"
-jq -S . "$work/current.json" >"$edited" 2>/dev/null || cp "$work/current.json" "$edited"
+if jq -cjS . "$work/current.json" 2>/dev/null | cmp -s - "$work/current.json"; then
+  jq -S . "$work/current.json" >"$edited"
+else
+  cp "$work/current.json" "$edited"
+fi
 cp "$edited" "$presented"
 
 refused=""
@@ -250,11 +282,8 @@ while true; do
   unchanged=""
   cmp -s "$presented" "$edited" && unchanged=1
   if [ "$editor_status" -ne 0 ]; then
-    if [ -n "$unchanged" ]; then
-      echo "error: the editor exited with status $editor_status and the copy is unchanged; nothing was written" >&2
-      exit 1
-    fi
-    echo "warning: the editor exited with status $editor_status; using the saved copy" >&2
+    echo "error: the editor exited with status $editor_status; nothing was written. Run edit again, or set EDITOR to another editor." >&2
+    exit 1
   fi
   if [ -n "$unchanged" ] && [ -n "$refused" ]; then
     echo "error: the refused copy was left unchanged; nothing was written" >&2
