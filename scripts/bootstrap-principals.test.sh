@@ -2,7 +2,8 @@
 # Tests for bootstrap-principals.sh against a stub `gcloud`, so nothing
 # reaches GCP. The stub logs every call; the cases check that each secret
 # name suffix accepts its own schema, refuses every malformed file before any
-# gcloud call, and never echoes a value from the file.
+# gcloud call, and never echoes a value from the file. The `edit` cases run
+# the script with EDITOR set to a script that edits the file it is given.
 #
 # With terraform on PATH, the parity section then feeds every schema case to
 # infra/modules/principals-secret under `terraform test` with a mocked
@@ -20,17 +21,41 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir "$WORK/bin" "$WORK/parity"
-export STUB_LOG="$WORK/calls.log" STUB_WRITTEN="$WORK/written.json"
+export STUB_LOG="$WORK/calls.log" STUB_WRITTEN="$WORK/written.json" STUB_CREATED="$WORK/created" STUB_CONTENT="$WORK/stored.json"
 
 # gcloud: logs its arguments and copies the file `versions add` sends.
-# `secrets describe` fails, as for a new secret, unless $STUB_EXISTS is set;
-# `secrets versions list` prints $STUB_LATEST, the latest version number; every
-# other call succeeds.
+# `secrets versions list` accepts exactly the arguments the script is meant
+# to send (filter, sort-by, limit, format) and fails on any other list. It
+# fails with NOT_FOUND unless $STUB_EXISTS is set or `secrets create` ran,
+# with PERMISSION_DENIED when $STUB_LIST_FAIL is set, and otherwise prints
+# $STUB_LATEST, the latest enabled version number (empty for none), on the
+# first list call and $STUB_RECHECK (default $STUB_LATEST) on later ones.
+# `secrets versions access N` prints the file $STUB_CONTENT when N is
+# $STUB_LATEST and fails otherwise. Every other call succeeds.
 cat >"$WORK/bin/gcloud" <<'STUB'
 #!/usr/bin/env bash
 echo "gcloud $*" >>"$STUB_LOG"
-[ "$1 $2" = "secrets describe" ] && [ -z "${STUB_EXISTS:-}" ] && exit 1
-[ "$1 $2 $3" = "secrets versions list" ] && echo "${STUB_LATEST:-}"
+case "$1 $2 $3" in
+"secrets versions list")
+    [ "$*" = "secrets versions list $4 --project=test-project --filter=state:ENABLED --sort-by=~createTime --limit=1 --format=value(name.basename())" ] ||
+        { echo "stub: unexpected versions list arguments" >&2; exit 2; }
+    [ -n "${STUB_EXISTS:-}" ] || [ -e "$STUB_CREATED" ] ||
+        { echo "ERROR: (gcloud.secrets.versions.list) NOT_FOUND: Secret [projects/1/secrets/$4] not found." >&2; exit 1; }
+    [ -z "${STUB_LIST_FAIL:-}" ] ||
+        { echo "ERROR: (gcloud.secrets.versions.list) PERMISSION_DENIED: caller lacks access" >&2; exit 1; }
+    if [ "$(grep -c 'secrets versions list' "$STUB_LOG")" -eq 1 ]; then
+        echo "${STUB_LATEST-}"
+    else
+        echo "${STUB_RECHECK-${STUB_LATEST-}}"
+    fi
+    ;;
+"secrets versions access")
+    [ "$4" = "${STUB_LATEST-}" ] && [ -z "${STUB_ACCESS_FAIL:-}" ] ||
+        { echo "ERROR: (gcloud.secrets.versions.access) cannot read version $4" >&2; exit 1; }
+    cat "$STUB_CONTENT"
+    ;;
+"secrets create "*) touch "$STUB_CREATED" ;;
+esac
 for a in "$@"; do case "$a" in --data-file=*) cp "${a#--data-file=}" "$STUB_WRITTEN" ;; esac; done
 exit 0
 STUB
@@ -45,12 +70,19 @@ parity_cases=0
 # $out (stdout and stderr) and $calls.
 run() {
     : >"$STUB_LOG"
-    rm -f "$STUB_WRITTEN"
+    rm -f "$STUB_WRITTEN" "$STUB_CREATED"
     printf '%s' "$3" >"$WORK/principals.json"
     status=0
-    # $FLAGS is empty or the script's leading flags, split on purpose.
-    # shellcheck disable=SC2086
-    out=$("$SCRIPT_DIR/bootstrap-principals.sh" ${FLAGS:-} "$1" "$2" "$WORK/principals.json" 2>&1) || status=$?
+    out=$("$SCRIPT_DIR/bootstrap-principals.sh" "$1" "$2" "$WORK/principals.json" 2>&1) || status=$?
+    calls=$(cat "$STUB_LOG")
+}
+
+# run_edit <project> <secret>: runs `edit`, setting the same variables.
+run_edit() {
+    : >"$STUB_LOG"
+    rm -f "$STUB_WRITTEN" "$STUB_CREATED" "$EDITOR_PATH"
+    status=0
+    out=$("$SCRIPT_DIR/bootstrap-principals.sh" edit "$1" "$2" 2>&1) || status=$?
     calls=$(cat "$STUB_LOG")
 }
 
@@ -190,30 +222,157 @@ refuses_machine_members "$A" mcp_token_readers '{"studio_token_readers": {}}'
 refuses_machine_members "$V" invokers '{}'
 refuses_machine_members "$T" readers '{"alerts": {"x": "a@example.org"}}'
 
-# --expect-version: an existing secret with a version takes the number the
-# file was built from and refuses a write when the latest version has moved on.
-export STUB_EXISTS=1 STUB_LATEST=3
-FLAGS="--expect-version 3" accepts "apis secret at the expected version" "$V" "{\"invokers\": {\"x\": $G}}"
-check "apis secret at the expected version reads the versions" "$([[ "$calls" == *"secrets versions list $V --project=test-project"* ]] && echo true || echo false)"
-
-# refuses_write <label> <message> <json>: exits 1 naming <message> and adds no
-# version and grants nothing.
-refuses_write() {
-    run test-project "$V" "$3"
-    check "$1 is refused" "$(is "$status" 1)"
-    check "$1 names the problem" "$(says "$2")"
+# has <label> <pattern>: the logged calls contain <pattern>.
+has() { check "$1" "$([[ "$calls" == *"$2"* ]] && echo true || echo false)"; }
+lacks() { check "$1" "$([[ "$calls" != *"$2"* ]] && echo true || echo false)"; }
+# line_of <pattern>: the number of the first logged call containing <pattern>.
+line_of() { grep -n -m1 -F -- "$1" "$STUB_LOG" | cut -d: -f1; }
+# writes_nothing <label>: no secret was created, granted or given a version.
+writes_nothing() {
     check "$1 writes nothing" "$([[ "$calls" != *"versions add"* && "$calls" != *"secrets create"* && "$calls" != *"add-iam-policy-binding"* ]] && echo true || echo false)"
 }
-FLAGS="--expect-version 2" refuses_write "expected version older than the latest" "latest version of $V is 3, not 2" "{\"invokers\": {\"x\": $G}}"
-FLAGS="--expect-version 4" refuses_write "expected version newer than the latest" "latest version of $V is 3, not 4" "{\"invokers\": {\"x\": $G}}"
-FLAGS="" refuses_write "existing secret without --expect-version" "pass --expect-version" "{\"invokers\": {\"x\": $G}}"
-FLAGS="--expect-version latest" refuses_write "non-numeric --expect-version" "--expect-version takes a version number" "{\"invokers\": {\"x\": $G}}"
-check "non-numeric --expect-version makes no gcloud call" "$(is "$calls" "")"
-STUB_LATEST="" FLAGS="--expect-version 1" refuses_write "--expect-version on a secret with no version" "has no enabled version" "{\"invokers\": {\"x\": $G}}"
-STUB_LATEST="" FLAGS="" accepts "apis secret with no version" "$V" "{\"invokers\": {\"x\": $G}}"
+
+# The stub refuses a versions list call that drops or changes an argument, so
+# the script's call is pinned to the filter, sort order, limit and format.
+for args in \
+    "--filter=state:ENABLED --sort-by=~createTime --limit=1" \
+    "--sort-by=~createTime --limit=1 --format=value(name.basename())" \
+    "--filter=state:ENABLED --limit=1 --format=value(name.basename())" \
+    "--filter=state:ENABLED --sort-by=~createTime --format=value(name.basename())" \
+    "--filter=state=enabled --sort-by=~createTime --limit=1 --format=value(name.basename())" \
+    "--filter=state:ENABLED --sort-by=createTime --limit=1 --format=value(name.basename())"; do
+    : >"$STUB_LOG"
+    status=0
+    # shellcheck disable=SC2086
+    out=$(STUB_EXISTS=1 gcloud secrets versions list s --project=test-project $args 2>&1) || status=$?
+    calls=""
+    check "the stub refuses a versions list call with $args" "$(is "$status" 2)"
+done
+
+# Creating a secret: it is created, the planner is granted access, and the
+# version is added, in that order, so a rerun after a failed run completes.
+accepts "apis secret created" "$V" "{\"invokers\": {\"x\": $G}}"
+has "apis secret created is created" "secrets create $V --project=test-project"
+check "apis secret created is created before it is granted" "$([ "$(line_of 'secrets create')" -lt "$(line_of 'add-iam-policy-binding')" ] && echo true || echo false)"
+check "apis secret created is granted before it gets a version" "$([ "$(line_of 'add-iam-policy-binding')" -lt "$(line_of 'versions add')" ] && echo true || echo false)"
+
+export STUB_EXISTS=1 STUB_LATEST=3
+run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "file form on a secret with a version is refused" "$(is "$status" 1)"
+check "file form on a secret with a version names the version" "$(says "already has version 3")"
+check "file form on a secret with a version points to edit" "$(says "edit test-project $V")"
+writes_nothing "file form on a secret with a version"
+
+STUB_LATEST="" accepts "apis secret left without a version" "$V" "{\"invokers\": {\"x\": $G}}"
+lacks "apis secret left without a version is not created again" "secrets create"
+has "apis secret left without a version is granted" "add-iam-policy-binding $V"
+
+STUB_LATEST="" STUB_RECHECK=2 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a version added during a first write is refused" "$(is "$status" 1)"
+check "a version added during a first write names it" "$(says "now has version 2")"
+lacks "a version added during a first write adds none" "versions add"
+
+STUB_LIST_FAIL=1 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a failed list on the file form exits non-zero" "$(is "$status" 1)"
+check "a failed list on the file form shows gcloud's error" "$(says "PERMISSION_DENIED")"
+writes_nothing "a failed list on the file form"
 unset STUB_EXISTS STUB_LATEST
-FLAGS="--expect-version 1" refuses_write "--expect-version on a new secret" "does not exist" "{\"invokers\": {\"x\": $G}}"
-FLAGS=""
+
+# edit: the script reads the latest enabled version, opens $EDITOR on a copy,
+# and writes the edited copy. The editor is a script that records what it was
+# given, leaves a swap file beside it, and edits the file with $EDIT_JQ, or
+# replaces it with $EDIT_RAW, or exits with $EDIT_EXIT.
+export EDITOR_SAW="$WORK/editor-saw.json" EDITOR_PATH="$WORK/editor-path"
+cat >"$WORK/editor" <<'EDITOR'
+#!/usr/bin/env bash
+cp "$1" "$EDITOR_SAW"
+echo "$1" >"$EDITOR_PATH"
+: >"$1.swp"
+[ -z "${EDIT_EXIT:-}" ] || exit "$EDIT_EXIT"
+[ -z "${EDIT_RAW+x}" ] || printf '%s' "$EDIT_RAW" >"$1"
+[ -z "${EDIT_JQ:-}" ] || { jq "$EDIT_JQ" "$1" >"$1.new" && mv "$1.new" "$1"; }
+exit 0
+EDITOR
+chmod +x "$WORK/editor"
+export EDITOR="$WORK/editor"
+printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+export STUB_EXISTS=1 STUB_LATEST=3
+
+# editor_dir_gone <label>: the directory holding the editor's file, and the
+# swap file beside it, were removed.
+editor_dir_gone() {
+    check "$1 leaves no temporary file" "$([ -f "$EDITOR_PATH" ] && [ ! -e "$(dirname "$(cat "$EDITOR_PATH")")" ] && echo true || echo false)"
+}
+
+EDIT_JQ=".invokers[\"devs\"] = \"group:devs@example.org\"" run_edit test-project "$V"
+check "edit is accepted" "$(is "$status" 0)"
+check "edit gives the editor the stored version" "$(is "$(jq -cS . "$EDITOR_SAW")" "$(jq -cS . "$STUB_CONTENT")")"
+has "edit reads the version it listed" "secrets versions access 3 --secret=$V --project=test-project"
+check "edit writes the edited canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"dev-1":"user:dev1@example.org","devs":"group:devs@example.org"}}')"
+check "edit lists the versions before and just before the write" "$(is "$(grep -c 'secrets versions list' "$STUB_LOG")" 2)"
+check "edit checks the version immediately before the write" "$(is "$(tail -n 2 "$STUB_LOG" | cut -d' ' -f2-4 | paste -sd, -)" 'secrets versions list,secrets versions add')"
+lacks "edit creates nothing" "secrets create"
+editor_dir_gone "edit"
+
+run_edit test-project "$V"
+check "edit with no change is accepted" "$(is "$status" 0)"
+check "edit with no change says so" "$(says "nothing written")"
+writes_nothing "edit with no change"
+editor_dir_gone "edit with no change"
+
+EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' run_edit test-project "$V"
+check "edit adding a service account is refused" "$(is "$status" 1)"
+check "edit adding a service account names the problem" "$(says "each invokers value must be group: or user:")"
+check "edit adding a service account prints no address" "$([[ "$out" != *example.org* && "$out" != *iam.gserviceaccount.com* ]] && echo true || echo false)"
+lacks "edit adding a service account adds no version" "versions add"
+editor_dir_gone "edit adding a service account"
+
+EDIT_RAW='' run_edit test-project "$V"
+check "edit to an empty file is refused" "$(is "$status" 1)"
+check "edit to an empty file names the problem" "$(says "exactly one JSON object")"
+lacks "edit to an empty file adds no version" "versions add"
+
+EDIT_EXIT=1 run_edit test-project "$V"
+check "edit with a failing editor is refused" "$(is "$status" 1)"
+lacks "edit with a failing editor adds no version" "versions add"
+editor_dir_gone "edit with a failing editor"
+
+EDIT_JQ='.invokers.x = "group:x@example.org"' STUB_RECHECK=4 run_edit test-project "$V"
+check "edit over a newer version is refused" "$(is "$status" 1)"
+check "edit over a newer version names both versions" "$(says "latest version of $V is 4, not 3")"
+lacks "edit over a newer version adds no version" "versions add"
+editor_dir_gone "edit over a newer version"
+
+STUB_ACCESS_FAIL=1 run_edit test-project "$V"
+check "edit with a failed read is refused" "$(is "$status" 1)"
+check "edit with a failed read does not open the editor" "$([ ! -e "$EDITOR_PATH" ] && echo true || echo false)"
+writes_nothing "edit with a failed read"
+
+STUB_LIST_FAIL=1 run_edit test-project "$V"
+check "edit with a failed list exits non-zero" "$(is "$status" 1)"
+check "edit with a failed list shows gcloud's error" "$(says "PERMISSION_DENIED")"
+lacks "edit with a failed list reads no version" "versions access"
+
+STUB_LATEST="" run_edit test-project "$V"
+check "edit of a secret with no enabled version is refused" "$(is "$status" 1)"
+check "edit of a secret with no enabled version names the problem" "$(says "has no enabled version")"
+lacks "edit of a secret with no enabled version reads no version" "versions access"
+
+STUB_EXISTS="" run_edit test-project "$V"
+check "edit of a missing secret is refused" "$(is "$status" 1)"
+check "edit of a missing secret points to the file form" "$(says "does not exist")"
+lacks "edit of a missing secret reads no version" "versions access"
+writes_nothing "edit of a missing secret"
+unset STUB_EXISTS STUB_LATEST
+
+run_edit test-project dfo-test-website-principals
+check "edit of an unknown stack is refused" "$(is "$status" 1)"
+check "edit of an unknown stack makes no gcloud call" "$(is "$calls" "")"
+run_edit Bad_Project "$V"
+check "edit of a bad project id makes no gcloud call" "$(is "$calls" "")"
+status=0
+out=$("$SCRIPT_DIR/bootstrap-principals.sh" edit test-project 2>&1) || status=$?
+check "edit with a missing secret name prints usage" "$(is "$status" 2)"
 
 refuses "concatenated objects" "$F" "{\"applier_impersonators\": {}, $FE}{\"applier_impersonators\": {}, $FE}" "exactly one JSON object"
 refuses "empty file" "$F" '' "exactly one JSON object"

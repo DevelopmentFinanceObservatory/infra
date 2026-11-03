@@ -15,7 +15,7 @@ It also creates `dfo-prod-share-import-principal`, which the `website` stack's s
 ## Hand-made prerequisites
 
 - Secret Manager secrets `dfo-prod-apis-gemini-api-key` (the service's key, `data.google_secret_manager_secret.gemini` in `main.tf`) and `dfo-prod-search-catalogue-gemini-api-key` (the search catalogue Job's key, `data.google_secret_manager_secret.search_catalogue_gemini` in `search_catalogue.tf`). Each holds a key from its own AI Studio project on the DFO billing account, so the billing export attributes spend by caller. The data sources fail plan while a secret does not exist, and a secret with no version fails the revision or the Job run at apply.
-- The `dfo-prod-apis-principals` secret, which `scripts/bootstrap-principals.sh` writes with `prod-fin-observatory` and `dfo-prod-apis-principals` as its first two arguments, as "Writing the secret" in `infra/modules/principals-secret/README.md` describes. Plan fails while the secret does not exist.
+- The `dfo-prod-apis-principals` secret, which "Writing the secret" in `infra/modules/principals-secret/README.md` describes creating with `scripts/bootstrap-principals.sh prod-fin-observatory dfo-prod-apis-principals FILE`. Change its members with `scripts/bootstrap-principals.sh edit prod-fin-observatory dfo-prod-apis-principals`. Then dispatch the apply with `--ref main` and `stack=apis`. Plan fails while the secret does not exist.
 - The `dfo-apis-deployer` service account, created by `foundation`.
 
 ## Handoff

@@ -360,12 +360,11 @@ module "apis_service" {
 }
 
 # Each member in the principals secret's invokers object, keyed by label, gets
-# roles/run.invoker here and roles/run.viewer below. The object holds people
-# (user: and group: members), who reach the service through
-# `gcloud run services proxy`. The schema accepts only group: and user:
-# members, so each entry names a person or a group of people. A person who
-# also holds either role through a hand-made binding loses it when the entry
-# is removed, so grant people through the secret only.
+# roles/run.invoker here and roles/run.viewer below. The schema accepts only
+# group: and user: members, so each entry names a person or a group of people,
+# who reach the service through `gcloud run services proxy`. A person who also
+# holds either role through a hand-made binding loses it when the entry is
+# removed, so grant people through the secret only.
 # Every machine caller's grant sits beside the account it names: eval_reader.tf's
 # and sdk_e2e.tf's in the dev apis stack, and the website and ai runtime
 # accounts' in those stacks, which apply after this one.

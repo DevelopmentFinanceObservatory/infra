@@ -50,7 +50,7 @@ The applier impersonators, ingestion operators and Gemini budget alert recipient
 }
 ```
 
-To create the secret or change its members, follow "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `dev-fin-observatory` and `dfo-dev-foundation-principals`, and dispatch the apply with `--ref dev` and `stack=foundation`. That page also states the rules the secret must meet, the relabel order, and the `removed` blocks that moved these grants off member-keyed state.
+To create the secret, follow "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `dev-fin-observatory` and `dfo-dev-foundation-principals`. To change its members, run `scripts/bootstrap-principals.sh edit dev-fin-observatory dfo-dev-foundation-principals`. Then dispatch the apply with `--ref dev` and `stack=foundation`. That page also states the rules the secret must meet, the relabel order, and the `removed` blocks that moved these grants off member-keyed state.
 
 ## Gemini spend budget
 

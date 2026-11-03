@@ -138,7 +138,7 @@ A developer without a project role that carries `run.routes.invoke` needs an ent
 }
 ```
 
-Add the entry to the secret's latest version and dispatch the apply as "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) describes, with `dev-fin-observatory`, `dfo-dev-apis-principals`, `--ref dev` and `stack=apis`. The same page states the rules the secret must meet. The apply grants each member `roles/run.invoker` and `roles/run.viewer` on the service, and the developer then runs the proxy.
+Add the entry with `scripts/bootstrap-principals.sh edit dev-fin-observatory dfo-dev-apis-principals`, then dispatch the apply with `--ref dev` and `stack=apis`, as "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) describes. The same page states the rules the secret must meet. The apply grants each member `roles/run.invoker` and `roles/run.viewer` on the service, and the developer then runs the proxy.
 
 ## APIs
 
