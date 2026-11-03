@@ -278,8 +278,9 @@ variable "datasets_worker_min_instances" {
 # service's only identity boundary is Cloud Run IAM. With allow_unauthenticated
 # false, a caller reaches it by sending a Google ID token whose audience is the
 # service URL, minted as an identity holding run.invoker on the service, or
-# through `gcloud run services proxy` as a person whose project role carries
-# run.routes.invoke.
+# through `gcloud run services proxy` as a person who holds run.routes.invoke
+# through a project role or run.invoker and run.viewer through the principals
+# secret's invokers object.
 variable "allow_unauthenticated" {
   description = "Grant roles/run.invoker on the apis service to allUsers. True lets any caller reach the run.app URL with no token. False admits the website and ai runtime service accounts (granted in their own stacks), the grants other files in this stack make on the service by resource reference (dev's eval_reader.tf and sdk_e2e.tf), the members in the principals secret's invokers object, and people who hold a project role with run.routes.invoke and reach the service through `gcloud run services proxy`."
   type        = bool

@@ -10,10 +10,9 @@ resource "google_bigquery_dataset" "reporting" {
 }
 
 # A dataset access entry names its principal by kind, so each member string
-# splits into the field its prefix selects. serviceAccount: members go in
-# user_by_email, as the BigQuery API expects. Each grant is keyed by the
-# member's label in the principals secret (main.tf), and the member and its
-# parts stay sensitive.
+# splits into the field its prefix selects, group: or user:, the two forms the
+# readers object accepts. Each grant is keyed by the member's label in the
+# principals secret (main.tf), and the member and its parts stay sensitive.
 locals {
   reporting_reader_principals = {
     for label in nonsensitive(keys(local.principals.readers)) : label => {
@@ -30,8 +29,7 @@ resource "google_bigquery_dataset_access" "reporting_readers" {
   dataset_id     = google_bigquery_dataset.reporting.dataset_id
   role           = "READER"
   group_by_email = each.value.kind == "group" ? each.value.address : null
-  user_by_email  = contains(["user", "serviceAccount"], each.value.kind) ? each.value.address : null
-  domain         = each.value.kind == "domain" ? each.value.address : null
+  user_by_email  = each.value.kind == "user" ? each.value.address : null
 }
 
 resource "google_project_iam_member" "reporting_readers_job_user" {

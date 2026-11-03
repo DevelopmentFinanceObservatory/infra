@@ -403,9 +403,9 @@ resource "google_secret_manager_secret_iam_member" "dc_key_planner" {
 # addresses that stack grants or notifies. Each listed stack, this one
 # included, reads its <namespace>-<stack>-principals secret through
 # infra/modules/principals-secret, and the planner reads it to plan that
-# stack. scripts/bootstrap-principals.sh makes the same grant when
-# it creates the secret, since the stack's first plan can run before this
-# one applies.
+# stack. scripts/bootstrap-principals.sh makes the same grant when it
+# creates the secret and with its grant command, since the stack's first plan
+# can run before this one applies.
 locals {
   principals_secrets = [for stack in var.principals_secret_stacks : "${var.namespace}-${stack}-principals"]
 }

@@ -2,7 +2,9 @@
 # Tests for bootstrap-principals.sh against a stub `gcloud`, so nothing
 # reaches GCP. The stub logs every call; the cases check that each secret
 # name suffix accepts its own schema, refuses every malformed file before any
-# gcloud call, and never echoes a value from the file.
+# gcloud call, and never echoes a value from the file. The `edit` cases run
+# the script with EDITOR set to a script that edits the file it is given, once
+# for each time the script opens it.
 #
 # With terraform on PATH, the parity section then feeds every schema case to
 # infra/modules/principals-secret under `terraform test` with a mocked
@@ -20,19 +22,71 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir "$WORK/bin" "$WORK/parity"
-export STUB_LOG="$WORK/calls.log" STUB_WRITTEN="$WORK/written.json"
+export STUB_LOG="$WORK/calls.log" STUB_WRITTEN="$WORK/written.json" STUB_CREATED="$WORK/created" STUB_CONTENT="$WORK/stored.json"
 
 # gcloud: logs its arguments and copies the file `versions add` sends.
-# `secrets describe` fails, as for a new secret; every other call succeeds.
+# `secrets versions list` accepts exactly the arguments the script is meant
+# to send (filter, sort-by, limit, format) and fails on any other list. It
+# fails with NOT_FOUND unless $STUB_EXISTS is set or `secrets create` ran,
+# with PERMISSION_DENIED when $STUB_LIST_FAIL is set, and otherwise prints
+# $STUB_LATEST, the latest enabled version number (empty for none), on the
+# first list call and $STUB_RECHECK (default $STUB_LATEST) on later ones.
+# `secrets versions access N` prints the file $STUB_CONTENT when N is
+# $STUB_LATEST and fails otherwise. `secrets add-iam-policy-binding` fails
+# when $STUB_GRANT_FAIL is "missing" (the planner account does not exist) or
+# any other value (PERMISSION_DENIED). Every other call succeeds.
 cat >"$WORK/bin/gcloud" <<'STUB'
 #!/usr/bin/env bash
 echo "gcloud $*" >>"$STUB_LOG"
-[ "$1 $2" = "secrets describe" ] && exit 1
+case "$1 $2 $3" in
+"secrets versions list")
+    [ "$*" = "secrets versions list $4 --project=test-project --filter=state:ENABLED --sort-by=~createTime --limit=1 --format=value(name.basename())" ] ||
+        { echo "stub: unexpected versions list arguments" >&2; exit 2; }
+    [ -n "${STUB_EXISTS:-}" ] || [ -e "$STUB_CREATED" ] ||
+        { echo "ERROR: (gcloud.secrets.versions.list) NOT_FOUND: Secret [projects/1/secrets/$4] not found." >&2; exit 1; }
+    [ -z "${STUB_LIST_FAIL:-}" ] ||
+        { echo "ERROR: (gcloud.secrets.versions.list) PERMISSION_DENIED: caller lacks access" >&2; exit 1; }
+    if [ "$(grep -c 'secrets versions list' "$STUB_LOG")" -eq 1 ]; then
+        echo "${STUB_LATEST-}"
+    else
+        echo "${STUB_RECHECK-${STUB_LATEST-}}"
+    fi
+    ;;
+"secrets versions access")
+    [ "$4" = "${STUB_LATEST-}" ] && [ -z "${STUB_ACCESS_FAIL:-}" ] ||
+        { echo "ERROR: (gcloud.secrets.versions.access) cannot read version $4" >&2; exit 1; }
+    cat "$STUB_CONTENT"
+    ;;
+"secrets create "*) touch "$STUB_CREATED" ;;
+"secrets add-iam-policy-binding "*)
+    case "${STUB_GRANT_FAIL:-}" in
+    "") ;;
+    missing)
+        echo "ERROR: (gcloud.secrets.add-iam-policy-binding) INVALID_ARGUMENT: Service account dfo-infra-planner@test-project.iam.gserviceaccount.com does not exist." >&2
+        exit 1
+        ;;
+    *)
+        echo "ERROR: (gcloud.secrets.add-iam-policy-binding) PERMISSION_DENIED: caller lacks access" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+esac
 for a in "$@"; do case "$a" in --data-file=*) cp "${a#--data-file=}" "$STUB_WRITTEN" ;; esac; done
 exit 0
 STUB
 chmod +x "$WORK/bin/gcloud"
 export PATH="$WORK/bin:$PATH"
+
+# A jq that fails on --stream and otherwise runs the real one. A case puts it
+# first on PATH to make the repeated-key check fail while the file is valid.
+mkdir "$WORK/jqfail"
+cat >"$WORK/jqfail/jq" <<STUB
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" != --stream ] || { echo "jq: stub failure at line 1, column 2" >&2; exit 3; }; done
+exec "$(command -v jq)" "\$@"
+STUB
+chmod +x "$WORK/jqfail/jq"
 
 failures=0
 cases=0
@@ -42,10 +96,28 @@ parity_cases=0
 # $out (stdout and stderr) and $calls.
 run() {
     : >"$STUB_LOG"
-    rm -f "$STUB_WRITTEN"
+    rm -f "$STUB_WRITTEN" "$STUB_CREATED"
     printf '%s' "$3" >"$WORK/principals.json"
     status=0
     out=$("$SCRIPT_DIR/bootstrap-principals.sh" "$1" "$2" "$WORK/principals.json" 2>&1) || status=$?
+    calls=$(cat "$STUB_LOG")
+}
+
+# run_edit <project> <secret>: runs `edit`, setting the same variables.
+run_edit() {
+    : >"$STUB_LOG"
+    rm -f "$STUB_WRITTEN" "$STUB_CREATED" "$EDITOR_PATH" "$EDITOR_COUNT" "$EDITOR_SAW.2"
+    status=0
+    out=$("$SCRIPT_DIR/bootstrap-principals.sh" edit "$1" "$2" 2>&1) || status=$?
+    calls=$(cat "$STUB_LOG")
+}
+
+# run_grant <project> <secret>: runs `grant`, setting the same variables.
+run_grant() {
+    : >"$STUB_LOG"
+    rm -f "$STUB_WRITTEN" "$STUB_CREATED"
+    status=0
+    out=$("$SCRIPT_DIR/bootstrap-principals.sh" grant "$1" "$2" 2>&1) || status=$?
     calls=$(cat "$STUB_LOG")
 }
 
@@ -114,11 +186,12 @@ G2='"group:b@example.org"'
 FE='"ingestion_operators": {}, "budget_alerts": {}'
 
 accepts "foundation" "$F" "{\"applier_impersonators\": {\"appliers\": $G}, $FE}"
-accepts "foundation with budget alerts and a domain member" "$F" '{"applier_impersonators": {}, "ingestion_operators": {"org": "domain:example.org"}, "budget_alerts": {"finance": "a@example.org"}}'
-accepts "foundation, unordered and spaced" "$F" $'{ "budget_alerts" : {},\n  "ingestion_operators": {"b": "user:b@example.org", "a": "serviceAccount:x@p.iam.gserviceaccount.com"},\n  "applier_impersonators": {} }\n'
+accepts "foundation with budget alerts" "$F" '{"applier_impersonators": {}, "ingestion_operators": {"ops": "group:ops@example.org"}, "budget_alerts": {"finance": "a@example.org"}}'
+accepts "foundation, unordered and spaced" "$F" $'{ "budget_alerts" : {},\n  "ingestion_operators": {"b": "user:b@example.org", "a": "group:a@example.org"},\n  "applier_impersonators": {} }\n'
 refuses "foundation missing key" "$F" '{"applier_impersonators": {}}' "missing top-level key ingestion_operators"
 refuses "foundation missing budget_alerts" "$F" '{"applier_impersonators": {}, "ingestion_operators": {}}' "missing top-level key budget_alerts"
-refuses "foundation extra key" "$F" "{\"applier_impersonators\": {}, $FE, \"readers\": {}}" "unexpected top-level key readers"
+refuses "foundation extra key" "$F" "{\"applier_impersonators\": {}, $FE, \"readers\": {}}" "1 unexpected top-level key at position 4"
+refuses "foundation address-shaped extra keys" "$F" "{\"x@example.org\": {}, \"applier_impersonators\": {}, $FE, \"y@example.org\": {}}" "2 unexpected top-level keys at positions 1, 5"
 refuses "foundation bare address" "$F" "{\"applier_impersonators\": {\"x\": \"a@example.org\"}, $FE}" "each applier_impersonators value must be"
 refuses "foundation domain member with an address" "$F" "{\"applier_impersonators\": {\"x\": \"domain:a@example.org\"}, $FE}" "each applier_impersonators value must be"
 refuses "foundation duplicate member" "$F" "{\"applier_impersonators\": {}, \"ingestion_operators\": {\"x\": $G, \"y\": $G}, \"budget_alerts\": {}}" "ingestion_operators holds the same value under two labels"
@@ -138,16 +211,15 @@ refuses "ai unknown prefix" "$A" '{"studio_token_readers": {"x": "team:a@example
 refuses "ai non-string member" "$A" '{"studio_token_readers": {"x": 1}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai bool member" "$A" '{"studio_token_readers": {"x": true}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai null member" "$A" '{"studio_token_readers": {"x": null}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
-accepts "ai member with a 4-character address" "$A" '{"studio_token_readers": {"x": "group:a@bc", "y": "domain:ab.c"}, "mcp_token_readers": {}}'
+accepts "ai member with a 4-character address" "$A" '{"studio_token_readers": {"x": "group:a@bc", "y": "user:a@bc"}, "mcp_token_readers": {}}'
 refuses "ai member with a 3-character address" "$A" '{"studio_token_readers": {"x": "group:a@b"}, "mcp_token_readers": {}}' "at least 4 characters"
-refuses "ai domain with a 3-character domain" "$A" '{"studio_token_readers": {"x": "domain:a.b"}, "mcp_token_readers": {}}' "at least 4 characters"
 refuses "ai duplicate member" "$A" "{\"studio_token_readers\": {}, \"mcp_token_readers\": {\"x\": $G, \"y\": $G}}" "mcp_token_readers holds the same value"
 refuses "ai upper-case address" "$A" '{"studio_token_readers": {"x": "group:A@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai case-only duplicate" "$A" '{"studio_token_readers": {"x": "group:a@example.org", "y": "group:A@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai no-break space in an address" "$A" '{"studio_token_readers": {"x": "group:a b@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai non-ASCII address" "$A" '{"studio_token_readers": {"x": "group:é@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 
-accepts "apis" "$V" "{\"invokers\": {\"mason\": \"user:mason@example.org\", \"devs\": $G}}"
+accepts "apis" "$V" "{\"invokers\": {\"dev-1\": \"user:dev1@example.org\", \"devs\": $G}}"
 accepts "apis with an empty object" "$V" '{"invokers": {}}'
 refuses "apis missing key" "$V" '{}' "missing top-level key invokers"
 refuses "apis ai file" "$V" '{"studio_token_readers": {}, "mcp_token_readers": {}}' "missing top-level key invokers"
@@ -163,6 +235,361 @@ refuses "telemetry 3-character alert" "$T" '{"readers": {}, "alerts": {"x": "a@b
 refuses "telemetry number alert" "$T" '{"readers": {}, "alerts": {"x": 1234}}' "each alerts value must be"
 refuses "telemetry duplicate alert" "$T" '{"readers": {}, "alerts": {"x": "a@example.org", "y": "a@example.org"}}' "alerts holds the same value"
 refuses "telemetry alert with a trailing space" "$T" '{"readers": {}, "alerts": {"x": "a@example.org "}}' "each alerts value must be a bare email address"
+
+# Every object that takes person values refuses each machine member type, so
+# loosening any of them fails a row here. <base> holds the stack's other keys.
+machine_members=(
+    'serviceAccount:x@p.iam.gserviceaccount.com'
+    'domain:example.org'
+    'principalSet://iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/*'
+)
+refuses_machine_members() {
+    local secret=$1 object=$2 base=$3 member
+    for member in "${machine_members[@]}"; do
+        refuses "$secret $object with a ${member%%:*} member" "$secret" \
+            "$(jq -c --arg k "$object" --arg m "$member" '.[$k] = {x: $m}' <<<"$base")" \
+            "each $object value must be group: or user:"
+    done
+}
+refuses_machine_members "$F" applier_impersonators "{\"ingestion_operators\": {}, \"budget_alerts\": {}}"
+refuses_machine_members "$F" ingestion_operators '{"applier_impersonators": {}, "budget_alerts": {}}'
+refuses_machine_members "$A" studio_token_readers '{"mcp_token_readers": {}}'
+refuses_machine_members "$A" mcp_token_readers '{"studio_token_readers": {}}'
+refuses_machine_members "$V" invokers '{}'
+refuses_machine_members "$T" readers '{"alerts": {"x": "a@example.org"}}'
+
+# has <label> <pattern>: the logged calls contain <pattern>.
+has() { check "$1" "$([[ "$calls" == *"$2"* ]] && echo true || echo false)"; }
+lacks() { check "$1" "$([[ "$calls" != *"$2"* ]] && echo true || echo false)"; }
+# line_of <pattern>: the number of the first logged call containing <pattern>.
+line_of() { grep -n -m1 -F -- "$1" "$STUB_LOG" | cut -d: -f1; }
+# writes_nothing <label>: no secret was created, granted or given a version.
+writes_nothing() {
+    check "$1 writes nothing" "$([[ "$calls" != *"versions add"* && "$calls" != *"secrets create"* && "$calls" != *"add-iam-policy-binding"* ]] && echo true || echo false)"
+}
+
+# The stub refuses a versions list call that drops or changes an argument, so
+# the script's call is pinned to the filter, sort order, limit and format.
+for args in \
+    "--filter=state:ENABLED --sort-by=~createTime --limit=1" \
+    "--sort-by=~createTime --limit=1 --format=value(name.basename())" \
+    "--filter=state:ENABLED --limit=1 --format=value(name.basename())" \
+    "--filter=state:ENABLED --sort-by=~createTime --format=value(name.basename())" \
+    "--filter=state=enabled --sort-by=~createTime --limit=1 --format=value(name.basename())" \
+    "--filter=state:ENABLED --sort-by=createTime --limit=1 --format=value(name.basename())"; do
+    : >"$STUB_LOG"
+    status=0
+    # shellcheck disable=SC2086
+    out=$(STUB_EXISTS=1 gcloud secrets versions list s --project=test-project $args 2>&1) || status=$?
+    calls=""
+    check "the stub refuses a versions list call with $args" "$(is "$status" 2)"
+done
+
+# Creating a secret: it is created, gets its first version, and then the
+# planner is granted access, in that order. The grant comes last because the
+# planner account may not exist yet, and a rerun completes whichever step failed.
+accepts "apis secret created" "$V" "{\"invokers\": {\"x\": $G}}"
+has "apis secret created is created" "secrets create $V --project=test-project"
+check "apis secret created is created before it gets a version" "$([ "$(line_of 'secrets create')" -lt "$(line_of 'versions add')" ] && echo true || echo false)"
+check "apis secret created gets a version before it is granted" "$([ "$(line_of 'versions add')" -lt "$(line_of 'add-iam-policy-binding')" ] && echo true || echo false)"
+
+# A stored version that differs from the file is refused before any write.
+export STUB_EXISTS=1 STUB_LATEST=3
+printf '%s' '{"invokers":{"y":"group:y@example.org"}}' >"$STUB_CONTENT"
+run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "file form on a secret with different content is refused" "$(is "$status" 1)"
+check "file form on a secret with different content names the version" "$(says "already has version 3")"
+check "file form on a secret with different content points to edit" "$(says "edit test-project $V")"
+writes_nothing "file form on a secret with different content"
+unset STUB_EXISTS STUB_LATEST
+
+# The grant fails after the version is written. The same command, rerun, adds
+# only the grant.
+STUB_GRANT_FAIL=denied run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a failed grant exits non-zero" "$(is "$status" 1)"
+check "a failed grant shows gcloud's error" "$(says "PERMISSION_DENIED")"
+has "a failed grant follows the version" "versions add $V"
+cp "$STUB_WRITTEN" "$STUB_CONTENT"
+STUB_EXISTS=1 STUB_LATEST=1 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a rerun after a failed grant completes" "$(is "$status" 0)"
+has "a rerun after a failed grant grants" "add-iam-policy-binding $V"
+lacks "a rerun after a failed grant adds no version" "versions add"
+lacks "a rerun after a failed grant creates nothing" "secrets create"
+
+# A repeated-key check that cannot run refuses the file instead of passing it.
+PATH="$WORK/jqfail:$PATH" run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a failed repeated-key check is refused" "$(is "$status" 1)"
+check "a failed repeated-key check says it could not check" "$(says "could not check")"
+check "a failed repeated-key check shows jq's error" "$(says "jq: stub failure at line 1, column 2")"
+check "a failed repeated-key check makes no gcloud call" "$(is "$calls" "")"
+
+# The planner account does not exist until foundation applies.
+STUB_GRANT_FAIL=missing run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a missing planner exits non-zero" "$(is "$status" 1)"
+check "a missing planner shows gcloud's error" "$(says "INVALID_ARGUMENT")"
+check "a missing planner names the account" "$(says "dfo-infra-planner@test-project.iam.gserviceaccount.com")"
+check "a missing planner says foundation creates it" "$(says "foundation stack creates it")"
+check "a missing planner says the secret and its version are written" "$(says "$V and its version are written")"
+check "a missing planner names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
+has "a missing planner leaves the version written" "versions add $V"
+
+# Any other grant failure shows gcloud's error and names the IAM right the
+# operator needs, without blaming the missing planner account.
+STUB_GRANT_FAIL=denied run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a denied grant shows gcloud's error" "$(says "PERMISSION_DENIED")"
+check "a denied grant names the IAM right" "$(says "secretmanager.secrets.setIamPolicy")"
+check "a denied grant names the read right the binding needs" "$(says "secretmanager.secrets.getIamPolicy")"
+check "a denied grant does not blame the planner account" "$([[ "$out" != *foundation* ]] && echo true || echo false)"
+check "a denied grant on a secret the script just created does not suggest a wrong secret name" "$([[ "$out" != *"corrected the secret name"* ]] && echo true || echo false)"
+check "a denied grant says the secret and its version are written" "$(says "$V and its version are written")"
+check "a denied grant names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
+
+# grant on its own adds only the planner binding. It reads and writes no
+# version, creates nothing, and repeats harmlessly.
+run_grant test-project "$V"
+check "grant is accepted" "$(is "$status" 0)"
+has "grant binds the planner as secretAccessor" "secrets add-iam-policy-binding $V --project=test-project --member=serviceAccount:dfo-infra-planner@test-project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor"
+check "grant makes one gcloud call" "$(is "$(wc -l <"$STUB_LOG" | tr -d ' ')" 1)"
+run_grant test-project "$V"
+check "grant, repeated, is accepted" "$(is "$status" 0)"
+check "grant, repeated, makes the same single call" "$(is "$(wc -l <"$STUB_LOG" | tr -d ' ')" 1)"
+STUB_GRANT_FAIL=missing run_grant test-project "$V"
+check "grant with the planner missing exits non-zero" "$(is "$status" 1)"
+check "grant with the planner missing says foundation creates it" "$(says "foundation stack creates it")"
+check "grant with the planner missing shows gcloud's error" "$(says "INVALID_ARGUMENT")"
+check "grant with the planner missing does not claim a version was written" "$([[ "$out" != *"its version are written"* ]] && echo true || echo false)"
+check "grant with the planner missing names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
+STUB_GRANT_FAIL=denied run_grant test-project "$V"
+check "grant refused by IAM exits non-zero" "$(is "$status" 1)"
+check "grant refused by IAM shows gcloud's error" "$(says "PERMISSION_DENIED")"
+check "grant refused by IAM names the IAM right" "$(says "secretmanager.secrets.setIamPolicy")"
+check "grant refused by IAM suggests checking the secret name" "$(says "corrected the secret name")"
+check "grant refused by IAM names the grant command" "$(says "run: bootstrap-principals.sh grant test-project $V")"
+check "grant refused by IAM does not claim a version was written" "$([[ "$out" != *"its version are written"* ]] && echo true || echo false)"
+run_grant Bad_Project "$V"
+check "grant of a bad project id makes no gcloud call" "$(is "$calls" "")"
+run_grant test-project dfo-test-website-principals
+check "grant of an unknown stack makes no gcloud call" "$(is "$calls" "")"
+status=0
+out=$("$SCRIPT_DIR/bootstrap-principals.sh" grant test-project 2>&1) || status=$?
+check "grant with a missing secret name prints usage" "$(is "$status" 2)"
+
+# A create whose grant failed leaves the version, and `grant` then completes it
+# without a second version.
+STUB_GRANT_FAIL=missing run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+has "a create with a failed grant wrote the version" "versions add $V"
+run_grant test-project "$V"
+check "grant after a failed create completes" "$(is "$status" 0)"
+lacks "grant after a failed create adds no version" "versions add"
+
+export STUB_EXISTS=1 STUB_LATEST=""
+accepts "apis secret left without a version" "$V" "{\"invokers\": {\"x\": $G}}"
+lacks "apis secret left without a version is not created again" "secrets create"
+has "apis secret left without a version is granted" "add-iam-policy-binding $V"
+unset STUB_EXISTS STUB_LATEST
+
+STUB_EXISTS=1 STUB_LATEST="" STUB_RECHECK=2 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a version added during a first write is refused" "$(is "$status" 1)"
+check "a version added during a first write names it" "$(says "now has version 2")"
+lacks "a version added during a first write adds none" "versions add"
+
+STUB_EXISTS=1 STUB_LIST_FAIL=1 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+check "a failed list on the file form exits non-zero" "$(is "$status" 1)"
+check "a failed list on the file form shows gcloud's error" "$(says "PERMISSION_DENIED")"
+writes_nothing "a failed list on the file form"
+
+# edit: the script reads the latest enabled version, opens the editor on a
+# copy, and writes the edited copy. The editor is a script that records the file
+# it was given (its last argument), leaves a swap file beside it, and edits the file with $EDIT_JQ on
+# its first run and $EDIT_JQ_2 (else $EDIT_JQ) on its second, or replaces it
+# with $EDIT_RAW, then exits with $EDIT_EXIT (default 0). VISUAL is unset so the tests
+# choose the editor through EDITOR.
+unset VISUAL
+export EDITOR_SAW="$WORK/editor-saw.json" EDITOR_PATH="$WORK/editor-path" EDITOR_COUNT="$WORK/editor-count"
+cat >"$WORK/editor" <<'EDITOR'
+#!/usr/bin/env bash
+file=${!#}
+n=$(($(cat "$EDITOR_COUNT" 2>/dev/null || echo 0) + 1))
+echo "$n" >"$EDITOR_COUNT"
+case "$n" in 1) cp "$file" "$EDITOR_SAW" ;; 2) cp "$file" "$EDITOR_SAW.2" ;; esac
+echo "$file" >"$EDITOR_PATH"
+: >"$file.swp"
+[ -z "${EDIT_RAW+x}" ] || printf '%s' "$EDIT_RAW" >"$file"
+filter=${EDIT_JQ:-}
+[ "$n" -lt 2 ] || filter=${EDIT_JQ_2:-$filter}
+[ -z "$filter" ] || { jq "$filter" "$file" >"$file.new" && mv "$file.new" "$file"; }
+exit "${EDIT_EXIT:-0}"
+EDITOR
+chmod +x "$WORK/editor"
+export EDITOR="'$WORK/editor'"
+printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+export STUB_EXISTS=1 STUB_LATEST=3
+
+# editor_dir_gone <label>: the directory holding the editor's file, and the
+# swap file beside it, were removed.
+editor_dir_gone() {
+    check "$1 leaves no temporary file" "$([ -f "$EDITOR_PATH" ] && [ ! -e "$(dirname "$(cat "$EDITOR_PATH")")" ] && echo true || echo false)"
+}
+
+EDIT_JQ=".invokers[\"devs\"] = \"group:devs@example.org\"" run_edit test-project "$V"
+check "edit is accepted" "$(is "$status" 0)"
+check "edit gives the editor the stored version" "$(is "$(jq -cS . "$EDITOR_SAW")" "$(jq -cS . "$STUB_CONTENT")")"
+check "edit pretty-prints a stored version whose bytes are canonical" "$(is "$(cat "$EDITOR_SAW")" "$(jq -S . "$STUB_CONTENT")")"
+has "edit reads the version it listed" "secrets versions access 3 --secret=$V --project=test-project"
+check "edit writes the edited canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"dev-1":"user:dev1@example.org","devs":"group:devs@example.org"}}')"
+check "edit lists the versions before and just before the write" "$(is "$(grep -c 'secrets versions list' "$STUB_LOG")" 2)"
+check "edit checks the version immediately before the write" "$(is "$(tail -n 2 "$STUB_LOG" | cut -d' ' -f2-4 | paste -sd, -)" 'secrets versions list,secrets versions add')"
+lacks "edit creates nothing" "secrets create"
+lacks "edit makes no IAM change" "add-iam-policy-binding"
+editor_dir_gone "edit"
+
+run_edit test-project "$V"
+check "edit with no change is accepted" "$(is "$status" 0)"
+check "edit with no change says so" "$(says "nothing written")"
+check "edit with no change says how to make the editor wait" "$(says "code --wait")"
+writes_nothing "edit with no change"
+editor_dir_gone "edit with no change"
+
+# A result whose canonical form is the stored version writes nothing, whatever
+# its whitespace.
+EDIT_RAW=$'{ "invokers" :\n  {"dev-1": "user:dev1@example.org"} }\n' run_edit test-project "$V"
+check "edit to whitespace only is accepted" "$(is "$status" 0)"
+check "edit to whitespace only says nothing was written" "$(says "nothing written")"
+writes_nothing "edit to whitespace only"
+
+# A stored version that is not byte-canonical but repeats no key opens
+# pretty-printed, and a save that changes nothing writes its canonical form.
+printf '%s' '{"invokers":{"zz":"user:z@example.org","aa":"user:a@example.org"}}' >"$STUB_CONTENT"
+run_edit test-project "$V"
+check "edit saving a non-canonical stored version unchanged is accepted" "$(is "$status" 0)"
+check "edit gives the editor a non-canonical stored version pretty-printed" "$(is "$(cat "$EDITOR_SAW")" "$(jq -S . "$STUB_CONTENT")")"
+check "edit saving a non-canonical stored version unchanged writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"aa":"user:a@example.org","zz":"user:z@example.org"}}')"
+check "edit saving a non-canonical stored version unchanged opens the editor once" "$(is "$(cat "$EDITOR_COUNT")" 1)"
+
+# A stored version with a repeated key is refused when saved unchanged, since
+# validation sees the repeat, and the editor opens again on the same copy. An
+# edit that drops the repeat is written.
+printf '%s' '{"invokers":{"x":"user:x@example.org","x":"user:y@example.org"}}' >"$STUB_CONTENT"
+run_edit test-project "$V"
+check "edit saving a repeated-key stored version unchanged is refused" "$(is "$status" 1)"
+check "edit saving a repeated-key stored version unchanged names the repeat" "$(says "repeats a key")"
+check "edit saving a repeated-key stored version unchanged opens the editor twice" "$(is "$(cat "$EDITOR_COUNT")" 2)"
+check "edit gives the editor a repeated-key stored version as its raw bytes" "$(cmp -s "$EDITOR_SAW" "$STUB_CONTENT" && echo true || echo false)"
+writes_nothing "edit saving a repeated-key stored version unchanged"
+EDIT_JQ_2='.' run_edit test-project "$V"
+check "edit dropping a repeated key is accepted" "$(is "$status" 0)"
+check "edit dropping a repeated key writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"x":"user:y@example.org"}}')"
+printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+
+# A stored version whose repeated-key check cannot run opens as its raw bytes,
+# and is refused when saved unchanged.
+printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+PATH="$WORK/jqfail:$PATH" run_edit test-project "$V"
+check "edit with a failed repeated-key check is refused" "$(is "$status" 1)"
+check "edit with a failed repeated-key check says it could not check" "$(says "could not check")"
+check "edit gives the editor the raw bytes when the repeated-key check fails" "$(cmp -s "$EDITOR_SAW" "$STUB_CONTENT" && echo true || echo false)"
+writes_nothing "edit with a failed repeated-key check"
+
+# A stored version of two JSON documents is never taken for canonical: it
+# opens pretty-printed, and saved unchanged it is refused until it holds one.
+printf '%s' '{"invokers":{"a":"user:a@example.org"}}{"invokers":{"a":"user:a@example.org"}}' >"$STUB_CONTENT"
+run_edit test-project "$V"
+check "edit saving a two-document stored version unchanged is refused" "$(is "$status" 1)"
+check "edit saving a two-document stored version unchanged names the problem" "$(says "exactly one JSON object")"
+check "edit gives the editor a two-document stored version pretty-printed" "$(is "$(cat "$EDITOR_SAW")" "$(jq -S . "$STUB_CONTENT")")"
+writes_nothing "edit saving a two-document stored version unchanged"
+printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+
+# A refused copy is offered again, and a second edit that passes is written.
+EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' EDIT_JQ_2='.invokers = {"dev-1": "user:dev1@example.org", "x": "group:x@example.org"}' run_edit test-project "$V"
+check "edit refused, then corrected, is accepted" "$(is "$status" 0)"
+check "edit refused, then corrected, names the first problem" "$(says "each invokers value must be group: or user:")"
+check "edit refused, then corrected, opens the editor twice" "$(is "$(cat "$EDITOR_COUNT")" 2)"
+check "edit refused, then corrected, reopens the refused copy" "$(grep -q 'serviceAccount:x@p' "$EDITOR_SAW.2" && echo true || echo false)"
+check "edit refused, then corrected, writes the second edit" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"dev-1":"user:dev1@example.org","x":"group:x@example.org"}}')"
+editor_dir_gone "edit refused, then corrected"
+
+# Leaving a refused copy unchanged stops with nothing written.
+EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' EDIT_JQ_2='.' run_edit test-project "$V"
+check "edit refused, then left unchanged, is refused" "$(is "$status" 1)"
+check "edit refused, then left unchanged, opens the editor twice" "$(is "$(cat "$EDITOR_COUNT")" 2)"
+writes_nothing "edit refused, then left unchanged"
+editor_dir_gone "edit refused, then left unchanged"
+
+# The editor command runs through sh: a quoted path with a space works, and
+# VISUAL wins over EDITOR.
+mkdir "$WORK/dir with space"
+cp "$WORK/editor" "$WORK/dir with space/editor"
+EDITOR="'$WORK/dir with space/editor' --wait" EDIT_JQ='.invokers.x = "group:x@example.org"' run_edit test-project "$V"
+check "an EDITOR with a quoted path and an argument is run" "$(is "$status" 0)"
+has "an EDITOR with a quoted path and an argument writes the edit" "secrets versions add $V"
+VISUAL="'$WORK/editor'" EDITOR=false EDIT_JQ='.invokers.x = "group:x@example.org"' run_edit test-project "$V"
+check "VISUAL is run in place of EDITOR" "$(is "$status" 0)"
+has "VISUAL writes the edit" "secrets versions add $V"
+
+EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' EDIT_JQ_2='.' run_edit test-project "$V"
+check "edit adding a service account is refused" "$(is "$status" 1)"
+check "edit adding a service account names the problem" "$(says "each invokers value must be group: or user:")"
+check "edit adding a service account prints no address" "$([[ "$out" != *example.org* && "$out" != *iam.gserviceaccount.com* ]] && echo true || echo false)"
+lacks "edit adding a service account adds no version" "versions add"
+editor_dir_gone "edit adding a service account"
+
+EDIT_RAW='' run_edit test-project "$V"
+check "edit to an empty file is refused" "$(is "$status" 1)"
+check "edit to an empty file names the problem" "$(says "exactly one JSON object")"
+lacks "edit to an empty file adds no version" "versions add"
+
+# Any non-zero editor exit stops with nothing written, whether the copy
+# changed or not.
+EDIT_EXIT=1 run_edit test-project "$V"
+check "edit with a failing editor and no change is refused" "$(is "$status" 1)"
+check "edit with a failing editor and no change names the status" "$(says "status 1")"
+writes_nothing "edit with a failing editor and no change"
+editor_dir_gone "edit with a failing editor and no change"
+
+EDIT_EXIT=1 EDIT_JQ='.invokers.x = "group:x@example.org"' run_edit test-project "$V"
+check "edit with a failing editor and a changed copy is refused" "$(is "$status" 1)"
+check "edit with a failing editor and a changed copy names the status" "$(says "status 1")"
+check "edit with a failing editor and a changed copy checks no version" "$(is "$(grep -c 'secrets versions list' "$STUB_LOG")" 1)"
+writes_nothing "edit with a failing editor and a changed copy"
+editor_dir_gone "edit with a failing editor and a changed copy"
+
+EDIT_JQ='.invokers.x = "group:x@example.org"' STUB_RECHECK=4 run_edit test-project "$V"
+check "edit over a newer version is refused" "$(is "$status" 1)"
+check "edit over a newer version names both versions" "$(says "latest version of $V is 4, not 3")"
+lacks "edit over a newer version adds no version" "versions add"
+editor_dir_gone "edit over a newer version"
+
+STUB_ACCESS_FAIL=1 run_edit test-project "$V"
+check "edit with a failed read is refused" "$(is "$status" 1)"
+check "edit with a failed read does not open the editor" "$([ ! -e "$EDITOR_PATH" ] && echo true || echo false)"
+writes_nothing "edit with a failed read"
+
+STUB_LIST_FAIL=1 run_edit test-project "$V"
+check "edit with a failed list exits non-zero" "$(is "$status" 1)"
+check "edit with a failed list shows gcloud's error" "$(says "PERMISSION_DENIED")"
+lacks "edit with a failed list reads no version" "versions access"
+
+STUB_LATEST="" run_edit test-project "$V"
+check "edit of a secret with no enabled version is refused" "$(is "$status" 1)"
+check "edit of a secret with no enabled version names the problem" "$(says "has no enabled version")"
+lacks "edit of a secret with no enabled version reads no version" "versions access"
+
+STUB_EXISTS="" run_edit test-project "$V"
+check "edit of a missing secret is refused" "$(is "$status" 1)"
+check "edit of a missing secret points to the file form" "$(says "does not exist")"
+lacks "edit of a missing secret reads no version" "versions access"
+writes_nothing "edit of a missing secret"
+unset STUB_EXISTS STUB_LATEST
+
+run_edit test-project dfo-test-website-principals
+check "edit of an unknown stack is refused" "$(is "$status" 1)"
+check "edit of an unknown stack makes no gcloud call" "$(is "$calls" "")"
+run_edit Bad_Project "$V"
+check "edit of a bad project id makes no gcloud call" "$(is "$calls" "")"
+status=0
+out=$("$SCRIPT_DIR/bootstrap-principals.sh" edit test-project 2>&1) || status=$?
+check "edit with a missing secret name prints usage" "$(is "$status" 2)"
 
 refuses "concatenated objects" "$F" "{\"applier_impersonators\": {}, $FE}{\"applier_impersonators\": {}, $FE}" "exactly one JSON object"
 refuses "empty file" "$F" '' "exactly one JSON object"

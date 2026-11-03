@@ -40,7 +40,7 @@ Infrastructure that more than one stack (or more than one repo's CI) depends on.
 
 ## Principals secret
 
-The applier impersonators, ingestion operators and Gemini budget alert recipients live in the Secret Manager secret `<namespace>-foundation-principals` (`dfo-dev-foundation-principals` here, `dfo-prod-foundation-principals` in prod). Each environment needs it, and an environment with no members of a kind holds an empty object for it. The impersonators and operators are IAM members and the budget alert recipients bare addresses:
+The applier impersonators, ingestion operators and Gemini budget alert recipients live in the Secret Manager secret `<namespace>-foundation-principals` (`dfo-dev-foundation-principals` here, `dfo-prod-foundation-principals` in prod). Each environment needs it, and an environment with no members of a kind holds an empty object for it. `principals_secret_stacks` in `env.auto.tfvars` lists the stacks whose secrets the planner may read, `foundation`, `apis` and `ai` in dev, and its access grant on each secret fails while that secret does not exist. The `apis` and `ai` secrets are hand-made the same way (see `../apis/README.md` and `../ai/README.md`). The impersonators and operators are people, each `group:` or `user:` followed by an address, and the budget alert recipients are bare addresses. A service account gets its own Terraform resource in the stack that owns it, as [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states:
 
 ```json
 {
@@ -50,13 +50,7 @@ The applier impersonators, ingestion operators and Gemini budget alert recipient
 }
 ```
 
-To create the secret or change its members, write the JSON to a file outside the repository and run
-
-```sh
-scripts/bootstrap-principals.sh dev-fin-observatory dfo-dev-foundation-principals principals.json
-```
-
-[`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states the rules the secret must meet, what the script does, the relabel order, and the `removed` blocks that moved these grants off member-keyed state.
+To create the secret, follow "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `dev-fin-observatory` and `dfo-dev-foundation-principals`. To change its members, run `scripts/bootstrap-principals.sh edit dev-fin-observatory dfo-dev-foundation-principals`. Then dispatch the apply with `--ref dev` and `stack=foundation`. That page also states the rules the secret must meet, the relabel order, and the `removed` blocks that moved these grants off member-keyed state.
 
 ## Gemini spend budget
 
