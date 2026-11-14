@@ -36,3 +36,6 @@ ses = {
 # Cloudflare Turnstile widget "DFO website staging" in the ONE Campaign
 # account, for this service's run.app host. Public: the login page renders it.
 turnstile_site_key = "0x4AAAAAAFiLWYsFJwHodJgu"
+
+# Organisations whose verified accounts may open the Graph Explorer.
+graph_explorer_email_domains = ["one.org", "ods.coop", "ode.partners"]
