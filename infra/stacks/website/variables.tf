@@ -90,6 +90,17 @@ variable "trusted_proxy_hops" {
   }
 }
 
+variable "graph_explorer_email_domains" {
+  description = "Email domains the Graph Explorer at /graph-explorer admits, joined with commas into GRAPH_EXPLORER_EMAIL_DOMAINS. The website matches each exactly against the domain of a signed-in reader's verified email (src/lib/auth/reader.ts). An empty list admits nobody."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for domain in var.graph_explorer_email_domains : can(regex("^[a-z0-9-]+(\\.[a-z0-9-]+)+$", domain))])
+    error_message = "graph_explorer_email_domains must hold lower-case domains such as one.org, with no @ and no spaces."
+  }
+}
+
 variable "datasets_pin_principal_secret_id" {
   description = "Secret Manager id of the datasets pin principal secret. Copied from the `apis` stack's `google_secret_manager_secret.datasets_pin_principal.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not. See README."
   type        = string

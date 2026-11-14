@@ -40,6 +40,8 @@ The service (`module.website_service`, named `dfo-dev-website-staging` from `var
 
 `SEARCH_API_BASE` is the `dfo-dev-apis` Cloud Run URL the search, datasets and graph proxies forward to, set from `var.search_api_base` and copied from the `apis` stack's `service_url` output. The app refuses to start in production without it.
 
+`GRAPH_EXPLORER_EMAIL_DOMAINS` is `var.graph_explorer_email_domains` joined with commas: the email domains whose verified accounts may open the Graph Explorer. An empty list admits nobody.
+
 ## Sign-in providers
 
 Sign-in is social-only, so `/login` offers exactly the providers named in `local.sign_in_providers` (`sign_in_providers.tf`): Google, GitHub and Microsoft. Each provider mounts `<PROVIDER>_CLIENT_ID` and `<PROVIDER>_CLIENT_SECRET` from the hand-created secrets `dfo-dev-website-staging-<provider>-client-id` and `dfo-dev-website-staging-<provider>-client-secret`. The app offers a provider only when both are set, so each provider mounts as a pair. The stack reads the secrets through `data` sources, so a listed provider whose secrets are missing fails `plan`, and a PR cannot merge into a state where the service can't start new revisions.

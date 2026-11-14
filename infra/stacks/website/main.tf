@@ -116,6 +116,9 @@ module "website_service" {
 
     # Which environment this service is, for the environment property on telemetry events. One PostHog project serves every environment, so the events must say which one they came from.
     ENVIRONMENT = var.tier
+
+    # The email domains the Graph Explorer admits. Empty admits nobody. See var.graph_explorer_email_domains.
+    GRAPH_EXPLORER_EMAIL_DOMAINS = join(",", var.graph_explorer_email_domains)
     },
     # Set only behind a proxy chain. Omitted when null, so the app keeps its default of 0. See var.trusted_proxy_hops.
     var.trusted_proxy_hops == null ? {} : { TRUSTED_PROXY_HOPS = tostring(var.trusted_proxy_hops) },
