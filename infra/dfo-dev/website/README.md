@@ -127,6 +127,23 @@ Running instances keep the values they started with. A change to `turnstile_site
 gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
 ```
 
+## Admin emails
+
+`ADMIN_EMAILS` is the comma-separated, case-insensitive list of verified emails that may open the website's admin page, `/admin/api-keys`. Unset, empty or naming nobody, the app has no admins and that page answers 404. The list is private and this repository is public, so it can't live in Terraform. `admin_emails.tf` owns the secret container (`dfo-dev-website-staging-admin-emails`) and the mount, and the list itself is added out-of-band as a version. The `cloud-run-service` module grants the website's runtime service account `roles/secretmanager.secretAccessor` on it, as it does for every secret in `secret_env_vars`, so nothing else needs granting.
+
+The mount tracks `latest`, so a change to the list is a new version plus a new revision, with no Terraform change. A placeholder first version holding the literal `none` guarantees the mount always resolves, since Cloud Run refuses to start a revision whose secret env var can't be read. `none` is not an email address, so the placeholder admits nobody. After the first apply, add the list as a new version holding every admin, not just the one you add. The emails below are placeholders:
+
+```
+printf '%s' 'a@example.org,b@example.org' | gcloud secrets versions add dfo-dev-website-staging-admin-emails \
+  --project dev-fin-observatory --data-file=-
+```
+
+`printf` rather than `echo` keeps a trailing newline out of the stored value. Running instances keep the value they started with, so after adding a version roll the service onto a new revision by re-running dfo-website's `deploy.yml` for the `staging` branch, the same gap and fix as for the feedback webhook above:
+
+```
+gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
+```
+
 ## Tenant databases
 
 `database.tf` holds the website's database on the shared Cloud SQL instance from the `platform` stack: accounts, saved views, share links. ADK agent sessions live in the ai stack's own tenant database instead (#155), because ADK creates its schema over whatever connection it gets and the website runtime should hold DML only.

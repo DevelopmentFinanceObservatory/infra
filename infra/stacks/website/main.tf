@@ -160,6 +160,8 @@ module "website_service" {
     # The apis stack owns and pins the secret. This mount reads latest, as for
     # DFO_PRINCIPAL above. See README.
     DFO_CALLER_PRINCIPAL = { secret_id = var.caller_principal_secret_id }
+    # Comma-separated emails of the signed-in users who may open /admin/api-keys. Not version-pinned: the list is added out-of-band and the newest must win. See admin_emails.tf and README.
+    ADMIN_EMAILS = { secret_id = google_secret_manager_secret.website_admin_emails.secret_id }
   }, local.sign_in_secret_env_vars, local.email_sign_in_secret_env_vars)
 
   deployer_members = ["serviceAccount:${data.google_service_account.website_deployer.email}"]
@@ -186,8 +188,11 @@ module "website_service" {
     subnetwork = module.psc_network.subnetwork_id
   }
 
-  # The first revision that mounts TURNSTILE_SECRET_KEY must wait for the placeholder version (email_sign_in.tf), or it cannot resolve `latest`. See the module README's "Ordering a revision on out-of-module resources" section.
-  readiness_dependencies = [google_secret_manager_secret_version.website_turnstile_secret_key_placeholder.id]
+  # The first revision that mounts TURNSTILE_SECRET_KEY or ADMIN_EMAILS must wait for the placeholder version (email_sign_in.tf, admin_emails.tf), or it cannot resolve `latest`. See the module README's "Ordering a revision on out-of-module resources" section.
+  readiness_dependencies = [
+    google_secret_manager_secret_version.website_turnstile_secret_key_placeholder.id,
+    google_secret_manager_secret_version.website_admin_emails_placeholder.id,
+  ]
 }
 
 # The website's server-side proxies call the apis service with an ID token

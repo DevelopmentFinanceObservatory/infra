@@ -39,3 +39,5 @@ turnstile_site_key = "0x4AAAAAAFiLWYsFJwHodJgu"
 
 # Organisations whose verified accounts may open the Graph Explorer.
 graph_explorer_email_domains = ["one.org", "ods.coop", "ode.partners"]
+
+# TODO(jorge): decide who else should be an admin on dev; the list lives in the secret dfo-dev-website-staging-admin-emails, not here.
