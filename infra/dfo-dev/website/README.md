@@ -144,6 +144,28 @@ printf '%s' 'a@example.org,b@example.org' | gcloud secrets versions add dfo-dev-
 gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
 ```
 
+## API key tag secrets
+
+`API_KEY_TAG_SECRETS` is the comma-separated list of secrets that sign the 8-character tag at the end of every API key. The first entry signs new keys and every entry verifies, so the website's proxy can refuse a made-up key before it reads the key store. A production revision refuses to start without a valid list (each entry at least 32 characters). `api_key_tag_secrets.tf` owns the secret (`dfo-dev-website-staging-api-key-tag-secrets`) and generates its first version with the same ephemeral-`random_password`-plus-write-only-version shape as `auth_secret.tf`, so the value never lands in Terraform state and keys work from the first apply. It is kept apart from `BETTER_AUTH_SECRET`, so rotating that leaves keys alone.
+
+Unlike `BETTER_AUTH_SECRET`, the mount reads `latest`, and rotation is by hand, never by bumping the counter in `api_key_tag_secrets.tf`: a rotation has to carry the old secret beside the new one, and a secret dropped from the list voids every key it signed. Keys don't expire, so drop a secret only after its keys are replaced. Each step below is a new version, then a new revision:
+
+```
+OLD=$(gcloud secrets versions access latest --secret dfo-dev-website-staging-api-key-tag-secrets --project dev-fin-observatory)
+NEW=$(openssl rand -hex 32)
+# 1. The new secret verifies, the old one still signs.
+printf '%s' "$OLD,$NEW" | gcloud secrets versions add dfo-dev-website-staging-api-key-tag-secrets \
+  --project dev-fin-observatory --data-file=-
+gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
+# 2. Once every instance runs step 1: the new secret signs.
+printf '%s' "$NEW,$OLD" | gcloud secrets versions add dfo-dev-website-staging-api-key-tag-secrets \
+  --project dev-fin-observatory --data-file=-
+gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
+# 3. Only after every key signed by $OLD is replaced: add a version holding $NEW alone, then roll.
+```
+
+Two steps, so no instance ever meets a key signed by a secret it doesn't know.
+
 ## Tenant databases
 
 `database.tf` holds the website's database on the shared Cloud SQL instance from the `platform` stack: accounts, saved views, share links. ADK agent sessions live in the ai stack's own tenant database instead (#155), because ADK creates its schema over whatever connection it gets and the website runtime should hold DML only.
