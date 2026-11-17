@@ -138,11 +138,14 @@ printf '%s' 'a@example.org,b@example.org' | gcloud secrets versions add dfo-dev-
   --project dev-fin-observatory --data-file=-
 ```
 
-`printf` rather than `echo` keeps a trailing newline out of the stored value. Running instances keep the value they started with, so after adding a version roll the service onto a new revision by re-running dfo-website's `deploy.yml` for the `staging` branch, the same gap and fix as for the feedback webhook above:
+`printf` rather than `echo` keeps a trailing newline out of the stored value. Running instances keep the value they started with, so after adding a version roll the service onto a new revision. Force one without a new image by changing a label:
 
 ```
-gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
+gcloud run services update dfo-dev-website-staging --project dev-fin-observatory \
+  --region northamerica-northeast1 --update-labels=admin-emails-rotated=$(date +%Y%m%d%H%M)
 ```
+
+Re-running dfo-website's `deploy.yml` is not enough on its own: a manual run applies the same path filter as a push, so it skips the deploy when the last commit on `dev` touched only docs or prototypes, and instances keep the old value.
 
 ## API key tag secrets
 
@@ -156,15 +159,17 @@ NEW=$(openssl rand -hex 32)
 # 1. The new secret verifies, the old one still signs.
 printf '%s' "$OLD,$NEW" | gcloud secrets versions add dfo-dev-website-staging-api-key-tag-secrets \
   --project dev-fin-observatory --data-file=-
-gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
+gcloud run services update dfo-dev-website-staging --project dev-fin-observatory \
+  --region northamerica-northeast1 --update-labels=api-key-tag-rotated=$(date +%Y%m%d%H%M)
 # 2. Once every instance runs step 1: the new secret signs.
 printf '%s' "$NEW,$OLD" | gcloud secrets versions add dfo-dev-website-staging-api-key-tag-secrets \
   --project dev-fin-observatory --data-file=-
-gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
+gcloud run services update dfo-dev-website-staging --project dev-fin-observatory \
+  --region northamerica-northeast1 --update-labels=api-key-tag-rotated=$(date +%Y%m%d%H%M)
 # 3. Only after every key signed by $OLD is replaced: add a version holding $NEW alone, then roll.
 ```
 
-Two steps, so no instance ever meets a key signed by a secret it doesn't know.
+Two steps, so no instance ever meets a key signed by a secret it doesn't know. The label change forces each new revision, as in "Admin emails" above, since a manual `deploy.yml` run can skip the deploy.
 
 ## Tenant databases
 
