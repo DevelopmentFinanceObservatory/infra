@@ -31,33 +31,12 @@ first_day=2026-10-14
 [ $# -eq 3 ] || { echo "usage: load-website-page-history.sh <rows.jsonl> <start_date> <end_date>" >&2; exit 2; }
 file="$1" start="$2" end="$3"
 [ -f "$file" ] && [ -r "$file" ] || { echo "cannot read $file" >&2; exit 2; }
-wh_check_range "$start" "$end"
+wh_check_ended "$start" "$end"
 [[ ! "$start" < "$first_day" ]] || {
     echo "start date $start is before $first_day, when the public domain first reached the service; earlier requests came from the preview host" >&2
     exit 2
 }
-yesterday="$(jq -rn 'now - 86400 | todate[0:10]')"
-[[ ! "$end" > "$yesterday" ]] || {
-    echo "end date $end has not ended in UTC, so its figures are partial; the latest end date today is $yesterday" >&2
-    exit 2
-}
-
-# Each row, cut to the table's three fields, or the first problem with the
-# file. A problem comes out on stdout with an "error: " prefix, so one jq run
-# both checks and normalises.
-rows="$(jq -rs --arg s "$start" --arg e "$end" '
-    def count: type == "number" and . == floor and . >= 0;
-    def real_day: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
-        and (strptime("%Y-%m-%d") | mktime | todate[0:10]) == .;
-    def bad: type != "object" or (.date | real_day | not)
-        or (.page_views | count | not) or (.bot_page_views | count | not);
-    if length == 0 then "error: the file holds no rows"
-    elif any(.[]; bad) then "error: rows without a YYYY-MM-DD date and whole, non-negative page_views and bot_page_views:\n\(map(select(bad) | tojson) | join("\n"))"
-    elif any(.[]; .date < $s or .date > $e) then "error: dates outside \($s) to \($e):\n\(map(.date | select(. < $s or . > $e)) | join("\n"))"
-    elif (map(.date) | unique | length) < length then "error: dates on more than one row:\n\(map(.date) | group_by(.) | map(select(length > 1) | .[0]) | join("\n"))"
-    else sort_by(.date)[] | {date, page_views, bot_page_views} | tojson
-    end' "$file")" || { echo "$file is not JSON lines" >&2; exit 2; }
-[[ "$rows" != error:* ]] || { printf '%s\n' "${rows#error: }" >&2; exit 2; }
+rows="$(wh_read_rows "$file" "$start" "$end" "" "page_views bot_page_views")" || exit
 
 # shellcheck disable=SC2119 # the file is the source, so no API scope
 wh_init

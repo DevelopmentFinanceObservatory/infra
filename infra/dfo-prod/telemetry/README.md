@@ -187,7 +187,7 @@ The loader runs as the same service account as the history loaders above and nee
 
 ### Page loads per path
 
-The prototypes app at developmentfinance.org/prototypes is a Cloudflare Worker, so its page loads never reach the website's request log. The website's GA4 tag covers `/prototypes` once the website loads it there, and `web_history.cloudflare_pages_daily` covers the days before that, with page loads per UTC day and path from the same query with `clientRequestPath_like: "/prototypes%"` added to the filter and `clientRequestPath` to the dimensions:
+The prototypes app at developmentfinance.org/prototypes is a Cloudflare Worker, so its page loads never reach the website's request log. `web_history.cloudflare_pages_daily` holds them per UTC day and path for 2026-11-16 to 2026-11-17, from the same query with `clientRequestPath_like: "/prototypes%"` added to the filter and `clientRequestPath` to the dimensions:
 
 ```graphql
 httpRequestsAdaptiveGroups(limit: 1000, orderBy: [date_ASC], filter: {date_geq: $start, date_leq: $end, requestSource: "eyeball", edgeResponseContentTypeName: "html", clientRequestHTTPMethodName: "GET", edgeResponseStatus: 200, clientRequestHTTPHost_in: ["developmentfinance.org", "www.developmentfinance.org"], clientRequestPath_like: "/prototypes%"}) { dimensions { date clientRequestPath verifiedBotCategory } count }
@@ -297,7 +297,7 @@ The Search Console views keep web search only. `search_console_pages` strips the
 
 `cloudflare_daily` reads `web_history.cloudflare_daily` (see "Cloudflare page loads") and renames `date` to `day`. Its `page_loads` count every visitor, whatever their consent, so they run above GA4's page views.
 
-`cloudflare_pages_daily` reads `web_history.cloudflare_pages_daily` (see "Page loads per path") and renames `date` to `day`. It holds only the paths the capture asked for, the prototypes app's pages under `/prototypes`.
+`cloudflare_pages_daily` reads `web_history.cloudflare_pages_daily` (see "Page loads per path") and renames `date` to `day`. It holds only the paths the capture asked for, the prototypes app's pages under `/prototypes`, so its rows do not sum to `cloudflare_daily`.
 
 `model_spend_daily` reads the standard usage cost export, `billing_export.gcp_billing_export_v1_*`, and keeps only the projects in `spend_callers` (`reporting.auto.tfvars`), labelled with their caller, since the billing account also bills projects outside DFO. Add each Gemini caller's AI Studio key project there. Cloud Billing keeps adding cost to a day for about a day after it ends, so the view keeps only days before yesterday (UTC), and every day it holds is whole. `credits` is negative and `net_cost` is `cost` plus `credits`.
 
