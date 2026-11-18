@@ -1,9 +1,10 @@
 # shellcheck shell=bash
-# Shared by load-ga4-history.sh, load-search-console-history.sh and
-# load-cloudflare-history.sh, which source it after setting repo_root. It holds
-# the pieces the loaders use: the date checks, the impersonated token, API
-# calls, paging, and the BigQuery load that replaces a date range in
-# web_history.
+# Shared by load-ga4-history.sh, load-search-console-history.sh,
+# load-cloudflare-history.sh, load-cloudflare-pages-history.sh and
+# load-website-page-history.sh, which source it after setting repo_root. It
+# holds the pieces the loaders use: the date checks, the file checks, the
+# impersonated token, API calls, paging, and the BigQuery load that replaces a
+# date range in web_history.
 #
 # Every call runs as the web_history_service_account output of
 # infra/dfo-prod/telemetry, so the caller needs
@@ -53,6 +54,52 @@ wh_check_dates() {
         echo "end date $2 is less than 4 days old, so the APIs may not have finished it; the latest end date today is $latest" >&2
         exit 2
     }
+}
+
+# wh_check_ended <start> <end>: wh_check_range, and exits unless end is at
+# latest yesterday (UTC), for sources whose figures are final once the UTC day
+# ends. Today is refused, since a run replaces its whole range and today's
+# figures are still partial.
+wh_check_ended() {
+    local yesterday
+    wh_check_range "$1" "$2"
+    yesterday="$(jq -rn 'now - 86400 | todate[0:10]')"
+    [[ ! "$2" > "$yesterday" ]] || {
+        echo "end date $2 has not ended in UTC, so its figures are partial; the latest end date today is $yesterday" >&2
+        exit 2
+    }
+}
+
+# wh_read_rows <file> <start> <end> <path fields> <count fields>: prints the
+# file's JSON lines sorted, each cut to date, the path fields and the count
+# fields, or prints the first problem with the file and exits 2. Both field
+# lists are space-separated names, and the path fields may be empty. Every row
+# needs a real YYYY-MM-DD date from start to end, a string starting with / in
+# each path field and a whole, non-negative number in each count field, and no
+# two rows may share a date and paths. The file must hold at least one row.
+wh_read_rows() {
+    local rows
+    # A problem comes out on stdout with an "error: " prefix, so one jq run
+    # both checks and normalises.
+    rows="$(jq -rs --arg s "$2" --arg e "$3" --arg p "$4" --arg c "$5" '
+        ($p | split(" ") | map(select(. != ""))) as $paths
+        | ($c | split(" ") | map(select(. != ""))) as $counts
+        | (["date"] + $paths) as $keys
+        | def count: type == "number" and . == floor and . >= 0;
+        def path: type == "string" and startswith("/");
+        def real_day: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+            and (strptime("%Y-%m-%d") | mktime | todate[0:10]) == .;
+        def bad: type != "object" or (.date | real_day | not)
+            or any(.[$paths[]]; path | not) or any(.[$counts[]]; count | not);
+        def key: [.[$keys[]]];
+        if length == 0 then "error: the file holds no rows"
+        elif any(.[]; bad) then "error: rows without a YYYY-MM-DD date\($paths | map(", a \(.) starting with /") | join("")) and whole, non-negative \($counts | join(" and ")):\n\(map(select(bad) | tojson) | join("\n"))"
+        elif any(.[]; .date < $s or .date > $e) then "error: dates outside \($s) to \($e):\n\(map(.date | select(. < $s or . > $e)) | join("\n"))"
+        elif (map(key) | unique | length) < length then "error: \($keys | map(. + "s") | join(" and ")) on more than one row:\n\(map(key) | group_by(.) | map(select(length > 1) | .[0] | join(" ")) | join("\n"))"
+        else sort_by(key)[] | . as $row | reduce ($keys + $counts)[] as $f ({}; .[$f] = $row[$f]) | tojson
+        end' "$1")" || { echo "$1 is not JSON lines" >&2; exit 2; }
+    [[ "$rows" != error:* ]] || { printf '%s\n' "${rows#error: }" >&2; exit 2; }
+    printf '%s\n' "$rows"
 }
 
 # wh_output <name>: prints a Terraform output of the prod telemetry stack, or
