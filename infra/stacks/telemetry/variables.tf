@@ -26,12 +26,12 @@ variable "search_console_export_account" {
 }
 
 variable "reporting_sources" {
-  description = "Source groups whose first table exists, out of logs, mcp, website_requests, website_pages, website, accounts, langfuse, ga4, search_console, cloudflare, cloudflare_pages and billing. A reporting view is created, and authorised on its sources, only when the group it reads is listed (reporting_views.tf)."
+  description = "Source groups whose first table exists, out of the keys of local.reporting_source_datasets (reporting_views.tf). A reporting view is created, and authorised on its sources, only when the group it reads is listed."
   type        = set(string)
 
   validation {
-    condition     = length(setsubtract(var.reporting_sources, ["logs", "mcp", "website_requests", "website_pages", "website", "accounts", "langfuse", "ga4", "search_console", "cloudflare", "cloudflare_pages", "billing"])) == 0
-    error_message = "reporting_sources may list only logs, mcp, website_requests, website_pages, website, accounts, langfuse, ga4, search_console, cloudflare, cloudflare_pages and billing."
+    condition     = length(setsubtract(var.reporting_sources, keys(local.reporting_source_datasets))) == 0
+    error_message = "reporting_sources may list only ${join(", ", sort(keys(local.reporting_source_datasets)))}."
   }
 }
 

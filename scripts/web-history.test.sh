@@ -434,8 +434,9 @@ check "website page views refuse a repeated date with no calls" "$(is "$status/$
 for row in '{"date":"2026-10-14","page_views":1}' '{"date":"2026-10-14","page_views":1,"bot_page_views":-1}' \
     '{"date":"2026-10-14","page_views":1.5,"bot_page_views":0}' '{"date":"2026-11-31","page_views":1,"bot_page_views":0}' '[1]'; do
     bad_file "$row"
-    run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-12-31
+    run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-10-31
     check "website page views refuse the row $row with no calls" "$(is "$status/$calls" "2/")"
+    check "the refusal names the website row $row" "$(says "$(printf 'rows without a YYYY-MM-DD date and whole, non-negative page_views and bot_page_views:\n%s' "$row")")"
 done
 : >"$WORK/bad.jsonl"
 run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-10-16
