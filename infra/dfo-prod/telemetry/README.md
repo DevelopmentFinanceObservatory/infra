@@ -326,7 +326,7 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 
 ## Analytics repo
 
-The private repository `DevelopmentFinanceObservatory/analytics` holds a dbt project that turns the raw usage data into usage metrics. Every metric's logic lives there. This stack holds only the datasets the project writes and the accounts that run it (`analytics.tf`). The project reads four source datasets: `dfo_logs`, `website_export`, `langfuse_export` and `logs_daily`.
+The private repository `DevelopmentFinanceObservatory/analytics` holds a dbt project that turns the raw usage data into usage metrics. Every metric's logic lives there. This stack holds only the datasets the project writes and the accounts that run it (`analytics.tf`). The project reads five source datasets: `dfo_logs`, `website_export`, `langfuse_export`, `logs_daily` and `web_history`.
 
 Each dbt target writes one EU dataset:
 

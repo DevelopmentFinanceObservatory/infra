@@ -33,6 +33,7 @@ locals {
     "website_export",
     "langfuse_export",
     google_bigquery_dataset.logs_daily.dataset_id,
+    google_bigquery_dataset.web_history.dataset_id,
   ]
 
   # The service accounts, each with the one dataset it writes. The
