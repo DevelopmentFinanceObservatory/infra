@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks that the Cloudflare Logpush job in infra/stacks/edge/cloudflare_logpush.tf
+# Checks that the Cloudflare Logpush job in infra/stacks/edge-logs/cloudflare_logpush.tf
 # delivers dataset-read lines to its bucket. It reads with gcloud storage and
 # changes nothing.
 #

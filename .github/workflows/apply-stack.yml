@@ -88,13 +88,17 @@ jobs:
         run: terraform validate -no-color
 
       # The Cloudflare provider reads CLOUDFLARE_API_TOKEN itself. Only the
-      # edge stack uses it. Every other stack gets an empty value, so the
-      # token (an environment secret that `secrets: inherit` exposes to this
-      # whole job) does not reach their Terraform. Actions masks it in logs.
+      # edge and edge-logs stacks use it. Every other stack gets an empty
+      # value, so the token (an environment secret that `secrets: inherit`
+      # exposes to this whole job) does not reach their Terraform. Actions
+      # masks it in logs. In `production` it is the token with Logs Write,
+      # which edge-logs needs for every Logpush call and the edge stack for
+      # its cache rule's precondition, and this plan is the only plan
+      # edge-logs gets (plan-prod.yml, "Apply-only stacks").
       - name: terraform plan
         id: plan
         env:
-          CLOUDFLARE_API_TOKEN: ${{ inputs.stack == 'edge' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_API_TOKEN: ${{ (inputs.stack == 'edge' || inputs.stack == 'edge-logs') && secrets.CLOUDFLARE_API_TOKEN || '' }}
         run: terraform plan -input=false -lock-timeout=300s -no-color -out=tfplan
 
       - name: Resolve allow-destroy label
@@ -140,7 +144,7 @@ jobs:
       - name: terraform apply
         id: apply
         env:
-          CLOUDFLARE_API_TOKEN: ${{ inputs.stack == 'edge' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_API_TOKEN: ${{ (inputs.stack == 'edge' || inputs.stack == 'edge-logs') && secrets.CLOUDFLARE_API_TOKEN || '' }}
         run: terraform apply -input=false -lock-timeout=300s -no-color tfplan
 
       - name: Comment apply result on PR

@@ -1,0 +1,1 @@
+../../stacks/edge-logs/main.tf

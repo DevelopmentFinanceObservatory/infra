@@ -92,19 +92,14 @@ variable "preview_access_emails" {
   default     = []
 }
 
-variable "edge_logpush_bucket" {
-  description = "GCS bucket the Logpush job in cloudflare_logpush.tf writes dataset-read request lines to, copied from the telemetry stack's edge_logs_bucket output. Null creates no job, no custom log fields and no ownership challenge."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = var.edge_logpush_bucket == null || can(regex("^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$", var.edge_logpush_bucket))
-    error_message = "edge_logpush_bucket must be a GCS bucket name, without the gs:// scheme."
-  }
-}
-
 variable "edge_cache_enabled" {
-  description = "Create the cache rule in cloudflare_rules.tf. True requires the Logpush job, so every read the edge answers from its cache is logged. Turn it on only once scripts/check-edge-logpush.sh finds lines in the bucket."
+  description = "Create the cache rule in cloudflare_rules.tf. True requires the edge-logs stack's Logpush job, so every read the edge answers from its cache is logged. Turn it on only once scripts/check-edge-logpush.sh finds lines in the bucket."
   type        = bool
   default     = false
+}
+
+variable "edge_cache_logpush_check" {
+  description = "Read the Logpush job for the cache rule's precondition while edge_cache_enabled is true. Every Logpush read needs Logs Write, so plan-prod.yml sets it false for pull-request plans, whose token is read-only and which apply nothing. Every apply keeps the default."
+  type        = bool
+  default     = true
 }

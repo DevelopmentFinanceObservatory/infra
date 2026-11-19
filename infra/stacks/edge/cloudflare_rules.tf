@@ -166,6 +166,8 @@ locals {
   # /api/datasets onto /api/v1/datasets), but Cloudflare sees the path the
   # browser sent. The SDK reads a manifest under /api/v1/datasets and a file
   # at the manifest's own url, under /api/datasets.
+  # The edge-logs stack's Logpush filter lists the same prefixes in its own
+  # dataset_path_prefixes, and the two lists must match.
   dataset_path_prefixes = ["/api/datasets/", "/api/v1/datasets/"]
 
   # The Pro plan has no regex, so the paths are matched with wildcard, which
@@ -194,10 +196,11 @@ locals {
   # have dropped the Authorization header, so it counts as authenticated.
   edge_cache_plain_request = "not http.request.headers.truncated and not any(lower(http.request.headers.names[*])[*] in {\"authorization\"})"
 
-  # wildcard ignores case, and the Logpush filter in cloudflare_logpush.tf
-  # matches the prefixes as written. This case-sensitive test keeps the cache
-  # to paths that filter logs, so a read in another case goes to the website,
-  # whose own request log records it.
+  # wildcard ignores case, and the Logpush filter in
+  # infra/stacks/edge-logs/cloudflare_logpush.tf matches the prefixes as
+  # written. This case-sensitive test keeps the cache to paths that filter
+  # logs, so a read in another case goes to the website, whose own request log
+  # records it.
   edge_cache_logged_path = join(" or ", [for prefix in local.dataset_path_prefixes : "starts_with(http.request.uri.path, \"${prefix}\")"])
 }
 
@@ -211,9 +214,32 @@ locals {
 # data is not in the rule; the website serves it with its own Cache-Control.
 #
 # The rule exists only while var.edge_cache_enabled is true, and the
-# precondition refuses that unless the Logpush job in cloudflare_logpush.tf
-# exists, is enabled, and has delivered. A read the cache answers never reaches the website,
-# so without the job it would be counted nowhere.
+# precondition refuses that unless the edge-logs stack's Logpush job exists,
+# is enabled, and has delivered. A read the cache answers never reaches the
+# website, so without the job it would be counted nowhere.
+#
+# The job lives in its own stack because every Logpush API call needs Logs
+# Write on the zone, reads included
+# (https://developers.cloudflare.com/logs/logpush/permissions/), and both
+# Logpush data sources accept only Logs Write
+# (https://registry.terraform.io/providers/cloudflare/cloudflare/5.27.0/docs/data-sources/logpush_jobs).
+# The list below is read only while the cache is on and
+# var.edge_cache_logpush_check is true, which holds for every apply and for no
+# pull-request plan, so a plan with the read-only token makes no Logpush call.
+data "cloudflare_logpush_jobs" "zone" {
+  count = var.edge_cache_enabled && var.edge_cache_logpush_check ? 1 : 0
+
+  zone_id = var.cloudflare_zone_id
+}
+
+locals {
+  # The edge-logs stack names its job dataset-reads, on http_requests.
+  edge_logpush_dataset_reads = [
+    for job in flatten(data.cloudflare_logpush_jobs.zone[*].result) : job
+    if job.name == "dataset-reads" && job.dataset == "http_requests"
+  ]
+}
+
 resource "cloudflare_ruleset" "cache" {
   count = var.edge_cache_enabled ? 1 : 0
 
@@ -246,17 +272,17 @@ resource "cloudflare_ruleset" "cache" {
 
   # last_complete is the end of the newest period the job has delivered, and
   # stays empty until its first push
-  # (https://registry.terraform.io/providers/cloudflare/cloudflare/5.27.0/docs/resources/logpush_job).
-  # A job created in the same apply has none yet, so the cache rule waits for
-  # an apply after the job has delivered.
+  # (https://registry.terraform.io/providers/cloudflare/cloudflare/5.27.0/docs/data-sources/logpush_jobs).
+  # A job created moments before has none yet, so the cache rule waits for an
+  # apply after the job has delivered.
   lifecycle {
     precondition {
-      condition = (
-        length(cloudflare_logpush_job.dataset_reads) == 1 &&
-        try(cloudflare_logpush_job.dataset_reads[0].enabled, false) == true &&
-        try(length(cloudflare_logpush_job.dataset_reads[0].last_complete) > 0, false)
+      condition = !var.edge_cache_logpush_check || (
+        length(local.edge_logpush_dataset_reads) == 1 &&
+        try(local.edge_logpush_dataset_reads[0].enabled, false) == true &&
+        try(length(local.edge_logpush_dataset_reads[0].last_complete) > 0, false)
       )
-      error_message = "edge_cache_enabled needs the dataset-reads Logpush job, enabled and with a delivered push: set edge_logpush_bucket, apply, and confirm lines arrive with scripts/check-edge-logpush.sh first (infra/dfo-prod/edge/README.md, \"Logpush\")."
+      error_message = "edge_cache_enabled needs exactly one dataset-reads Logpush job on the zone, enabled and with a delivered push: apply the edge-logs stack with edge_logpush_bucket set, and confirm lines arrive with scripts/check-edge-logpush.sh first (infra/dfo-prod/edge-logs/README.md)."
     }
   }
 }

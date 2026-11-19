@@ -2,15 +2,22 @@
 # hits included, unsampled, to the telemetry stack's edge_logs bucket. The
 # website's request log never sees a read Cloudflare answers from its cache,
 # so these lines are the only record of those uses. Everything here exists
-# only while var.edge_logpush_bucket is set, and the cache rule in
-# cloudflare_rules.tf refuses to exist without the job.
+# only while var.edge_logpush_bucket is set, and the edge stack's cache rule
+# (infra/stacks/edge/cloudflare_rules.tf) refuses to exist without the job.
 #
 # Every Logpush API call needs Logs Write on the zone, reads included
-# (https://developers.cloudflare.com/logs/logpush/permissions/), so both the
-# apply and the plan token need it once the bucket is set.
+# (https://developers.cloudflare.com/logs/logpush/permissions/), so this stack
+# plans and applies only with the production environment's token, and no
+# pull-request plan runs it.
 
 locals {
   edge_logpush = var.edge_logpush_bucket != null
+
+  # The dataset read prefixes, as the browser sends them. The website rewrites
+  # /api/datasets onto /api/v1/datasets, but Cloudflare sees the path as sent.
+  # dataset_path_prefixes in infra/stacks/edge/cloudflare_rules.tf must list
+  # the same prefixes, since the cache rule may serve only paths this job logs.
+  dataset_path_prefixes = ["/api/datasets/", "/api/v1/datasets/"]
 
   # {DATE} becomes the UTC day as YYYYMMDD, one directory a day
   # (https://developers.cloudflare.com/logs/logpush/logpush-job/api-configuration/).
@@ -64,7 +71,8 @@ locals {
 # applies to every http_requests job on the zone
 # (https://developers.cloudflare.com/logs/logpush/logpush-job/custom-fields/).
 # A zone holds one entrypoint ruleset per phase, so check for an existing one
-# before the first apply, as infra/dfo-prod/edge/README.md, "Logpush", shows.
+# before the first apply, as infra/dfo-prod/edge-logs/README.md, "Before the
+# first apply", shows.
 resource "cloudflare_ruleset" "log_custom_fields" {
   count = local.edge_logpush ? 1 : 0
 
