@@ -161,6 +161,86 @@ resource "cloudflare_ruleset" "rate_limit" {
   ]
 }
 
+locals {
+  # Both prefixes of the Datasets API reach one handler (the website rewrites
+  # /api/datasets onto /api/v1/datasets), but Cloudflare sees the path the
+  # browser sent. The SDK reads a manifest under /api/v1/datasets and a file
+  # at the manifest's own url, under /api/datasets.
+  dataset_path_prefixes = ["/api/datasets/", "/api/v1/datasets/"]
+
+  # The Pro plan has no regex, so the paths are matched with wildcard, which
+  # ignores case and lets * span slashes. A dataset id starts spec_ and a
+  # content version cv_. A digest file is
+  # <prefix>spec_<id>/cv_<hex>/files/<digest>, and a manifest is exactly
+  # <prefix>spec_<id>/cv_<hex>. Each pattern is paired with a test that rules
+  # out a deeper path: nothing may follow the digest, and the manifest has no
+  # third segment, which also excludes the /file selector. Share slot data is
+  # left out, since a share that is withdrawn has no purge path.
+  edge_cache_path_match = join(" or ", concat(
+    [for prefix in local.dataset_path_prefixes : "(http.request.uri.path wildcard \"${prefix}spec_*/cv_*/files/*\" and not http.request.uri.path wildcard \"${prefix}*/*/files/*/*\")"],
+    [for prefix in local.dataset_path_prefixes : "(http.request.uri.path wildcard \"${prefix}spec_*/cv_*\" and not http.request.uri.path wildcard \"${prefix}*/*/*\")"],
+  ))
+
+  # A request with an Origin header is cross-origin, and its response carries
+  # an Access-Control-Allow-Origin for that origin. Cloudflare's cache ignores
+  # Vary: Origin, so such a response must never be stored. A same-origin GET
+  # carries no Origin, so pages on the apex still get the cache. A request
+  # with an Authorization header is not cache-eligible either. Header names
+  # keep their case on HTTP/1.1, hence lower(). A truncated header list may
+  # have dropped either header, so it counts as cross-origin and
+  # authenticated.
+  edge_cache_plain_request = "not http.request.headers.truncated and not any(lower(http.request.headers.names[*])[*] in {\"origin\" \"authorization\"})"
+}
+
+# Makes the website's dataset files and dataset manifests cache-eligible for
+# same-origin reads with no Authorization header. Cloudflare then follows the
+# Cache-Control the website sends: a pinned digest file for a year, and a
+# working file and a manifest for 300 s. A response with no-store or with no
+# Cache-Control is never stored. The website sets Cache-Tag to the content
+# version on dataset responses, so a revoked version is purged by tag
+# (infra/dfo-prod/edge/README.md, "Revoking a dataset version"). Share slot
+# data is not in the rule; the website serves it with its own Cache-Control.
+resource "cloudflare_ruleset" "cache" {
+  zone_id     = var.cloudflare_zone_id
+  name        = "Cache"
+  description = "Cache the website's dataset files and manifests for same-origin reads."
+  kind        = "zone"
+  phase       = "http_request_cache_settings"
+
+  rules = [
+    {
+      ref         = "datasets_same_origin"
+      description = "Cache dataset files and dataset manifests for requests with no Origin or Authorization header, as the origin's Cache-Control says."
+      expression  = "(${local.edge_cache_path_match}) and ${local.edge_cache_plain_request}"
+      action      = "set_cache_settings"
+      action_parameters = {
+        cache = true
+        # Follow the origin's Cache-Control, and store nothing when the
+        # response has none. Cloudflare's default TTL for the status code
+        # would otherwise cache a response the website did not mark.
+        edge_ttl = {
+          mode = "bypass_by_default"
+        }
+        browser_ttl = {
+          mode = "respect_origin"
+        }
+      }
+    },
+  ]
+}
+
+# A zone holds one entrypoint ruleset per phase, so the create above fails
+# when the zone already has one for http_request_cache_settings. Check before
+# the first apply (infra/dfo-prod/edge/README.md, "Before the first apply").
+# When that check lists an entrypoint, uncomment this block and put its id
+# in place of <ruleset id>, as for the redirects ruleset above. The name and
+# kind in the resource must then match the existing entrypoint, since a
+# change would replace it.
+# import {
+#   to = cloudflare_ruleset.cache
+#   id = "zones/${var.cloudflare_zone_id}/<ruleset id>"
+# }
+
 # The Cloudflare Managed Ruleset runs at its default actions. The OWASP Core
 # Ruleset scores each request against generic attack patterns and flags
 # query-like text, which Studio and the data API carry, so its anomaly rule
