@@ -70,8 +70,9 @@
 # Logs Write on the zone, reads included
 # (https://developers.cloudflare.com/logs/logpush/permissions/). The `plan`
 # environment's Cloudflare token is read-only, so detect drops `edge-logs`
-# from the plan matrix with a notice, and apply-stack.yml plans it with the
-# `production` token before the `release`-approved apply. The list is
+# from the plan matrix with a notice. apply-stack.yml plans it with the
+# `production` token in a job of its own, approved and read before a second
+# approval admits the apply ("Reviewed stacks" there). The list is
 # `APPLY_ONLY_STACKS` in detect. The edge stack's plan sets
 # `TF_VAR_edge_cache_logpush_check=false`, so its cache rule's precondition
 # reads no Logpush job here either. This file runs from main, so the change

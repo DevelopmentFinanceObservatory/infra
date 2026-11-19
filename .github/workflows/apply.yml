@@ -59,7 +59,8 @@
 # `Changed stacks planned`, `terraform fmt check`, and
 # `Prod pin placeholder unchanged`. `main` requires one approval, and the
 # `production` environment's `release` reviewers approve each prod apply job
-# before it starts.
+# before it starts. edge-logs takes two approvals, one for its plan and one
+# for its apply (apply-stack.yml, "Reviewed stacks").
 #
 # Tiered ordering
 # ---------------
