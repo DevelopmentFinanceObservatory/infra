@@ -2,7 +2,8 @@
 # to. The job itself lives in the edge-logs stack (cloudflare_logpush.tf),
 # which reads this bucket's name from its own edge_logpush_bucket variable,
 # copied from the edge_logs_bucket output below. The lines carry raw client IPs, so
-# the bucket keeps them for one day.
+# the bucket keeps them for three days: long enough to find and repair a
+# fault in the job that loads them into BigQuery before they expire.
 #
 # Cloudflare names each batch <start>_<end>_<hash>.log.gz and writes its
 # ownership challenge as ownership-challenge-<random>.txt
@@ -23,12 +24,12 @@ resource "google_storage_bucket" "edge_logs" {
     enabled = false
   }
 
-  # One day is the shortest age GCS supports. GCS deletes an object some time
-  # after it reaches the age, usually within a day, so a line lives one to two
-  # days (https://cloud.google.com/storage/docs/lifecycle#behavior).
+  # GCS deletes an object some time after it reaches the age, usually within
+  # a day, so a line lives three to four days
+  # (https://cloud.google.com/storage/docs/lifecycle#behavior).
   lifecycle_rule {
     condition {
-      age            = 1
+      age            = 3
       matches_suffix = [".log.gz"]
     }
     action {

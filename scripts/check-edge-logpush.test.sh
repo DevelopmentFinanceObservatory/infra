@@ -105,7 +105,7 @@ check "only the batch ending in the last hour is read" "$(says "batches ending i
 check "the count leaves out other paths and older lines" "$(says "dataset-read lines in the last hour: 3")"
 check "hits are counted" "$(says $'hit\t2')"
 check "misses are counted" "$(says $'miss\t1')"
-check "the challenge file in an old day is not stale" "$(is "$([[ "$out" != *"older than two days"* ]] && echo y)" y)"
+check "the challenge file in an old day is not stale" "$(is "$([[ "$out" != *"older than four days"* ]] && echo y)" y)"
 check "it only lists and reads" "$(is "$(grep -cvE '^gcloud storage (ls|cat) ' <<<"$calls" || true)" 0)"
 
 # 2. A batch GCS decompressed in transit reads the same.
@@ -141,13 +141,16 @@ for field in ClientIP CacheCacheStatus; do
     check "a line without $field is named" "$(says "1 line(s) lack CacheCacheStatus or ClientIP")"
 done
 
-# 6. A batch older than two days exits 1 and is listed.
+# 6. A batch older than four days exits 1 and is listed. One from four days
+# before, which the three-day delete rule may not have reached, is kept.
 reset
 line 2026-11-19T11:30:01Z /api/datasets/spec_a/cv_1 hit | batch 20261119 20261119T113000Z_20261119T113100Z_aa11.log.gz
-line 2026-11-10T11:30:01Z /api/datasets/spec_a/cv_1 hit | batch 20261110 20261110T113000Z_20261110T113100Z_9999.log.gz
+line 2026-11-15T11:30:01Z /api/datasets/spec_a/cv_1 hit | batch 20261115 20261115T113000Z_20261115T113100Z_8888.log.gz
+line 2026-11-14T11:30:01Z /api/datasets/spec_a/cv_1 hit | batch 20261114 20261114T113000Z_20261114T113100Z_9999.log.gz
 CHECK_EDGE_LOGPUSH_NOW="$NOW" run "$BUCKET"
 check "a stale batch exits 1" "$(is "$status" 1)"
-check "the stale batch is listed" "$(says "20261110/20261110T113000Z_20261110T113100Z_9999.log.gz")"
+check "the stale batch is listed" "$(says "20261114/20261114T113000Z_20261114T113100Z_9999.log.gz")"
+check "a batch within the delete rule's reach is not listed" "$(is "$([[ "$out" != *"20261115/"* ]] && echo y)" y)"
 
 # 7. A gcloud error exits 1 and is printed.
 reset

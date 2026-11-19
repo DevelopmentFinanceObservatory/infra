@@ -11,9 +11,9 @@
 #      them by CacheCacheStatus.
 #   3. Fails when there are none, or when any of them lacks CacheCacheStatus or
 #      ClientIP.
-#   4. Fails when a day directory older than two days still holds anything but
-#      the ownership challenge file, since the bucket's delete rule should have
-#      removed every batch after one day.
+#   4. Fails when a day directory older than four days still holds anything
+#      but the ownership challenge file, since the bucket's delete rule should
+#      have removed every batch after three days.
 #
 # Usage: check-edge-logpush.sh <bucket>
 #   bucket  the telemetry stack's edge_logs_bucket output, without gs://
@@ -108,9 +108,9 @@ if [ "$missing" -gt 0 ]; then
     failed=1
 fi
 
-# Day directories older than two days, by name, should hold only the
+# Day directories older than four days, by name, should hold only the
 # ownership challenge.
-cutoff="$(day $((now - 2 * 86400)))"
+cutoff="$(day $((now - 4 * 86400)))"
 dirs="$(ls_or_empty "$root/")"
 stale=""
 while read -r dir; do
@@ -122,7 +122,7 @@ while read -r dir; do
 done <<<"$dirs"
 stale="$(grep -v '^$' <<<"$stale" || true)"
 if [ -n "$stale" ]; then
-    echo "FAIL: objects older than two days, past the bucket's one-day delete rule:" >&2
+    echo "FAIL: objects older than four days, past the bucket's three-day delete rule:" >&2
     printf '%s\n' "$stale" | sed 's/^/    /' >&2
     failed=1
 fi
