@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Checks the cache ruleset in infra/stacks/edge/cloudflare_rules.tf against
-# the live edge, after an apply. It sends GETs only and changes nothing.
+# the live edge, after an apply. It sends GETs and one HEAD, and changes
+# nothing.
 #
 #   1. A pinned dataset file and its manifest, each read twice with no Origin,
 #      twice with Origin: https://developmentfinance.org, and twice with
@@ -12,8 +13,10 @@
 #      answers MISS and then HIT.
 #   3. The v1 manifest read with an Authorization header answers BYPASS or
 #      DYNAMIC, so an authenticated response is never stored.
-#   4. The /file selector answers DYNAMIC.
-#   5. No response shows the Cache-Tag header, which Cloudflare strips.
+#   4. A HEAD of the v1 manifest, cached by the GETs in check 2, answers
+#      DYNAMIC, so the edge serves and stores GET only.
+#   5. The /file selector answers DYNAMIC.
+#   6. No response shows the Cache-Tag header, which Cloudflare strips.
 #
 # With --after-purge, run after purging the version's cache tag
 # (infra/dfo-prod/edge/README.md, "Revoking a dataset version"): it reads each
@@ -137,6 +140,9 @@ else
     # The credential is a placeholder; the edge decides on the header alone.
     auth="$(status "$manifest_v1_path" -H "Authorization: Bearer edge-cache-check" | head -n 1)" || auth="error"
     expect "GET $manifest_v1_path with Authorization" "$auth" BYPASS DYNAMIC
+
+    head="$(status "$manifest_v1_path" -I | head -n 1)" || head="error"
+    expect "HEAD $manifest_v1_path" "$head" DYNAMIC
 
     # The selector answers a 302, which curl does not follow without -L.
     selector="$(status "$selector_path" | head -n 1)" || selector="error"

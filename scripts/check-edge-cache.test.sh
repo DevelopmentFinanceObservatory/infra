@@ -69,7 +69,7 @@ variants() {
 }
 happy() {
     variants MISS HIT MISS HIT MISS HIT
-    HAPPY=("${VARIANTS[@]}" "${VARIANTS[@]}" MISS HIT BYPASS DYNAMIC)
+    HAPPY=("${VARIANTS[@]}" "${VARIANTS[@]}" MISS HIT BYPASS DYNAMIC DYNAMIC)
 }
 
 failures=0
@@ -96,11 +96,12 @@ says() { [[ "$out" == *"$1"* ]] && echo true || echo false; }
 happy
 run "${HAPPY[@]}"
 check "expected statuses exit 0" "$(is "$status" 0)"
-check "all checks counted" "$(says "30 checks, 0 failed.")"
+check "all checks counted" "$(says "31 checks, 0 failed.")"
 check "manifest path derived" "$(says "first GET /api/datasets/spec_a/cv_0123, no Origin: MISS")"
 check "v1 manifest path derived" "$(says "first GET /api/v1/datasets/spec_a/cv_0123, no Origin: MISS")"
 check "each approved origin is sent on four reads" "$(is "$(grep -c -- "-H Origin: $APEX " <<<"$calls") $(grep -c -- "-H Origin: $PREVIEW " <<<"$calls")" "4 4")"
 check "only one read sends Authorization" "$(is "$(grep -c -- '-H Authorization:' <<<"$calls")" 1)"
+check "only one read is a HEAD" "$(is "$(grep -c -- ' -I' <<<"$calls")" 1)"
 
 # 2. A file the edge already holds answers HIT first, which fails.
 happy
@@ -141,23 +142,30 @@ run "${HAPPY[@]}"
 check "an authenticated HIT exits 1" "$(is "$status" 1)"
 check "an authenticated HIT is named" "$(says "with Authorization: got HIT, want BYPASS DYNAMIC")"
 
-# 6. A response that shows Cache-Tag to the visitor fails.
+# 6. A HEAD served from cache fails.
+happy
+HAPPY[15]=HIT
+run "${HAPPY[@]}"
+check "a cached HEAD exits 1" "$(is "$status" 1)"
+check "a cached HEAD is named" "$(says "HEAD /api/v1/datasets/spec_a/cv_0123: got HIT, want DYNAMIC")"
+
+# 7. A response that shows Cache-Tag to the visitor fails.
 happy
 HAPPY[0]=TAG:MISS
 run "${HAPPY[@]}"
 check "a visible Cache-Tag exits 1" "$(is "$status" 1)"
 check "a visible Cache-Tag is named" "$(says "shows a Cache-Tag header")"
 
-# 7. A failed request fails its check and the later checks still run: the
-# failure is the first manifest read, and all sixteen requests are sent.
+# 8. A failed request fails its check and the later checks still run: the
+# failure is the first manifest read, and all seventeen requests are sent.
 happy
 HAPPY[6]=FAIL
 run "${HAPPY[@]}"
 check "a failed request exits 1" "$(is "$status" 1)"
 check "a failed request is named" "$(says "got error, want MISS")"
-check "later checks still run" "$(is "$(grep -c '^curl' <<<"$calls")" 16)"
+check "later checks still run" "$(is "$(grep -c '^curl' <<<"$calls")" 17)"
 
-# 8. After a purge, every variant answers MISS: seven reads, three sending
+# 9. After a purge, every variant answers MISS: seven reads, three sending
 # each approved Origin value for the file and manifest only.
 ARGS=(--after-purge)
 variants MISS MISS MISS MISS MISS MISS
@@ -169,7 +177,7 @@ check "after-purge HIT exits 1" "$(is "$status" 1)"
 check "after-purge HIT is named" "$(says "got HIT, want MISS")"
 ARGS=()
 
-# 9. A usage error exits 2 and sends nothing: a manifest path as file-path,
+# 10. A usage error exits 2 and sends nothing: a manifest path as file-path,
 # then no arguments.
 : >"$STUB_LOG"
 set +e

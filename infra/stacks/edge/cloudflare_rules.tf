@@ -196,6 +196,15 @@ locals {
   # have dropped the Authorization header, so it counts as authenticated.
   edge_cache_plain_request = "not http.request.headers.truncated and not any(lower(http.request.headers.names[*])[*] in {\"authorization\"})"
 
+  # Only GET is cache-eligible. Cloudflare answers an eligible HEAD from a
+  # cached GET and fetches a cold one from the origin as a GET
+  # (https://developers.cloudflare.com/cache/concepts/cache-behavior/). The
+  # Logpush job in infra/stacks/edge-logs/cloudflare_logpush.tf records GET
+  # only, so a cached HEAD would be counted nowhere, and a cold one would
+  # write a delivery line for a body no client received. A HEAD goes to the
+  # website, which forwards it to dfo-apis uncached.
+  edge_cache_get = "http.request.method eq \"GET\""
+
   # wildcard ignores case, and the Logpush filter in
   # infra/stacks/edge-logs/cloudflare_logpush.tf matches the prefixes as
   # written. This case-sensitive test keeps the cache to paths that filter
@@ -253,7 +262,7 @@ resource "cloudflare_ruleset" "cache" {
     {
       ref         = "datasets_plain_reads"
       description = "Cache dataset files and dataset manifests for requests with no Authorization header, as the origin's Cache-Control says."
-      expression  = "(${local.edge_cache_path_match}) and (${local.edge_cache_logged_path}) and ${local.edge_cache_plain_request}"
+      expression  = "${local.edge_cache_get} and (${local.edge_cache_path_match}) and (${local.edge_cache_logged_path}) and ${local.edge_cache_plain_request}"
       action      = "set_cache_settings"
       action_parameters = {
         cache = true
