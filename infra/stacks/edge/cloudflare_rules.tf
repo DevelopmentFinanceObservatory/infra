@@ -182,18 +182,21 @@ locals {
   ))
 
   # A request with an Origin header is cross-origin, and its response carries
-  # an Access-Control-Allow-Origin for that origin. Cloudflare's cache ignores
-  # Vary: Origin, so such a response must never be stored. A same-origin GET
-  # carries no Origin, so pages on the apex still get the cache. A request
-  # with an Authorization header is not cache-eligible either. Header names
+  # an Access-Control-Allow-Origin for that origin. Cloudflare's default cache
+  # key includes the Origin header ("The Origin header is always included
+  # unless explicitly excluded",
+  # https://developers.cloudflare.com/cache/how-to/cache-keys/), so each
+  # Origin value is cached as its own variant with the header the website sent
+  # for it. This stack sets no custom cache key, and the rule must not set one
+  # that excludes Origin, or one origin's header would reach another's pages.
+  # A request with an Authorization header is not cache-eligible. Header names
   # keep their case on HTTP/1.1, hence lower(). A truncated header list may
-  # have dropped either header, so it counts as cross-origin and
-  # authenticated.
-  edge_cache_plain_request = "not http.request.headers.truncated and not any(lower(http.request.headers.names[*])[*] in {\"origin\" \"authorization\"})"
+  # have dropped the Authorization header, so it counts as authenticated.
+  edge_cache_plain_request = "not http.request.headers.truncated and not any(lower(http.request.headers.names[*])[*] in {\"authorization\"})"
 }
 
 # Makes the website's dataset files and dataset manifests cache-eligible for
-# same-origin reads with no Authorization header. Cloudflare then follows the
+# reads with no Authorization header, from any origin. Cloudflare then follows the
 # Cache-Control the website sends: a pinned digest file for a year, and a
 # working file and a manifest for 300 s. A response with no-store or with no
 # Cache-Control is never stored. The website sets Cache-Tag to the content
@@ -203,14 +206,14 @@ locals {
 resource "cloudflare_ruleset" "cache" {
   zone_id     = var.cloudflare_zone_id
   name        = "Cache"
-  description = "Cache the website's dataset files and manifests for same-origin reads."
+  description = "Cache the website's dataset files and manifests for reads with no Authorization header."
   kind        = "zone"
   phase       = "http_request_cache_settings"
 
   rules = [
     {
-      ref         = "datasets_same_origin"
-      description = "Cache dataset files and dataset manifests for requests with no Origin or Authorization header, as the origin's Cache-Control says."
+      ref         = "datasets_plain_reads"
+      description = "Cache dataset files and dataset manifests for requests with no Authorization header, as the origin's Cache-Control says."
       expression  = "(${local.edge_cache_path_match}) and ${local.edge_cache_plain_request}"
       action      = "set_cache_settings"
       action_parameters = {
