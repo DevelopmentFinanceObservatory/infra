@@ -304,6 +304,10 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 
 `bq ls prod-fin-observatory:<dataset>` lists a dataset's tables.
 
+## Edge request logs
+
+`edge_logs.tf` creates `dfo-prod-edge-logs-prod-fin-observatory`, the bucket the edge stack's Cloudflare Logpush job writes dataset-read request lines to, one gzipped NDJSON batch at a time under `http_requests/<YYYYMMDD>/`. The lines hold raw client IPs, so batches (`*.log.gz`) are deleted one day after they are written and soft delete is off. Cloudflare's `logpush@cloudflare-data.iam.gserviceaccount.com` holds `roles/storage.objectAdmin` on the bucket, and the planner `roles/storage.objectViewer` on its `.txt` objects only, the ownership challenge the edge plan reads. Copy the `edge_logs_bucket` output into the edge stack's `edge_logpush_bucket`. [`infra/dfo-prod/edge/README.md`](../edge/README.md), "Logpush", has the fields, the cost, and the order to turn the job and the cache on.
+
 ## Readers
 
 The principals secret's `readers` object lists the readers of `dfo_reporting` as people, each `group:` or `user:` followed by an address. Each gets `READER` on `dfo_reporting`, and `roles/bigquery.jobUser` and `roles/mcp.toolUser` on the project, and no access to `logs_daily`, `dfo_logs`, `searchconsole`, or any other source dataset.

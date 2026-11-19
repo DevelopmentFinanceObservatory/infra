@@ -193,6 +193,12 @@ locals {
   # keep their case on HTTP/1.1, hence lower(). A truncated header list may
   # have dropped the Authorization header, so it counts as authenticated.
   edge_cache_plain_request = "not http.request.headers.truncated and not any(lower(http.request.headers.names[*])[*] in {\"authorization\"})"
+
+  # wildcard ignores case, and the Logpush filter in cloudflare_logpush.tf
+  # matches the prefixes as written. This case-sensitive test keeps the cache
+  # to paths that filter logs, so a read in another case goes to the website,
+  # whose own request log records it.
+  edge_cache_logged_path = join(" or ", [for prefix in local.dataset_path_prefixes : "starts_with(http.request.uri.path, \"${prefix}\")"])
 }
 
 # Makes the website's dataset files and dataset manifests cache-eligible for
@@ -203,7 +209,14 @@ locals {
 # version on dataset responses, so a revoked version is purged by tag
 # (infra/dfo-prod/edge/README.md, "Revoking a dataset version"). Share slot
 # data is not in the rule; the website serves it with its own Cache-Control.
+#
+# The rule exists only while var.edge_cache_enabled is true, and the
+# precondition refuses that unless the Logpush job in cloudflare_logpush.tf
+# exists, is enabled, and has delivered. A read the cache answers never reaches the website,
+# so without the job it would be counted nowhere.
 resource "cloudflare_ruleset" "cache" {
+  count = var.edge_cache_enabled ? 1 : 0
+
   zone_id     = var.cloudflare_zone_id
   name        = "Cache"
   description = "Cache the website's dataset files and manifests for reads with no Authorization header."
@@ -214,7 +227,7 @@ resource "cloudflare_ruleset" "cache" {
     {
       ref         = "datasets_plain_reads"
       description = "Cache dataset files and dataset manifests for requests with no Authorization header, as the origin's Cache-Control says."
-      expression  = "(${local.edge_cache_path_match}) and ${local.edge_cache_plain_request}"
+      expression  = "(${local.edge_cache_path_match}) and (${local.edge_cache_logged_path}) and ${local.edge_cache_plain_request}"
       action      = "set_cache_settings"
       action_parameters = {
         cache = true
@@ -230,6 +243,22 @@ resource "cloudflare_ruleset" "cache" {
       }
     },
   ]
+
+  # last_complete is the end of the newest period the job has delivered, and
+  # stays empty until its first push
+  # (https://registry.terraform.io/providers/cloudflare/cloudflare/5.27.0/docs/resources/logpush_job).
+  # A job created in the same apply has none yet, so the cache rule waits for
+  # an apply after the job has delivered.
+  lifecycle {
+    precondition {
+      condition = (
+        length(cloudflare_logpush_job.dataset_reads) == 1 &&
+        try(cloudflare_logpush_job.dataset_reads[0].enabled, false) == true &&
+        try(length(cloudflare_logpush_job.dataset_reads[0].last_complete) > 0, false)
+      )
+      error_message = "edge_cache_enabled needs the dataset-reads Logpush job, enabled and with a delivered push: set edge_logpush_bucket, apply, and confirm lines arrive with scripts/check-edge-logpush.sh first (infra/dfo-prod/edge/README.md, \"Logpush\")."
+    }
+  }
 }
 
 # A zone holds one entrypoint ruleset per phase, so the create above fails
@@ -240,7 +269,7 @@ resource "cloudflare_ruleset" "cache" {
 # kind in the resource must then match the existing entrypoint, since a
 # change would replace it.
 # import {
-#   to = cloudflare_ruleset.cache
+#   to = cloudflare_ruleset.cache[0]
 #   id = "zones/${var.cloudflare_zone_id}/<ruleset id>"
 # }
 

@@ -91,3 +91,20 @@ variable "preview_access_emails" {
   type        = list(string)
   default     = []
 }
+
+variable "edge_logpush_bucket" {
+  description = "GCS bucket the Logpush job in cloudflare_logpush.tf writes dataset-read request lines to, copied from the telemetry stack's edge_logs_bucket output. Null creates no job, no custom log fields and no ownership challenge."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.edge_logpush_bucket == null || can(regex("^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$", var.edge_logpush_bucket))
+    error_message = "edge_logpush_bucket must be a GCS bucket name, without the gs:// scheme."
+  }
+}
+
+variable "edge_cache_enabled" {
+  description = "Create the cache rule in cloudflare_rules.tf. True requires the Logpush job, so every read the edge answers from its cache is logged. Turn it on only once scripts/check-edge-logpush.sh finds lines in the bucket."
+  type        = bool
+  default     = false
+}
