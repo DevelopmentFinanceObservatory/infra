@@ -104,7 +104,11 @@ resource "google_monitoring_alert_policy" "export_job_not_succeeding" {
 # in the 26 hours before the policy exists, such as a newly created config,
 # alerts within minutes, and the incident closes after its first success. It is
 # its own policy, as export_job_not_succeeding is, with a seven-day auto_close.
+# A disabled config runs nothing, so the policy goes with
+# var.analytics_dbt_schedule_enabled, which disables it (logs_daily.tf).
 resource "google_monitoring_alert_policy" "logs_daily_not_succeeding" {
+  count = var.analytics_dbt_schedule_enabled ? 0 : 1
+
   project      = var.project_id
   display_name = "logs_daily scheduled query not succeeding"
   combiner     = "OR"
