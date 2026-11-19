@@ -41,9 +41,11 @@ GITHUB_OWNER=DevelopmentFinanceObservatory
 #               any branch policy refuses.
 #   dev         dev WIF_PROVIDER and WIF_APPLY_SA, for apply.yml on dev.
 #   plan        prod WIF_PROVIDER, WIF_PLAN_SA and CLOUDFLARE_API_TOKEN, for
-#               plan-prod.yml's plan job.
+#               plan-prod.yml's plan job. The token is read-only, with no
+#               Logs permission.
 #   production  prod WIF_PROVIDER, WIF_APPLY_SA and CLOUDFLARE_API_TOKEN,
-#               for apply.yml on main.
+#               for apply.yml on main. The token needs Logs Write on the
+#               zone for the edge-logs stack.
 # Each service repo deploys through `dev` and `production`. dcp's `dev`
 # also holds the dfo-pin App key and its `production` the dfo-release key.
 # docs' `docsync` holds the dfo-docsync App key.
