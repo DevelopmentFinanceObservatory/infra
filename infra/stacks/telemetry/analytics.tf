@@ -26,7 +26,8 @@ locals {
 
   # The datasets the analytics repository's Python jobs write, each with the
   # one job account (analytics_job_accounts below) that holds WRITER on it.
-  # The jobs create their own tables. Both datasets exist whatever
+  # The grader creates its own tables, and edge_export's are declared below.
+  # Both datasets exist whatever
   # var.analytics_jobs_enabled says (analytics_jobs.tf), since the analytics
   # changes that write them need them before the jobs run.
   analytics_job_datasets = {
@@ -178,6 +179,92 @@ resource "google_bigquery_dataset" "analytics_job" {
   # dbt datasets above.
 
   depends_on = [google_project_service.apis]
+}
+
+# The three tables the edge extract writes (dfo_analytics.extract.edge in the
+# analytics repository), declared here so they exist before the first dbt
+# build, whose sources name them, whatever var.analytics_jobs_enabled says.
+# The extract creates a table only when absent, and refuses to run on an
+# existing table whose columns differ from its own in name, type, mode or
+# order, so each schema copies DELIVERIES_SCHEMA, LOADED_OBJECTS_SCHEMA and
+# RUNS_SCHEMA, and the partitioning and clustering copy _ensure_tables.
+# deletion_protection keeps its default of true, as on the stack's other data
+# tables, since no other table holds these rows.
+locals {
+  analytics_edge_tables = {
+    deliveries = {
+      description     = "Dataset reads Cloudflare's edge answered, one row per ray and start time, loaded hourly from the edge logs bucket by the ${var.namespace}-analytics-edge Job. Two overlapping runs can insert a ray twice."
+      partition_field = "edge_started_at"
+      clustering      = ["spec_id"]
+      schema = [
+        { name = "ray_id", type = "STRING", mode = "REQUIRED" },
+        { name = "edge_started_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "day", type = "DATE", mode = "REQUIRED" },
+        { name = "method", type = "STRING", mode = "REQUIRED" },
+        { name = "host", type = "STRING", mode = "NULLABLE" },
+        { name = "path_kind", type = "STRING", mode = "REQUIRED" },
+        { name = "spec_id", type = "STRING", mode = "NULLABLE" },
+        { name = "content_version", type = "STRING", mode = "NULLABLE" },
+        { name = "file_digest", type = "STRING", mode = "NULLABLE" },
+        { name = "caller", type = "STRING", mode = "NULLABLE" },
+        { name = "referer_host", type = "STRING", mode = "NULLABLE" },
+        { name = "origin_host", type = "STRING", mode = "NULLABLE" },
+        { name = "client", type = "STRING", mode = "NULLABLE" },
+        { name = "user_agent", type = "STRING", mode = "NULLABLE" },
+        { name = "country", type = "STRING", mode = "NULLABLE" },
+        { name = "cache_status", type = "STRING", mode = "NULLABLE" },
+        { name = "edge_status", type = "INTEGER", mode = "NULLABLE" },
+        { name = "edge_bytes", type = "INTEGER", mode = "NULLABLE" },
+        { name = "origin_status", type = "INTEGER", mode = "NULLABLE" },
+        { name = "served_by", type = "STRING", mode = "REQUIRED" },
+        { name = "source_object", type = "STRING", mode = "REQUIRED" },
+        { name = "loaded_at", type = "TIMESTAMP", mode = "REQUIRED" },
+      ]
+    }
+    loaded_objects = {
+      description     = "Each edge log object the ${var.namespace}-analytics-edge Job recorded, with its generation, row count and status (loaded, rejected or unreadable)."
+      partition_field = "loaded_at"
+      clustering      = null
+      schema = [
+        { name = "object_name", type = "STRING", mode = "REQUIRED" },
+        { name = "generation", type = "INTEGER", mode = "REQUIRED" },
+        { name = "row_count", type = "INTEGER", mode = "REQUIRED" },
+        { name = "loaded_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "status", type = "STRING", mode = "REQUIRED" },
+      ]
+    }
+    runs = {
+      description     = "Each ${var.namespace}-analytics-edge Job run, with the objects it recorded, the rows it inserted and whether it succeeded."
+      partition_field = null
+      clustering      = null
+      schema = [
+        { name = "run_id", type = "STRING", mode = "REQUIRED" },
+        { name = "started_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "ended_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "objects", type = "INTEGER", mode = "REQUIRED" },
+        { name = "row_count", type = "INTEGER", mode = "REQUIRED" },
+        { name = "status", type = "STRING", mode = "REQUIRED" },
+      ]
+    }
+  }
+}
+
+resource "google_bigquery_table" "analytics_edge" {
+  for_each = local.analytics_edge_tables
+
+  dataset_id  = google_bigquery_dataset.analytics_job["edge_export"].dataset_id
+  table_id    = each.key
+  description = each.value.description
+  schema      = jsonencode(each.value.schema)
+  clustering  = each.value.clustering
+
+  dynamic "time_partitioning" {
+    for_each = each.value.partition_field == null ? [] : [each.value.partition_field]
+    content {
+      type  = "DAY"
+      field = time_partitioning.value
+    }
+  }
 }
 
 # One account per Python job, each writing its own dataset and nothing else.

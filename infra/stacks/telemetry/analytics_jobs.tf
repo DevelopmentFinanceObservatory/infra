@@ -1,16 +1,18 @@
-# The analytics repository's three scheduled Cloud Run Jobs, their Cloud
-# Scheduler triggers and their alerts. All three run the one image the
+# The analytics repository's four scheduled Cloud Run Jobs, their Cloud
+# Scheduler triggers and their alerts. All four run the one image the
 # repository's Deploy workflow pushes to the analytics Artifact Registry
 # repository (analytics.tf), and each Job's args pick the command, since the
 # image has no entrypoint:
 #
-#   dfo-prod-analytics-dbt    dbt build --target prod, hourly at minute 25
-#   dfo-prod-analytics-edge   python -m dfo_analytics.extract.edge, hourly at minute 5
-#   dfo-prod-analytics-grade  python -m dfo_analytics.grade, daily at 04:30 UTC
+#   dfo-prod-analytics-dbt        dbt build --target prod, hourly at minute 25
+#   dfo-prod-analytics-edge       python -m dfo_analytics.extract.edge, hourly at minute 5
+#   dfo-prod-analytics-grade      python -m dfo_analytics.grade, daily at 04:30 UTC
+#   dfo-prod-analytics-freshness  dbt source freshness --target prod, hourly at minute 50
 #
-# var.analytics_jobs_enabled creates everything in this file. The datasets the
-# Jobs write, their accounts and those accounts' dataset grants live in
-# analytics.tf and exist whatever the flag says. README "Analytics jobs" gives
+# var.analytics_jobs_enabled creates everything in this file, and the
+# freshness Job also waits for var.analytics_dbt_schedule_enabled. The
+# datasets the Jobs write, their accounts and those accounts' dataset grants
+# live in analytics.tf and exist whatever the flag says. README "Analytics jobs" gives
 # the order to switch it on.
 
 variable "analytics_jobs_enabled" {
@@ -39,9 +41,12 @@ variable "analytics_jobs_image" {
 # (README "Analytics jobs"). A scheduled build before the cutover's first step
 # creates the six log-fed tables, and the archive copy then refuses to run.
 # The same switch disables the logs_daily scheduled query (logs_daily.tf) and
-# drops its absence alert (alerts.tf), since the dbt build replaces it.
+# drops its absence alert (alerts.tf), since the dbt build replaces it, moves
+# the dfo_reporting views over its tables to the analytics tables
+# (reporting_views.tf), and creates the freshness Job, which checks the
+# sources the scheduled build reads and so runs only beside it.
 variable "analytics_dbt_schedule_enabled" {
-  description = "Creates the dbt Job's hourly trigger and its alert, and disables the logs_daily scheduled query the build replaces. Needs analytics_jobs_enabled. Switch it on once the logs_daily cutover has run."
+  description = "Creates the dbt Job's hourly trigger and its alert and the source freshness Job, disables the logs_daily scheduled query the build replaces, and points the dfo_reporting views over the logs_daily tables at the analytics tables. Needs analytics_jobs_enabled. Switch it on once the logs_daily cutover has run and the views' parity check is clean."
   type        = bool
   default     = false
 
@@ -122,9 +127,24 @@ locals {
         GOOGLE_API_KEY      = google_secret_manager_secret.analytics_grader_gemini.secret_id
       }
     }
+    # Fails when a source's newest row is older than the error threshold its
+    # dbt/models/sources.yml entry sets in the analytics repository. Runs as
+    # the dbt account, which reads every source.
+    freshness = {
+      account  = google_service_account.analytics["runner"]
+      args     = ["dbt", "source", "freshness", "--target", "prod", "--project-dir", "dbt", "--profiles-dir", "dbt"]
+      timeout  = "900s"
+      memory   = "1Gi"
+      schedule = "50 * * * *"
+      env      = {}
+      secrets  = {}
+    }
   }
 
-  analytics_jobs_created = { for name, job in local.analytics_jobs : name => job if var.analytics_jobs_enabled }
+  analytics_jobs_created = {
+    for name, job in local.analytics_jobs : name => job
+    if var.analytics_jobs_enabled && (name != "freshness" || var.analytics_dbt_schedule_enabled)
+  }
 
   # One accessor grant per Job and secret it mounts.
   analytics_job_secret_grants = merge([
@@ -271,8 +291,11 @@ resource "google_cloud_run_v2_job_iam_member" "analytics_deployer_developer" {
   member   = google_service_account.analytics_deployer.member
 }
 
+# One grant per account. The freshness Job runs as the dbt Job's account,
+# whose grant is the dbt entry's, since two resources holding one binding
+# would remove it for both when either is destroyed.
 resource "google_service_account_iam_member" "analytics_deployer_act_as" {
-  for_each = local.analytics_jobs_created
+  for_each = { for name, job in local.analytics_jobs_created : name => job if name != "freshness" }
 
   service_account_id = each.value.account.name
   role               = "roles/iam.serviceAccountUser"
@@ -283,7 +306,7 @@ resource "google_service_account_iam_member" "analytics_deployer_act_as" {
 # Scheduler
 # ─────────────────────────────────────────────────────────────────────────────
 
-# One identity for the three triggers. It runs as nothing and holds only
+# One identity for the four triggers. It runs as nothing and holds only
 # roles/run.invoker on each Job, which runs it with no overrides.
 resource "google_service_account" "analytics_scheduler" {
   count = local.analytics_jobs_count
@@ -339,9 +362,11 @@ resource "google_cloud_scheduler_job" "analytics" {
 # hourly run raises nothing, since the next one retries it: the dbt build
 # replaces the last three days, and the edge extract reads objects for three
 # days after they land. The dbt alert waits for the dbt trigger, so the
-# cutover's one-off executions start no absence clock.
+# cutover's one-off executions start no absence clock. The freshness Job is
+# hourly too, so the same three hours catch a paused trigger or a deleted
+# Job, and analytics_job_failed below also alerts on each failed run.
 resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
-  for_each = { for name, job in local.analytics_job_triggers : name => job if name != "grade" }
+  for_each = { for name, job in local.analytics_job_triggers : name => job if contains(["dbt", "edge", "freshness"], name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job not succeeding"
@@ -368,20 +393,22 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
   }
 }
 
-# The grader runs once a day, so a failed run waits a day for its retry and
-# alerts at once, as export_job_failed (alerts.tf) does.
-resource "google_monitoring_alert_policy" "analytics_grade_failed" {
-  count = local.analytics_jobs_count
+# A failed run of these Jobs alerts at once, as export_job_failed (alerts.tf)
+# does. The grader runs once a day, so a failed run waits a day for its
+# retry. A failed freshness run is the alert itself: a source the dbt build
+# reads has stopped arriving, or the build has stopped writing it.
+resource "google_monitoring_alert_policy" "analytics_job_failed" {
+  for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness"], name) }
 
   project      = var.project_id
-  display_name = "${google_cloud_run_v2_job.analytics["grade"].name} Job execution failed"
+  display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job execution failed"
   combiner     = "OR"
 
   conditions {
-    display_name = "${google_cloud_run_v2_job.analytics["grade"].name} execution completed as failed"
+    display_name = "${google_cloud_run_v2_job.analytics[each.key].name} execution completed as failed"
 
     condition_threshold {
-      filter          = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${google_cloud_run_v2_job.analytics["grade"].name}\" AND resource.labels.location=\"${var.region}\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"failed\""
+      filter          = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\" AND resource.labels.location=\"${var.region}\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"failed\""
       comparison      = "COMPARISON_GT"
       threshold_value = 0
       duration        = "0s"
@@ -427,5 +454,77 @@ resource "google_monitoring_alert_policy" "analytics_grade_not_succeeding" {
 
   alert_strategy {
     auto_close = "604800s"
+  }
+}
+
+# The edge extract records an object it cannot decompress as unreadable, and
+# one EDGE_REJECT_OBJECTS names as rejected, and reads neither again. An
+# object deleted between the listing and the read is skipped unrecorded. In
+# all three cases the object's deliveries are lost however the run ends. The
+# run's last stdout line, `run summary:` followed by key=value counts, carries
+# `rejected=<n>`, `unreadable=<n>` and `deleted=<n>`, and this metric counts
+# the summaries where any of them is above zero, with the filter the analytics
+# repository's README documents. Counts carry no leading zero, so [1-9]
+# matches any count from 1 up.
+resource "google_logging_metric" "analytics_edge_objects_lost" {
+  count = local.analytics_jobs_count
+
+  name    = "${var.namespace}-analytics-edge-objects-lost"
+  project = var.project_id
+  filter  = <<-EOT
+    resource.type="cloud_run_job"
+    resource.labels.job_name="${google_cloud_run_v2_job.analytics["edge"].name}"
+    resource.labels.location="${var.region}"
+    textPayload=~"^run summary: .* (rejected|unreadable|deleted)=[1-9]"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+# Waits out the new metric's propagation to Cloud Monitoring before the alert
+# policy names it, as logs_daily_failed_metric_propagation (logs_daily.tf)
+# does.
+resource "time_sleep" "analytics_edge_objects_lost_metric_propagation" {
+  count = local.analytics_jobs_count
+
+  depends_on      = [google_logging_metric.analytics_edge_objects_lost]
+  create_duration = "120s"
+}
+
+resource "google_monitoring_alert_policy" "analytics_edge_objects_lost" {
+  count = local.analytics_jobs_count
+
+  project      = var.project_id
+  display_name = "${google_cloud_run_v2_job.analytics["edge"].name} lost rejected, unreadable or deleted objects"
+  combiner     = "OR"
+
+  depends_on = [time_sleep.analytics_edge_objects_lost_metric_propagation]
+
+  conditions {
+    display_name = "run summary with rejected, unreadable or deleted above zero"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.analytics_edge_objects_lost[0].name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      # ALIGN_SUM, since Cloud Logging writes a zero sample in the interval
+      # beside each non-zero one, which ALIGN_COUNT would count as a run.
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "3600s"
   }
 }

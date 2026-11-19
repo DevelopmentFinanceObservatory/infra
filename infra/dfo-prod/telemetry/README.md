@@ -131,11 +131,13 @@ Each address in the principals secret's `alerts` object gets its own Cloud Monit
 - `dfo-prod-website-export Job not succeeding` and `dfo-prod-langfuse-export Job not succeeding` fire when a Job has no succeeded execution for three hours. They catch what the failure policies cannot see: a paused or failing Scheduler trigger, a renamed or deleted Job, or every run failing. Each is its own policy with a seven-day auto-close, since a shorter timer would close the incident while no execution succeeds.
 - `dfo-prod-ga4-user-ranges workflow execution failed` fires when an execution of the daily GA4 range pull fails, scheduled or run by hand. It reads Workflows' `workflows.googleapis.com/finished_execution_count` with `status="FAILED"`. A paused Scheduler trigger starts no execution and trips nothing, and `fetched_at` in `ga4_user_ranges` then stops moving.
 
-With `analytics_jobs_enabled` on, `analytics_jobs.tf` adds four more:
+With `analytics_jobs_enabled` on, `analytics_jobs.tf` adds four more, and three once `analytics_dbt_schedule_enabled` is on too:
 
-- `dfo-prod-analytics-edge Job not succeeding` fires when the edge extract has no succeeded execution for three hours, and `dfo-prod-analytics-dbt Job not succeeding` does the same for the dbt build once `analytics_dbt_schedule_enabled` gives it a trigger. A single failed hourly run raises nothing, since the next run retries it: the dbt build replaces the last three days, and the extract reads each object for three days after it lands. Each has a seven-day auto-close.
+- `dfo-prod-analytics-edge Job not succeeding` fires when the edge extract has no succeeded execution for three hours, and `dfo-prod-analytics-dbt Job not succeeding` and `dfo-prod-analytics-freshness Job not succeeding` do the same for the dbt build and the freshness check once `analytics_dbt_schedule_enabled` gives them triggers. A single failed dbt or edge run raises nothing, since the next run retries it: the dbt build replaces the last three days, and the extract reads each object for three days after it lands. A failed freshness run alerts through its own failure policy below. Each has a seven-day auto-close.
 - `dfo-prod-analytics-grade Job execution failed` fires when an execution of the daily grader fails, since its retry is a day away.
 - `dfo-prod-analytics-grade Job not succeeding` fires when the grader has no succeeded execution in the last 26 hours, a PromQL condition built as the logs_daily one is. It alerts within minutes of the flag going on and closes after the Job's first success.
+- `dfo-prod-analytics-edge lost rejected, unreadable or deleted objects` fires when the edge extract's `run summary:` line, its last stdout line, carries `rejected=`, `unreadable=` or `deleted=` above zero. The log-based metric `dfo-prod-analytics-edge-objects-lost` counts those lines with the filter `textPayload=~"^run summary: .* (rejected|unreadable|deleted)=[1-9]"` on the edge Job, as the analytics repository's README documents. Each such object's deliveries are lost: a rejected one was named in `EDGE_REJECT_OBJECTS`, an unreadable one could not be decompressed or exceeded 256 MiB, and a deleted one left the bucket between the listing and the read. The run itself succeeds, so no Job policy sees it.
+- `dfo-prod-analytics-freshness Job execution failed` fires when an hourly `dbt source freshness` run fails, which means a source the dbt build reads is older than the error threshold the analytics repository's `dbt/models/sources.yml` sets for it.
 
 The Job policies read Cloud Run's `run.googleapis.com/job/completed_execution_count`, with `result="failed"` or `result="succeeded"`, filtered by job name. The Jobs belong to the website and ai stacks, and this stack names them by their fixed names. A Job not yet created has no series, so its policies stay quiet, and the absence policy starts watching after the Job's first succeeded execution, since Cloud Monitoring needs one measurement before a series can go absent.
 
@@ -283,7 +285,9 @@ It prints the execution's result, the number of requests and the `MERGE` job's i
 
 The `_sketch` columns other than `latency_sketch` are HLL++ sketches (`HLL_COUNT.INIT(x, 14)`), so distinct visitors, users, accounts, sessions, MCP callers and website callers over any set of rows come from `HLL_COUNT.MERGE` over those rows, and no id or hash of one reaches `dfo_reporting`. `ga4_daily`'s `users_sketch` holds the active users' `user_pseudo_id` values on export days and is NULL on history days, so a merge over a window reaching before the export counts only its export days, and `ga4_user_ranges` covers those windows (see "GA4 unique users"). The other figures sum across rows, except quantiles and active users, which hold for their own row only. GA4 sessions sum across days but not across pages, and a session that crosses midnight counts on both days, so a sum over several days runs slightly high.
 
-The service views, `website_requests_daily` and `mcp_daily` read `logs_daily`, and `deploys` keeps only the revisions deployed while the logs source ran (`before_source` false), which are the deploy markers.
+The service views, `website_requests_daily`, `website_page_views_daily` and `mcp_daily` read `logs_daily`, and `deploys` keeps only the revisions deployed while the logs source ran (`before_source` false), which are the deploy markers.
+
+`analytics_dbt_schedule_enabled` disables the `dfo-prod-logs-daily` scheduled query, so the `logs_daily` tables stop growing under it. Under the same switch those seven views read the analytics dbt build's tables in `analytics` instead, and their authorised-view entries move from `logs_daily` and `web_history` to `analytics`. Each view reads the table of the same name: `requests_daily`, `routes_daily`, `errors_daily`, `mcp_daily`, `website_requests_daily`, `website_page_views_daily` and `deploys`. Those tables carry the columns and types the views select. `website_page_views_daily` then reads `analytics.website_page_views_daily`, which the build makes with the rule below, through `sql/reporting/website_page_views_daily_analytics.sql`. Step 6 of "Switching the Jobs on" checks that the two sources agree before the switch.
 
 `website_page_views_daily` counts the website's page views per day: requests of kind `page` answered 2xx, from visitors the website did not judge to be bots in `page_views` and from bots in `bot_page_views`. From the request log's first parsed day, the first day on which `logs_daily.website_requests_daily` holds a row other than `unparsed`, it sums those rows. Before that day it reads `web_history.website_page_history` (see "Website page views before the request log"), which counts the public hosts only, while the request log counts every host the service answers. The seam is read from the request log inside the view, so no day is counted twice, and a day such as 2026-10-23, which holds only unparsed lines, keeps its history row. A later day holding only unparsed lines has no row. The view has no callers sketch, since the history cannot rebuild the website's caller digest, so distinct networks come from `website_requests_daily` and start on its first parsed day.
 
@@ -359,23 +363,24 @@ The repository's `Deploy` workflow pushes its job image to the Docker repository
 
 ## Analytics jobs
 
-Three Cloud Run Jobs in `europe-west1` run the analytics repository's image, declared in `analytics_jobs.tf`. The image has no entrypoint, so each Job's args are its whole command line:
+Four Cloud Run Jobs in `europe-west1` run the analytics repository's image, declared in `analytics_jobs.tf`. The image has no entrypoint, so each Job's args are its whole command line:
 
-| Job                        | Args                                   | Runs as                     | Schedule (UTC)      | Task timeout | Memory |
-| -------------------------- | -------------------------------------- | --------------------------- | ------------------- | ------------ | ------ |
-| `dfo-prod-analytics-dbt`   | `dbt build --target prod`              | `dfo-prod-analytics-runner` | hourly at minute 25 | 45 minutes   | 1 GiB  |
-| `dfo-prod-analytics-edge`  | `python -m dfo_analytics.extract.edge` | `dfo-prod-analytics-edge`   | hourly at minute 5  | 45 minutes   | 2 GiB  |
-| `dfo-prod-analytics-grade` | `python -m dfo_analytics.grade`        | `dfo-prod-analytics-grader` | daily at 04:30      | 60 minutes   | 1 GiB  |
+| Job                            | Args                                                                      | Runs as                     | Schedule (UTC)      | Task timeout | Memory |
+| ------------------------------ | ------------------------------------------------------------------------- | --------------------------- | ------------------- | ------------ | ------ |
+| `dfo-prod-analytics-dbt`       | `dbt build --target prod`                                                 | `dfo-prod-analytics-runner` | hourly at minute 25 | 45 minutes   | 1 GiB  |
+| `dfo-prod-analytics-edge`      | `python -m dfo_analytics.extract.edge`                                    | `dfo-prod-analytics-edge`   | hourly at minute 5  | 45 minutes   | 2 GiB  |
+| `dfo-prod-analytics-grade`     | `python -m dfo_analytics.grade`                                           | `dfo-prod-analytics-grader` | daily at 04:30      | 60 minutes   | 1 GiB  |
+| `dfo-prod-analytics-freshness` | `dbt source freshness --target prod --project-dir dbt --profiles-dir dbt` | `dfo-prod-analytics-runner` | hourly at minute 50 | 15 minutes   | 1 GiB  |
 
-No Job retries a failed task, so the next scheduled run is the retry, and each timeout ends an execution before the next trigger. The edge extract runs at minute 5 so the build at minute 25 reads its load. The grade Job sets `GRADE_RUN_TIMEOUT_MINUTES` to 60 and its task timeout from the same number, so each run finds the last run's lease ended or lapsed. An edge object at the extract's 256 MiB cap peaks near 1.3 GiB, hence its 2 GiB.
+No Job retries a failed task, so the next scheduled run is the retry, and each timeout ends an execution before the next trigger. The edge extract runs at minute 5 so the build at minute 25 reads its load, and the freshness check at minute 50 reads the sources after both. The freshness Job exists only once `analytics_dbt_schedule_enabled` is on, since it checks the sources the scheduled build reads. The grade Job sets `GRADE_RUN_TIMEOUT_MINUTES` to 60 and its task timeout from the same number, so each run finds the last run's lease ended or lapsed. An edge object at the extract's 256 MiB cap peaks near 1.3 GiB, hence its 2 GiB.
 
-The edge extract writes `edge_export` and the grader `studio_grades`, two EU datasets in `analytics.tf` in which the Jobs create their own tables. Each Job has its own account, `dfo-prod-analytics-edge` and `dfo-prod-analytics-grader`, with `roles/bigquery.jobUser` on the project and `WRITER` on its dataset alone. The grader also holds `READER` on `langfuse_export`, the turns it grades. Both datasets are analytics sources, so the runner, the CI account and the analytics developers read them. The datasets, the two accounts and these grants exist whatever `analytics_jobs_enabled` says, since the analytics changes that write the datasets need them first.
+The edge extract writes `edge_export` and the grader `studio_grades`, two EU datasets in `analytics.tf`. The grader creates its own tables. `analytics.tf` declares the extract's three, `edge_export.deliveries`, `loaded_objects` and `runs`, whatever `analytics_jobs_enabled` says, so the first dbt build finds the sources it names. Each copies the extract's schema, partitioning and clustering exactly: `deliveries` is day-partitioned on `edge_started_at` and clustered on `spec_id`, `loaded_objects` is day-partitioned on `loaded_at`, and `runs` is unpartitioned. The extract creates a table only when it is absent, and refuses to run on one whose columns differ from its own in name, type, mode or order, so a schema change in `dfo_analytics/extract/edge.py` needs the same change here first. The tables keep deletion protection. Each Job has its own account, `dfo-prod-analytics-edge` and `dfo-prod-analytics-grader`, with `roles/bigquery.jobUser` on the project and `WRITER` on its dataset alone. The grader also holds `READER` on `langfuse_export`, the turns it grades. Both datasets are analytics sources, so the runner, the CI account and the analytics developers read them. The datasets, the two accounts and these grants exist whatever `analytics_jobs_enabled` says, since the analytics changes that write the datasets need them first.
 
 The edge extract reads `EDGE_LOGS_BUCKET` (`dfo-prod-edge-logs-prod-fin-observatory`, the bucket Cloudflare Logpush writes to, on which its account holds `roles/storage.objectViewer`), `EXPORT_BQ_PROJECT` and `EDGE_EXPORT_DATASET`, and `CALLER_HMAC_KEY` from the secret `dfo-prod-caller-hmac-key`, the key the website and dfo-apis use, so one client carries one caller in all three. The grader reads `GRADE_BQ_PROJECT`, `GRADE_SOURCE_DATASET`, `GRADE_DATASET`, `GRADE_RUN_TIMEOUT_MINUTES`, `LANGFUSE_BASE_URL` (`https://cloud.langfuse.com`) and `LANGFUSE_EXPORT_ENVIRONMENT` (`dfo-prod-ai`, the environment the ai service tags its traces with), with `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` from `dfo-prod-langfuse-public-key` and `dfo-prod-langfuse-secret-key`, the pair the ai service exports with, and `GOOGLE_API_KEY` from `dfo-prod-analytics-grader-gemini-api-key`. Each account holds `roles/secretmanager.secretAccessor` on the secrets its Job mounts and no other, and a Job reads each secret's latest version when an execution starts. Terraform declares `dfo-prod-analytics-grader-gemini-api-key` with no version, so the grader's own Gemini key goes in by hand before the Jobs exist.
 
 Terraform creates each Job with the image in `analytics_jobs_image`, a sha-tagged image from the analytics registry, and then ignores the Job's image, so a deploy moves the Jobs without reading as drift. `dfo-prod-analytics-deployer` holds `roles/run.developer` on each Job and `roles/iam.serviceAccountUser` on each Job's account, which `gcloud run jobs update <job> --image <image> --region europe-west1 --project prod-fin-observatory` needs. The analytics repository's `Deploy` workflow pushes the image and does not run that update, so until it does, run it by hand for each Job after a deploy, or each Job keeps the image it was created with.
 
-Cloud Scheduler starts each Job as `dfo-prod-analytics-scheduler`, which holds `roles/run.invoker` on each Job and nothing else, through the triggers `dfo-prod-analytics-dbt-tick`, `dfo-prod-analytics-edge-tick` and `dfo-prod-analytics-grade-tick`. The dbt trigger exists only once `analytics_dbt_schedule_enabled` is true, which also disables the `dfo-prod-logs-daily` scheduled query and drops its absence alert, since the hourly build replaces it. The `logs_daily` tables stay as the archive the build copies its days before 2026-10-24 from.
+Cloud Scheduler starts each Job as `dfo-prod-analytics-scheduler`, which holds `roles/run.invoker` on each Job and nothing else, through the triggers `dfo-prod-analytics-dbt-tick`, `dfo-prod-analytics-edge-tick`, `dfo-prod-analytics-grade-tick` and `dfo-prod-analytics-freshness-tick`. The dbt trigger exists only once `analytics_dbt_schedule_enabled` is true, which also disables the `dfo-prod-logs-daily` scheduled query and drops its absence alert, since the hourly build replaces it, and moves the `dfo_reporting` views over its tables to the `analytics` tables (see "Reporting views"). The `logs_daily` tables stay as the archive the build copies its days before 2026-10-24 from.
 
 To run a Job outside its schedule, or with other args or settings, start one execution. Overrides need `run.jobs.runWithOverrides` on the Job, which a project owner holds:
 
@@ -388,12 +393,80 @@ gcloud run jobs execute dfo-prod-analytics-dbt --region europe-west1 --project p
 
 ### Switching the Jobs on
 
-1. Apply this stack with `analytics_jobs_enabled` false, which creates `edge_export`, `studio_grades`, the two Job accounts and their dataset grants, and the empty Gemini key secret.
+1. Apply this stack with `analytics_jobs_enabled` false, which creates `edge_export` and its three tables, `studio_grades`, the two Job accounts and their dataset grants, and the empty Gemini key secret.
+
 2. Add the grader's Gemini key as the secret's first version, with `gcloud secrets versions add dfo-prod-analytics-grader-gemini-api-key --data-file=- --project=prod-fin-observatory` reading the key from stdin. The edge logs bucket must exist, with the edge-logs stack's Logpush job writing to it.
+
 3. Merge the analytics changes that add the edge extract, the turn grader and the `logs_daily` port, and let the `Deploy` workflow push the image. Note its sha.
-4. Set `analytics_jobs_enabled = true` and `analytics_jobs_image = "europe-west1-docker.pkg.dev/prod-fin-observatory/analytics/dfo-analytics:<sha>"` in `env.auto.tfvars`, merge, and let the apply run. It creates the three Jobs, the edge and grade triggers and their alerts, and no dbt trigger. The grade absence alert opens within minutes. Run `gcloud run jobs execute dfo-prod-analytics-grade --region europe-west1 --project prod-fin-observatory` to close it.
+
+4. Set `analytics_jobs_enabled = true` and `analytics_jobs_image = "europe-west1-docker.pkg.dev/prod-fin-observatory/analytics/dfo-analytics:<sha>"` in `env.auto.tfvars`, merge, and let the apply run. It creates the dbt, edge and grade Jobs, the edge and grade triggers and their alerts, the edge object alert, and no dbt trigger or freshness Job. The grade absence alert opens within minutes. Run `gcloud run jobs execute dfo-prod-analytics-grade --region europe-west1 --project prod-fin-observatory` to close it.
+
 5. Run the `logs_daily` cutover as one-off executions of `dfo-prod-analytics-dbt` with their args replaced, in the order the analytics repository's README gives: `dbt,run-operation,copy_logs_daily_archive,--target,prod`, then `dbt,build,--target,prod,--select,tag:log_fed+,--exclude,tag:cutover,--vars,{log_lookback_days: N}` with N the days from 2026-10-24 through yesterday, then `dbt,test,--target,prod,--select,tag:cutover`. Each must succeed before the next starts.
-6. Set `analytics_dbt_schedule_enabled = true`, merge, and let the apply run. It creates the dbt trigger and its alert, and disables the `dfo-prod-logs-daily` scheduled query.
+
+6. Check that the `dfo_reporting` views over `logs_daily` and the same SELECTs over `analytics` agree, since the switch moves the views from one to the other. Run the script below as a project owner, with `bq query --use_legacy_sql=false --location=EU < parity.sql`, after a scheduled `dfo-prod-logs-daily` run and a one-off `dfo-prod-analytics-dbt` build have both covered `last_day`. Set `last_day` to the day before yesterday, the newest day both sources hold whole. Each of the seven queries compares one view, `EXCEPT DISTINCT` both ways over the same days, and every one must return zero rows. A row names the side that holds it, and the switch waits until the analytics model is fixed. The latency quantiles come from `APPROX_QUANTILES` and `callers_sketch` is an HLL++ sketch, so two builds over the same rows can differ in those columns alone. A row that differs only there is checked instead by the cutover's `matches_legacy` tests, which compare each quantile within its tolerance and each sketch by its distinct count.
+
+   ```sql
+   DECLARE first_day DATE DEFAULT DATE '2026-10-24';
+   DECLARE last_day DATE DEFAULT DATE '2026-11-17';
+
+   -- service_requests_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.service_requests_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, service, requests, status_4xx, status_5xx, latency_p50_ms, latency_p95_ms, latency_p99_ms FROM `prod-fin-observatory.analytics.requests_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- service_routes_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.service_routes_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, service, method, route, requests, status_4xx, status_5xx, latency_p50_ms, latency_p95_ms, latency_p99_ms FROM `prod-fin-observatory.analytics.routes_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- service_errors_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.service_errors_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, resource_type, service, logger, severity, entries FROM `prod-fin-observatory.analytics.errors_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- mcp_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.mcp_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, caller_kind, client, request, outcome, calls, callers_sketch FROM `prod-fin-observatory.analytics.mcp_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- website_requests_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.website_requests_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, route, kind, bot, status_class, requests, callers_sketch FROM `prod-fin-observatory.analytics.website_requests_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- website_page_views_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.website_page_views_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, page_views, bot_page_views FROM `prod-fin-observatory.analytics.website_page_views_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- deploys
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.deploys` WHERE DATE(deployed_at) BETWEEN first_day AND last_day),
+     a AS (SELECT service, revision, first_request AS deployed_at FROM `prod-fin-observatory.analytics.deploys` WHERE NOT before_source AND DATE(first_request) BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+   ```
+
+7. Set `analytics_dbt_schedule_enabled = true`, merge, and let the apply run. It creates the dbt trigger and its alert, the freshness Job, its trigger and its alert, disables the `dfo-prod-logs-daily` scheduled query, and moves the seven views to `analytics`.
 
 ## Readers
 
