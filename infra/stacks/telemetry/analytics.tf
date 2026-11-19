@@ -172,16 +172,19 @@ variable "analytics_repository_id" {
   }
 }
 
-# Any workflow run in the analytics repository may impersonate the CI account,
-# since its dbt-build job runs on pull requests. The member keys on
-# `attribute.repository_id` for the reason the pool's attribute condition gives
-# in ../foundation/main.tf.
+# Only a run on the analytics repository's main branch may impersonate the CI
+# account. The account reads `dfo_logs`, request IPs and user agents included,
+# so a pull request or a feature branch must not mint a token for it. The
+# repository's dbt-build job queries BigQuery only on pushes to main. The member
+# keys on `attribute.repo_ref`, which the pool's mapping composes from the
+# repository id and the ref, for the reason ../foundation/main.tf gives for
+# composing from ids.
 resource "google_service_account_iam_member" "analytics_ci_wif" {
   count = var.analytics_repository_id == null ? 0 : 1
 
   service_account_id = google_service_account.analytics["ci"].name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.github_wif_pool_id}/attribute.repository_id/${var.analytics_repository_id}"
+  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.github_wif_pool_id}/attribute.repo_ref/${var.analytics_repository_id}:refs/heads/main"
 
   lifecycle {
     # member identifies the binding, so a new repository id replaces it.
