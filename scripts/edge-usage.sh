@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
-# Counts reads of the dataset paths at the Cloudflare edge, per UTC day, path
-# kind and cache status. It queries Cloudflare's GraphQL Analytics API and
-# changes nothing. Requests that Cloudflare answers from its cache never reach
-# the website, so its request log undercounts them; this count includes them.
+# Estimates reads of the dataset paths at the Cloudflare edge, per UTC day, path
+# kind and cache status, with the bytes served. It queries Cloudflare's GraphQL
+# Analytics API and changes nothing. Requests that Cloudflare answers from its
+# cache never reach the website, so its request log undercounts them; this
+# estimate includes them.
+# httpRequestsAdaptiveGroups is an adaptive dataset, so Cloudflare samples it at
+# a rate the caller cannot set
+# (https://developers.cloudflare.com/analytics/graphql-api/sampling/) and the
+# counts and bytes are estimates scaled up from the sample. Use them for cache
+# hit share and bytes served from the edge. Keep them apart from dataset uses
+# (dfo-apis delivery lines) and never add the two. The sampled column is the
+# avg { sampleInterval } of each group
+# (https://developers.cloudflare.com/analytics/graphql-api/migration-guides/zone-analytics-colos/):
+# 1 means unsampled, 10 means one request in ten was sampled. Where rows fold
+# together it is the request-weighted mean, to two decimals.
 #
 # Usage: edge-usage.sh <start_date> <end_date>
 #   edge-usage.sh 2026-11-01 2026-11-18
@@ -10,7 +21,7 @@
 # least 31 days, so a start date older than that returns nothing.
 # Output is tab-separated with a header row: day, prefix (/api/datasets or /api/v1/datasets),
 # kind (file, manifest, or selector for the /file route and any other path),
-# cache status, [referer host,] and the count.
+# cache status, [referer host,] requests, bytes (edgeResponseBytes) and sampled.
 # EDGE_USAGE_BY_REFERER=1 adds the clientRefererHost dimension and column. The
 # field is not documented on the pages the README cites, so check it against
 # the schema (introspection) before relying on it; Cloudflare rejects an
@@ -50,7 +61,7 @@ query="query(\$zone: string, \$start: Date, \$end: Date) {
     httpRequestsAdaptiveGroups(limit: $limit, orderBy: [date_ASC], filter: {
       date_geq: \$start, date_leq: \$end, requestSource: \"eyeball\", clientRequestHTTPMethodName: \"GET\",
       OR: [{clientRequestPath_like: \"/api/datasets/%\"}, {clientRequestPath_like: \"/api/v1/datasets/%\"}]
-    }) { count dimensions { date clientRequestPath cacheStatus $referer_field } }
+    }) { count sum { edgeResponseBytes } avg { sampleInterval } dimensions { date clientRequestPath cacheStatus $referer_field } }
   } }
 }"
 
@@ -78,9 +89,9 @@ rows="$(jq '.data.viewer.zones[0].httpRequestsAdaptiveGroups // empty' <<<"$resp
 
 # The table's header row, then one row per group.
 if [ "${EDGE_USAGE_BY_REFERER:-}" = 1 ]; then
-    printf 'day\tprefix\tkind\tcache_status\treferer_host\tcount\n'
+    printf 'day\tprefix\tkind\tcache_status\treferer_host\trequests\tbytes\tsampled\n'
 else
-    printf 'day\tprefix\tkind\tcache_status\tcount\n'
+    printf 'day\tprefix\tkind\tcache_status\trequests\tbytes\tsampled\n'
 fi
 jq -r --arg by_referer "${EDGE_USAGE_BY_REFERER:-}" '
     def kind: if test("/files/") then "file"
@@ -88,9 +99,11 @@ jq -r --arg by_referer "${EDGE_USAGE_BY_REFERER:-}" '
         else "selector" end;
     map({day: .dimensions.date, prefix: (.dimensions.clientRequestPath | if startswith("/api/v1/") then "/api/v1/datasets" else "/api/datasets" end),
          kind: (.dimensions.clientRequestPath | kind), cache: .dimensions.cacheStatus,
-         referer: (.dimensions.clientRefererHost // ""), count: .count})
+         referer: (.dimensions.clientRefererHost // ""), count: .count,
+         bytes: (.sum.edgeResponseBytes // 0), weighted: (.count * (.avg.sampleInterval // 1))})
     | group_by([.day, .prefix, .kind, .cache, .referer])
-    | map(.[0] + {count: (map(.count) | add)})
+    | map(.[0] + {count: (map(.count) | add), bytes: (map(.bytes) | add), weighted: (map(.weighted) | add)})
     | sort_by([.day, .prefix, .kind, .cache, .referer])[]
-    | if $by_referer == "1" then [.day, .prefix, .kind, .cache, .referer, .count] else [.day, .prefix, .kind, .cache, .count] end
+    | .sampled = (if .count > 0 then (.weighted / .count * 100 | round) else 100 end | "\(. / 100 | floor).\((. % 100) | tostring | if length < 2 then "0" + . else . end)")
+    | if $by_referer == "1" then [.day, .prefix, .kind, .cache, .referer, .count, .bytes, .sampled] else [.day, .prefix, .kind, .cache, .count, .bytes, .sampled] end
     | @tsv' <<<"$rows"
