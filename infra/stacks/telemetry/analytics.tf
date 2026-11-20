@@ -378,7 +378,7 @@ locals {
       ]
     }
     "replay_probe slot_results" = {
-      description     = "One row per card of a share the ${var.namespace}-analytics-replay Job sampled, or per share it could not read, with the outcome of recomputing or re-reading the card's frame. A share is named by share_digest, the HMAC of its id, and never by the id."
+      description     = "One row per card of a share the ${var.namespace}-analytics-replay Job sampled, or per share it could not read, with the outcome of recomputing or re-reading the card's frame. A share is named by share_digest, the HMAC of its id."
       partition_field = "run_started_at"
       schema = [
         { name = "run_id", type = "STRING", mode = "REQUIRED" },

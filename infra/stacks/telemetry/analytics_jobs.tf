@@ -168,12 +168,13 @@ locals {
       }
     }
     # 15 PageSpeed Insights calls in sequence, each up to 180 seconds with up
-    # to three tries, which the analytics repository's README sizes at 60
-    # minutes.
+    # to three tries and a backoff between tries. The worst case is 15 x 3 x
+    # 180 s = 8,100 s, about 2.3 hours with the backoff, so the timeout is 3
+    # hours. A run with no failed tries takes a few minutes.
     lighthouse = {
       account  = google_service_account.analytics_job["lighthouse"]
       args     = ["python", "-m", "dfo_analytics.lighthouse"]
-      timeout  = "3600s"
+      timeout  = "10800s"
       memory   = "1Gi"
       schedule = "0 5 * * 1"
       env = {
@@ -206,12 +207,14 @@ locals {
         EXPORT_ID_HMAC_KEY = "${var.namespace}-website-export-hmac-key"
       }
     }
-    # 60 asks per provider in sequence, each up to 20 minutes with retries,
-    # which the analytics repository's README sizes at 6 hours.
+    # The three providers run in parallel threads, each asking 60 times in
+    # sequence, and each ask is capped at 20 minutes. A month's run takes
+    # a few hours, bounded by the slowest provider. The 24-hour timeout ends
+    # only a pathological month, far inside the monthly trigger.
     citations = {
       account  = google_service_account.analytics_job["citations"]
       args     = ["python", "-m", "dfo_analytics.citations"]
-      timeout  = "21600s"
+      timeout  = "86400s"
       memory   = "1Gi"
       schedule = "0 6 1 * *"
       env = {
@@ -502,8 +505,7 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
 # retry, and the four probes a week or a month. A failed freshness run is the
 # alert itself: a source the dbt build reads has stopped arriving, or the
 # build has stopped writing it. A probe whose trigger stops firing fails no
-# run, and the freshness Job catches it once the probe's source is older
-# than its threshold in the analytics repository's dbt/models/sources.yml.
+# run, and analytics_probe_not_succeeding below catches it.
 resource "google_monitoring_alert_policy" "analytics_job_failed" {
   for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness", "repos", "lighthouse", "replay", "citations"], name) }
 
@@ -552,6 +554,36 @@ resource "google_monitoring_alert_policy" "analytics_grade_not_succeeding" {
 
     condition_prometheus_query_language {
       query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics["grade"].name}\",location=\"${var.region}\",result=\"succeeded\"}[26h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics["grade"].name}\",location=\"${var.region}\",result=\"succeeded\"}[26h])"
+      duration            = "0s"
+      evaluation_interval = "300s"
+    }
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "604800s"
+  }
+}
+
+# The probes' version of the grade policy: no succeeded execution in a
+# week plus a day for the three weekly probes, and in a month plus four days
+# for the monthly citation probe. It catches a paused trigger or a deleted Job,
+# which fail no run, whether or not the freshness Job exists. Like the grade
+# policy it alerts within minutes of the flag going on, and closes after the
+# probe's first success.
+resource "google_monitoring_alert_policy" "analytics_probe_not_succeeding" {
+  for_each = { for name, hours in { repos = 192, lighthouse = 192, replay = 192, citations = 840 } : name => hours if contains(keys(local.analytics_jobs_created), name) }
+
+  project      = var.project_id
+  display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job not succeeding"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution in ${each.value} hours"
+
+    condition_prometheus_query_language {
+      query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.value}h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.value}h])"
       duration            = "0s"
       evaluation_interval = "300s"
     }
