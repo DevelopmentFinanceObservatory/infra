@@ -302,7 +302,7 @@ resource "google_bigquery_table" "analytics_edge" {
 #
 #   repo_search.matches, runs       dfo_analytics/repos/job.py SCHEMA, RUNS_SCHEMA
 #   lighthouse.results, runs        dfo_analytics/lighthouse/job.py RESULTS_SCHEMA, RUNS_SCHEMA
-#   replay_probe.slot_results       dfo_analytics/replay/job.py SLOT_RESULTS_SCHEMA
+#   replay_probe.slot_results, runs dfo_analytics/replay/job.py SLOT_RESULTS_SCHEMA, RUNS_SCHEMA
 #   citation_probe.answers, runs    dfo_analytics/citations/job.py ANSWERS_SCHEMA, RUNS_SCHEMA
 locals {
   analytics_probe_tables = {
@@ -407,6 +407,25 @@ locals {
         { name = "head_freshness", type = "STRING", mode = "NULLABLE" },
         { name = "head_served_from", type = "STRING", mode = "NULLABLE" },
         { name = "head_confirmed_at", type = "TIMESTAMP", mode = "NULLABLE" },
+        { name = "output_digest", type = "STRING", mode = "NULLABLE" },
+        { name = "stored_output_digest", type = "STRING", mode = "NULLABLE" },
+      ]
+    }
+    "replay_probe runs" = {
+      description     = "One row per ${var.namespace}-analytics-replay run, with its status, the shares sampled and probed, the rows written, and the calls made and failed."
+      partition_field = "run_started_at"
+      schema = [
+        { name = "run_id", type = "STRING", mode = "REQUIRED" },
+        { name = "run_started_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "probe_version", type = "STRING", mode = "REQUIRED" },
+        { name = "status", type = "STRING", mode = "REQUIRED" },
+        { name = "finished_at", type = "TIMESTAMP", mode = "NULLABLE" },
+        { name = "shares_sampled", type = "INTEGER", mode = "NULLABLE" },
+        { name = "shares_probed", type = "INTEGER", mode = "NULLABLE" },
+        { name = "rows_written", type = "INTEGER", mode = "NULLABLE" },
+        { name = "calls", type = "INTEGER", mode = "NULLABLE" },
+        { name = "calls_failed", type = "INTEGER", mode = "NULLABLE" },
+        { name = "failure", type = "STRING", mode = "NULLABLE" },
       ]
     }
     "citation_probe answers" = {
@@ -430,6 +449,7 @@ locals {
         { name = "input_tokens", type = "INTEGER", mode = "NULLABLE" },
         { name = "output_tokens", type = "INTEGER", mode = "NULLABLE" },
         { name = "web_searches", type = "INTEGER", mode = "NULLABLE" },
+        { name = "searched", type = "BOOLEAN", mode = "REQUIRED" },
       ]
     }
     "citation_probe runs" = {

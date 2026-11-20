@@ -13,8 +13,10 @@
 #   dfo-prod-analytics-replay     python -m dfo_analytics.replay, Mondays at 06:00 UTC
 #   dfo-prod-analytics-citations  python -m dfo_analytics.citations, the 1st of each month at 06:00 UTC
 #
-# var.analytics_jobs_enabled creates everything in this file, and the
-# freshness Job also waits for var.analytics_dbt_schedule_enabled. The
+# var.analytics_jobs_enabled creates everything in this file, the
+# freshness Job also waits for var.analytics_dbt_schedule_enabled, and each
+# probe's Scheduler trigger and absence alert wait for its entry in
+# var.analytics_probes_enabled. The
 # datasets the Jobs write, their accounts and those accounts' dataset grants
 # live in analytics.tf and exist whatever the flag says. README "Analytics jobs" gives
 # the order to switch it on.
@@ -60,8 +62,46 @@ variable "analytics_dbt_schedule_enabled" {
   }
 }
 
+# One switch per probe for its trigger and its absence alert. The probe's Job,
+# account, secrets and tables exist whatever it says, so a canary execution
+# can run before the trigger does (README "Analytics jobs").
+variable "analytics_probes_enabled" {
+  description = "Creates a probe's Cloud Scheduler trigger and its not-succeeding alert, by probe name (repos, lighthouse, replay, citations). A probe missing from the map, or false, keeps its Job and has no trigger and no absence alert. Needs analytics_jobs_enabled. Switch a probe on after its canary execution has written valid rows."
+  type        = map(bool)
+  default = {
+    repos      = false
+    lighthouse = false
+    replay     = false
+    citations  = false
+  }
+
+  validation {
+    condition     = length(setsubtract(keys(var.analytics_probes_enabled), ["repos", "lighthouse", "replay", "citations"])) == 0
+    error_message = "analytics_probes_enabled keys must be probe names: repos, lighthouse, replay, citations."
+  }
+
+  validation {
+    condition     = !anytrue(values(var.analytics_probes_enabled)) || var.analytics_jobs_enabled
+    error_message = "analytics_probes_enabled needs analytics_jobs_enabled."
+  }
+}
+
 locals {
   analytics_jobs_count = var.analytics_jobs_enabled ? 1 : 0
+
+  # The probes, each with the hours its absence alert looks back (the weekly
+  # period plus a day, or the monthly period plus four days) and the least
+  # evaluation interval Cloud Monitoring allows for a PromQL condition that
+  # looks that far back: 1 hour from 8 to 16 days, 6 hours from 32 to 93 days
+  # (docs.cloud.google.com/monitoring/alerts/using-promql).
+  analytics_probes = {
+    repos      = { lookback_hours = 192, evaluation_interval = "3600s" }
+    lighthouse = { lookback_hours = 192, evaluation_interval = "3600s" }
+    replay     = { lookback_hours = 192, evaluation_interval = "3600s" }
+    citations  = { lookback_hours = 840, evaluation_interval = "21600s" }
+  }
+
+  analytics_probes_active = [for name in keys(local.analytics_probes) : name if lookup(var.analytics_probes_enabled, name, false)]
 
   # Written by the edge-logs Logpush job into the bucket this stack's
   # edge_logs.tf creates, named here because that file lands on its own
@@ -241,8 +281,12 @@ locals {
     }
   ]...)
 
-  # The dbt trigger waits for analytics_dbt_schedule_enabled.
-  analytics_job_triggers = { for name, job in local.analytics_jobs_created : name => job if name != "dbt" || var.analytics_dbt_schedule_enabled }
+  # The dbt trigger waits for analytics_dbt_schedule_enabled, and a probe's for
+  # its analytics_probes_enabled entry.
+  analytics_job_triggers = {
+    for name, job in local.analytics_jobs_created : name => job
+    if(name != "dbt" || var.analytics_dbt_schedule_enabled) && (!contains(keys(local.analytics_probes), name) || contains(local.analytics_probes_active, name))
+  }
 }
 
 # Both APIs are on in prod already (the apis and ai stacks use them). Declaring
@@ -413,7 +457,7 @@ resource "google_service_account_iam_member" "analytics_deployer_act_as" {
 # Scheduler
 # ─────────────────────────────────────────────────────────────────────────────
 
-# One identity for the eight triggers. It runs as nothing and holds only
+# One identity for the triggers. It runs as nothing and holds only
 # roles/run.invoker on each Job, which runs it with no overrides.
 resource "google_service_account" "analytics_scheduler" {
   count = local.analytics_jobs_count
@@ -569,23 +613,27 @@ resource "google_monitoring_alert_policy" "analytics_grade_not_succeeding" {
 # The probes' version of the grade policy: no succeeded execution in a
 # week plus a day for the three weekly probes, and in a month plus four days
 # for the monthly citation probe. It catches a paused trigger or a deleted Job,
-# which fail no run, whether or not the freshness Job exists. Like the grade
-# policy it alerts within minutes of the flag going on, and closes after the
-# probe's first success.
+# which fail no run, whether or not the freshness Job exists. It exists only
+# for a probe switched on in var.analytics_probes_enabled, whose canary
+# execution has already succeeded, so it opens only if the probe then stops
+# succeeding. Cloud Monitoring lets a PromQL condition that looks back 8 to 16
+# days evaluate hourly at most, and one that looks back 32 to 93 days every 6
+# hours, so the weekly probes evaluate every 3600 s and the citation probe
+# every 21600 s (local.analytics_probes).
 resource "google_monitoring_alert_policy" "analytics_probe_not_succeeding" {
-  for_each = { for name, hours in { repos = 192, lighthouse = 192, replay = 192, citations = 840 } : name => hours if contains(keys(local.analytics_jobs_created), name) }
+  for_each = { for name in local.analytics_probes_active : name => local.analytics_probes[name] if contains(keys(local.analytics_jobs_created), name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job not succeeding"
   combiner     = "OR"
 
   conditions {
-    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution in ${each.value} hours"
+    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution in ${each.value.lookback_hours} hours"
 
     condition_prometheus_query_language {
-      query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.value}h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.value}h])"
+      query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.value.lookback_hours}h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.value.lookback_hours}h])"
       duration            = "0s"
-      evaluation_interval = "300s"
+      evaluation_interval = each.value.evaluation_interval
     }
   }
 
