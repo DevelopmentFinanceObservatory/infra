@@ -426,6 +426,8 @@ locals {
         { name = "calls", type = "INTEGER", mode = "NULLABLE" },
         { name = "calls_failed", type = "INTEGER", mode = "NULLABLE" },
         { name = "failure", type = "STRING", mode = "NULLABLE" },
+        { name = "sample_size", type = "INTEGER", mode = "NULLABLE" },
+        { name = "limited", type = "BOOLEAN", mode = "NULLABLE" },
       ]
     }
     "citation_probe answers" = {
