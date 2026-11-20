@@ -23,12 +23,17 @@
 # variant of the file and the manifest, and the v1 manifest, once and expects
 # MISS for every one.
 #
+# With --revoked, run after revoking a version and purging its cache tag: it
+# reads each variant of the file and the manifest, and the v1 manifest, once,
+# and expects the answer to be 410 with a cf-cache-status other than HIT or
+# STALE, so no revoked copy is served from the edge.
+#
 # The file must not have been read through the edge since its last purge, or
 # the first read is already a HIT. Pick a digest from a version minted for the
 # check, or purge its content version first (infra/dfo-prod/edge/README.md,
 # "Revoking a dataset version").
 #
-# Usage: check-edge-cache.sh [--after-purge] <file-path> <selector-path>
+# Usage: check-edge-cache.sh [--after-purge | --revoked] <file-path> <selector-path>
 #   file-path      /api/datasets/spec_<id>/cv_<hex>/files/<digest>, from a
 #                  manifest's artifact url
 #   selector-path  /api/datasets/spec_<id>/cv_<hex>/file?format=<format>
@@ -36,12 +41,19 @@
 # Exit: 0 when every check passes, 1 when one fails, 2 on a usage error.
 set -euo pipefail
 
-usage="usage: check-edge-cache.sh [--after-purge] <file-path> <selector-path>"
+usage="usage: check-edge-cache.sh [--after-purge | --revoked] <file-path> <selector-path>"
 after_purge=false
-if [ "${1:-}" = "--after-purge" ]; then
+revoked=false
+case "${1:-}" in
+--after-purge)
     after_purge=true
     shift
-fi
+    ;;
+--revoked)
+    revoked=true
+    shift
+    ;;
+esac
 [ $# -eq 2 ] || {
     echo "$usage" >&2
     exit 2
@@ -118,11 +130,41 @@ read_variant() {
     expect "$label Access-Control-Allow-Origin" "$acao" "$want_acao"
 }
 
+# revoked_read <label> <path> <origin>: GETs path, with an Origin header
+# unless origin is empty, and expects the HTTP status 410 and a
+# cf-cache-status that is neither HIT nor STALE.
+revoked_read() {
+    local label="$1" path="$2" origin="$3" headers code cache args=()
+    [ -z "$origin" ] || args=(-H "Origin: $origin")
+    checks=$((checks + 1))
+    headers="$(curl -sS -o /dev/null -D - ${args[@]+"${args[@]}"} "$base$path")" || {
+        echo "FAIL: $label: request failed"
+        failures=$((failures + 1))
+        return 0
+    }
+    if grep -qi '^cache-tag:' <<<"$headers"; then
+        echo "FAIL: $label: shows a Cache-Tag header to the visitor"
+        failures=$((failures + 1))
+        return 0
+    fi
+    code="$(awk 'NR == 1 { print $2 }' <<<"$headers" | tr -d '\r')"
+    cache="$(awk '{ sub(/\r$/, "") } tolower($1) == "cf-cache-status:" { print toupper($2) }' <<<"$headers")"
+    cache="${cache:-none}"
+    if [ "$code" = 410 ] && [ "$cache" != HIT ] && [ "$cache" != STALE ]; then
+        echo "ok: $label: 410, cache $cache"
+    else
+        echo "FAIL: $label: got ${code:-no status}, cache $cache, want 410 and not HIT or STALE"
+        failures=$((failures + 1))
+    fi
+}
+
 origins=("" "https://developmentfinance.org" "https://preview.developmentfinance.org")
 for path in "$file_path" "$manifest_path"; do
     for origin in "${origins[@]}"; do
         tag="${origin:-no Origin}"
-        if [ "$after_purge" = true ]; then
+        if [ "$revoked" = true ]; then
+            revoked_read "GET $path revoked, $tag" "$path" "$origin"
+        elif [ "$after_purge" = true ]; then
             read_variant "GET $path after purge, $tag" "$path" "$origin" MISS
         else
             read_variant "first GET $path, $tag" "$path" "$origin" MISS
@@ -131,7 +173,9 @@ for path in "$file_path" "$manifest_path"; do
     done
 done
 
-if [ "$after_purge" = true ]; then
+if [ "$revoked" = true ]; then
+    revoked_read "GET $manifest_v1_path revoked, no Origin" "$manifest_v1_path" ""
+elif [ "$after_purge" = true ]; then
     read_variant "GET $manifest_v1_path after purge, no Origin" "$manifest_v1_path" "" MISS
 else
     read_variant "first GET $manifest_v1_path, no Origin" "$manifest_v1_path" "" MISS

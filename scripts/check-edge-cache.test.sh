@@ -34,7 +34,8 @@ failures=0
 # on FILE and SELECTOR, with ARGS (default none) before them. An entry is
 # "FAIL" for a curl failure, "TAG:<status>" for a response carrying
 # Cache-Tag, "<status>" for a response with no Access-Control-Allow-Origin, or
-# "<status>@<origin>" for one that allows that origin.
+# "<status>@<origin>" for one that allows that origin, or "<code>:<status>"
+# for a response with that HTTP code.
 ARGS=()
 run() {
     : >"$STUB_LOG"
@@ -47,6 +48,7 @@ run() {
         case "$s" in
         FAIL) echo FAIL >"$STUB_QUEUE/$n" ;;
         TAG:*) printf 'HTTP/2 200\ncache-tag: cv_0123\ncf-cache-status: %s\n\n' "${s#TAG:}" >"$STUB_QUEUE/$n" ;;
+        [0-9][0-9][0-9]:*) printf 'HTTP/2 %s\nCF-Cache-Status: %s\n\n' "${s%%:*}" "${s#*:}" >"$STUB_QUEUE/$n" ;;
         *@*) printf 'HTTP/2 200\nCF-Cache-Status: %s\nAccess-Control-Allow-Origin: %s\n\n' "${s%%@*}" "${s#*@}" >"$STUB_QUEUE/$n" ;;
         *) printf 'HTTP/2 200\nCF-Cache-Status: %s\n\n' "$s" >"$STUB_QUEUE/$n" ;;
         esac
@@ -175,6 +177,23 @@ check "after-purge sends seven reads" "$(is "$(grep -c '^curl' <<<"$calls")" 7)"
 run MISS MISS@$APEX HIT MISS MISS@$APEX MISS@$PREVIEW MISS
 check "after-purge HIT exits 1" "$(is "$status" 1)"
 check "after-purge HIT is named" "$(says "got HIT, want MISS")"
+ARGS=()
+
+# 9b. After a revocation, every variant answers 410 and no HIT or STALE: the
+# same seven reads. A 410 that is a MISS or DYNAMIC passes, a 410 served from
+# cache fails, and a 200 fails even when it is a MISS.
+ARGS=(--revoked)
+run 410:MISS 410:MISS 410:MISS 410:MISS 410:MISS 410:DYNAMIC 410:MISS
+check "revoked 410 MISS on every variant exits 0" "$(is "$status" 0)"
+check "revoked sends seven reads" "$(is "$(grep -c '^curl' <<<"$calls")" 7)"
+run 410:MISS 410:MISS 410:HIT 410:MISS 410:MISS 410:MISS 410:MISS
+check "revoked 410 HIT exits 1" "$(is "$status" 1)"
+check "revoked 410 HIT is named" "$(says "got 410, cache HIT, want 410 and not HIT or STALE")"
+run 410:MISS 410:MISS 410:STALE 410:MISS 410:MISS 410:MISS 410:MISS
+check "revoked 410 STALE exits 1" "$(is "$status" 1)"
+run 410:MISS 410:MISS 410:MISS 410:MISS 410:MISS 410:MISS 200:MISS
+check "revoked 200 exits 1" "$(is "$status" 1)"
+check "revoked 200 is named" "$(says "got 200, cache MISS")"
 ARGS=()
 
 # 10. A usage error exits 2 and sends nothing: a manifest path as file-path,

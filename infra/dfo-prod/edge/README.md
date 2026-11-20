@@ -76,7 +76,7 @@ Each step is its own merge to main:
 1. Apply the telemetry stack, which creates the bucket.
 2. Set `edge_logpush_bucket` in `infra/dfo-prod/edge-logs/env.auto.tfvars` and apply the edge-logs stack, which creates the job.
 3. Send a read and run `scripts/check-edge-logpush.sh` until it passes.
-4. Set `edge_cache_enabled = true` in `infra/dfo-prod/edge/env.auto.tfvars` and apply this stack. Then run `scripts/check-edge-cache.sh` as "Checking the cache after an apply" describes, and `scripts/check-edge-logpush.sh` again, which should now count `hit` lines.
+4. Set `edge_cache_enabled = true` in `infra/dfo-prod/edge/env.auto.tfvars` and apply this stack. Then run `scripts/check-edge-cache.sh` as "Checking the cache after an apply" describes, `scripts/check-edge-logpush.sh` again, which should now count `hit` lines, and the BigQuery check in "Confirming that a miss and a hit both reach BigQuery". The cache is live only when that check passes.
 
 The edge-logs README has the detail of each step. To turn the cache off, set `edge_cache_enabled` to false and apply; the ruleset is deleted. Remove the job only after that.
 
@@ -94,7 +94,15 @@ curl -sS https://api.cloudflare.com/client/v4/zones/e837f8819d4b16dce14e17cbe6ba
   -d '{"tags": ["cv_<hex>", "cv_<hex of a derived version>"]}'
 ```
 
-The call answers `"success": true` once the purge is queued, and the next read of each purged path shows `cf-cache-status: MISS` and the API's 410. A purge cannot reach browser caches. A pinned file's `max-age=3600` means a returning visitor's browser can show the revoked file for up to an hour.
+The call answers `"success": true` once the purge is queued. Then run `scripts/check-edge-cache.sh --revoked`, which reads each variant of a revoked file and its manifest, and the v1 manifest, once, and passes only when every answer is 410 and its `cf-cache-status` is neither `HIT` nor `STALE`:
+
+```bash
+scripts/check-edge-cache.sh --revoked \
+  /api/datasets/spec_<id>/cv_<hex>/files/<digest> \
+  '/api/datasets/spec_<id>/cv_<hex>/file?format=csv'
+```
+
+Do not use `--after-purge` here: it expects the 200 a live version answers and fails on a 410. A purge cannot reach browser caches. A pinned file's `max-age=3600` means a returning visitor's browser can show the revoked file for up to an hour.
 
 ## Checking the cache after an apply
 
@@ -106,7 +114,7 @@ scripts/check-edge-cache.sh \
   '/api/datasets/spec_<id>/cv_<hex>/file?format=csv'
 ```
 
-After purging the version's tag as in "Revoking a dataset version", `--after-purge` skips the `HIT` reads, reads each file and manifest variant once, and expects `MISS` for every one. Run it only on a version the first run has already filled.
+After purging a live version's tag, `--after-purge` skips the `HIT` reads, reads each file and manifest variant once, and expects `MISS` for every one. Run it only on a version the first run has already filled. After a revocation, use `--revoked` instead ("Revoking a dataset version").
 
 ```bash
 scripts/check-edge-cache.sh --after-purge \
@@ -115,6 +123,31 @@ scripts/check-edge-cache.sh --after-purge \
 ```
 
 `scripts/check-edge-cache.test.sh` tests the script against a stub `curl`.
+
+### Confirming that a miss and a hit both reach BigQuery
+
+The cache stays on only after one request has been counted as an origin miss and again as an edge hit in BigQuery. `check-edge-logpush.sh` stops at the bucket, so this check follows the data into BigQuery. It needs the cache on, since a hit cannot exist before it, so it runs right after the apply in step 4 of "Apply order for the cache". Activation waits on it: until it passes, nothing treats the cache as live, and a failure means setting `edge_cache_enabled` back to false and applying. The batches in the bucket expire three days after they are written, so the load into BigQuery and this query must both finish inside that window, or the hit row is gone before it can be checked.
+
+1. Run `scripts/check-edge-cache.sh` on a version no one has read since its last purge. Its first read of the file in each variant is an origin miss and its second an edge hit. Note the UTC time before the first read and after the last, and the `spec_<id>` and `cv_<hex>` of the file path.
+2. Wait for the next hourly run of the `dfo_analytics.extract.edge` Cloud Run Job, which loads the Logpush batches into `prod-fin-observatory.edge_export.deliveries` (one row per GET, keyed by `ray_id`). Then run the query below with `<spec_id>`, `<content_version>`, `<start>` and `<end>` set from step 1. The first branch counts edge rows by `cache_status` and whether they carry an `origin_status`. The second counts the dfo-apis delivery lines (`datasets_api.delivery`) in `dfo_logs._AllLogs`. Both filter on their partition column.
+
+```bash
+bq query --project_id=prod-fin-observatory --location=EU --use_legacy_sql=false \
+  "SELECT 'edge' AS source, cache_status AS kind, origin_status IS NOT NULL AS has_origin_status, COUNT(*) AS n
+   FROM \`prod-fin-observatory.edge_export.deliveries\`
+   WHERE edge_started_at BETWEEN TIMESTAMP '<start>' AND TIMESTAMP '<end>'
+     AND spec_id = '<spec_id>' AND content_version = '<content_version>' AND path_kind = 'file'
+   GROUP BY kind, has_origin_status
+   UNION ALL
+   SELECT 'dfo_apis_delivery', 'delivery_line', NULL, COUNT(*)
+   FROM \`prod-fin-observatory.dfo_logs._AllLogs\`
+   WHERE timestamp BETWEEN TIMESTAMP '<start>' AND TIMESTAMP '<end>'
+     AND JSON_VALUE(json_payload, '\$.logger') = 'datasets_api.delivery'
+     AND JSON_VALUE(json_payload, '\$.spec_id') = '<spec_id>'
+     AND JSON_VALUE(json_payload, '\$.content_version') = '<content_version>'"
+```
+
+Expected, for the file reads of one `check-edge-cache.sh` run (three variants, each read twice): an `edge` row with `kind` `miss` and `has_origin_status` true, `n` 3; an `edge` row with `kind` `hit` and `has_origin_status` false, `n` 3; and a `dfo_apis_delivery` row with `n` 3, one delivery line for each miss and none for the hits. A missing `miss` or `hit` row means the Logpush row did not reach BigQuery, so check the extract job's latest run. A delivery count below the miss count means a miss did not reach dfo-apis' log. A count above it means a hit did reach the origin. Any of these fails the check.
 
 ## Counting dataset reads
 
