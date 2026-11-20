@@ -200,6 +200,12 @@ Its only consumer is the `website` stack's share migration Job, `dfo-dev-website
 
 The route, this secret and the website Job are removed once prod's shares are migrated.
 
+## Verify principal
+
+`verify_principal.tf` generates the shared bearer value that holds dfo-apis' `verify` grant, stores it as `dfo-dev-verify-principal`, and mounts it on this service as `VERIFY_PRINCIPAL`, pinned to its version. The grant opens two routes, which compare the `x-dfo-principal` header against it: `POST /api/datasets/analysis` with `verify` set, which recomputes a stored analysis frame and stores nothing, and `GET /api/presentation/share-sample`, which lists a random sample of shares. Unset or empty, both refuse every caller with `verify_not_permitted`. It is distinct from every other principal here, because it opens no other route and the share sample names share ids.
+
+Its only consumer is the prod telemetry stack's replay Job, `dfo-prod-analytics-replay`, which reads `dfo-prod-verify-principal` by id as `VERIFY_PRINCIPAL` and holds `roles/run.invoker` on `dfo-prod-apis` (`infra/dfo-prod/telemetry/README.md`, "Analytics jobs"). Dev has no telemetry stack, so nothing reads the dev value. Apply this stack first, since the telemetry stack grants the Job read on the secret. A caller holding an invoker grant who learns the value can recompute stored frames and list share ids. No human reader grant exists. Rotation is a bump of `verify_principal_version` in `verify_principal.tf`; the replay Job reads `latest` when each execution starts, so its next run takes the new value.
+
 ## Origin catalogue
 
 `origin_catalogue.tf` declares the catalogue's own bucket (`dfo-dev-origin-catalogue-<project>`), a Cloud Run Job (`dfo-dev-origin-catalogue`) running `python -m origin_catalogue.job` from the dfo-apis image, a Cloud Scheduler trigger (`dfo-dev-origin-catalogue-tick`) every 15 minutes, and an alert policy for a stale publish, a failed execution, or a job that stopped running. The job builds the table of every provenance (DFO, base Data Commons and the UN System Data Commons) with its variables and topics, publishes each build under `format-<n>/versions/<build id>/`, and moves `format-<n>/current.json` to point at it last. The operator page is `deploy/origin-catalogue.md` in dfo-apis.

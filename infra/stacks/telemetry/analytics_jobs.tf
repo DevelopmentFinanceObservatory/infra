@@ -1,5 +1,5 @@
-# The analytics repository's four scheduled Cloud Run Jobs, their Cloud
-# Scheduler triggers and their alerts. All four run the one image the
+# The analytics repository's eight scheduled Cloud Run Jobs, their Cloud
+# Scheduler triggers and their alerts. All eight run the one image the
 # repository's Deploy workflow pushes to the analytics Artifact Registry
 # repository (analytics.tf), and each Job's args pick the command, since the
 # image has no entrypoint:
@@ -8,6 +8,10 @@
 #   dfo-prod-analytics-edge       python -m dfo_analytics.extract.edge, hourly at minute 5
 #   dfo-prod-analytics-grade      python -m dfo_analytics.grade, daily at 04:30 UTC
 #   dfo-prod-analytics-freshness  dbt source freshness --target prod, hourly at minute 50
+#   dfo-prod-analytics-repos      python -m dfo_analytics.repos, Mondays at 04:00 UTC
+#   dfo-prod-analytics-lighthouse python -m dfo_analytics.lighthouse, Mondays at 05:00 UTC
+#   dfo-prod-analytics-replay     python -m dfo_analytics.replay, Mondays at 06:00 UTC
+#   dfo-prod-analytics-citations  python -m dfo_analytics.citations, the 1st of each month at 06:00 UTC
 #
 # var.analytics_jobs_enabled creates everything in this file, and the
 # freshness Job also waits for var.analytics_dbt_schedule_enabled. The
@@ -16,7 +20,7 @@
 # the order to switch it on.
 
 variable "analytics_jobs_enabled" {
-  description = "Creates the analytics Jobs, their Scheduler triggers and alerts, and the grants only a running Job needs (the edge logs bucket, the secrets, the deployer's). Needs analytics_jobs_image."
+  description = "Creates the analytics Jobs, their Scheduler triggers and alerts, and the grants only a running Job needs (the edge logs bucket, the secrets, the replay Job's invoker grant on the apis service, the deployer's). Needs analytics_jobs_image."
   type        = bool
   default     = false
 }
@@ -74,6 +78,14 @@ locals {
   # The grader's lease lapses after this many minutes, and its README asks for
   # a task timeout of at most that, so the Job's timeout derives from it.
   analytics_grade_run_timeout_minutes = 60
+
+  # The apis service the replay Job calls, by its deterministic Cloud Run URL,
+  # which is also the audience of the ID token the Job sends, since prod's
+  # apis service admits only callers holding roles/run.invoker
+  # (analytics_replay_apis_invoker below). The name follows the apis stack's
+  # "${var.namespace}-apis".
+  analytics_apis_service_name = "${var.namespace}-apis"
+  analytics_apis_url          = "https://${local.analytics_apis_service_name}-${data.google_project.this.number}.${var.region}.run.app"
 
   # Every Job has max_retries = 0, so a failed run is one failed execution and
   # the next scheduled run is the retry. Each Job's timeout keeps one execution
@@ -139,6 +151,79 @@ locals {
       env      = {}
       secrets  = {}
     }
+    # The four probes run weekly or monthly, so each timeout is far from the
+    # next trigger and sized to the run alone.
+    repos = {
+      account  = google_service_account.analytics_job["repos"]
+      args     = ["python", "-m", "dfo_analytics.repos"]
+      timeout  = "3600s"
+      memory   = "1Gi"
+      schedule = "0 4 * * 1"
+      env = {
+        REPO_SEARCH_BQ_PROJECT = var.project_id
+        REPO_SEARCH_DATASET    = google_bigquery_dataset.analytics_job["repo_search"].dataset_id
+      }
+      secrets = {
+        GITHUB_TOKEN = google_secret_manager_secret.analytics_probe["repos_github_token"].secret_id
+      }
+    }
+    # 15 PageSpeed Insights calls in sequence, each up to 180 seconds with up
+    # to three tries, which the analytics repository's README sizes at 60
+    # minutes.
+    lighthouse = {
+      account  = google_service_account.analytics_job["lighthouse"]
+      args     = ["python", "-m", "dfo_analytics.lighthouse"]
+      timeout  = "3600s"
+      memory   = "1Gi"
+      schedule = "0 5 * * 1"
+      env = {
+        LIGHTHOUSE_BQ_PROJECT = var.project_id
+        LIGHTHOUSE_DATASET    = google_bigquery_dataset.analytics_job["lighthouse"].dataset_id
+      }
+      secrets = {
+        PSI_API_KEY = google_secret_manager_secret.analytics_probe["lighthouse_psi_api_key"].secret_id
+      }
+    }
+    # VERIFY_PRINCIPAL is the apis stack's verify principal
+    # (verify_principal.tf), which opens the share sample and the analysis
+    # verify routes alone. EXPORT_ID_HMAC_KEY is the website stack's event
+    # export key (event_export.tf), so the Job's share_digest equals the
+    # export's digest of the same shareId.
+    replay = {
+      account  = google_service_account.analytics_job["replay"]
+      args     = ["python", "-m", "dfo_analytics.replay"]
+      timeout  = "3600s"
+      memory   = "1Gi"
+      schedule = "0 6 * * 1"
+      env = {
+        REPLAY_BQ_PROJECT        = var.project_id
+        REPLAY_DATASET           = google_bigquery_dataset.analytics_job["replay_probe"].dataset_id
+        REPLAY_APIS_BASE_URL     = local.analytics_apis_url
+        REPLAY_ID_TOKEN_AUDIENCE = local.analytics_apis_url
+      }
+      secrets = {
+        VERIFY_PRINCIPAL   = "${var.namespace}-verify-principal"
+        EXPORT_ID_HMAC_KEY = "${var.namespace}-website-export-hmac-key"
+      }
+    }
+    # 60 asks per provider in sequence, each up to 20 minutes with retries,
+    # which the analytics repository's README sizes at 6 hours.
+    citations = {
+      account  = google_service_account.analytics_job["citations"]
+      args     = ["python", "-m", "dfo_analytics.citations"]
+      timeout  = "21600s"
+      memory   = "1Gi"
+      schedule = "0 6 1 * *"
+      env = {
+        CITATION_PROBE_BQ_PROJECT = var.project_id
+        CITATION_PROBE_DATASET    = google_bigquery_dataset.analytics_job["citation_probe"].dataset_id
+      }
+      secrets = {
+        ANTHROPIC_API_KEY  = google_secret_manager_secret.analytics_probe["citations_anthropic_api_key"].secret_id
+        OPENAI_API_KEY     = google_secret_manager_secret.analytics_probe["citations_openai_api_key"].secret_id
+        PERPLEXITY_API_KEY = google_secret_manager_secret.analytics_probe["citations_perplexity_api_key"].secret_id
+      }
+    }
   }
 
   analytics_jobs_created = {
@@ -181,10 +266,13 @@ resource "google_storage_bucket_iam_member" "analytics_edge_logs_reader" {
   member = google_service_account.analytics_job["edge"].member
 }
 
-# The caller HMAC key is owned by the apis stack (caller_hmac_key.tf) and the
-# Langfuse keys are made by hand and read by the ai stack, so each grant is on
-# that secret alone. The edge extract mounts the same caller key as the
-# website and dfo-apis, so one client carries one caller in all three.
+# The caller HMAC key and the verify principal are owned by the apis stack
+# (caller_hmac_key.tf, verify_principal.tf), the export ID key by the website
+# stack (event_export.tf), and the Langfuse keys are made by hand and read by
+# the ai stack, so each grant is on that secret alone. The edge extract mounts
+# the same caller key as the website and dfo-apis, so one client carries one
+# caller in all three. The apis stack applies before this one, and the
+# website stack has created its key wherever event_export_enabled is on.
 resource "google_secret_manager_secret_iam_member" "analytics_job_secret_accessor" {
   for_each = local.analytics_job_secret_grants
 
@@ -192,6 +280,20 @@ resource "google_secret_manager_secret_iam_member" "analytics_job_secret_accesso
   secret_id = each.value.secret
   role      = "roles/secretmanager.secretAccessor"
   member    = local.analytics_jobs_created[each.value.job].account.member
+}
+
+# The replay Job calls the apis service with an ID token minted as its own
+# account, and prod's service admits only callers holding roles/run.invoker.
+# The grant lives here, beside the account, as the website's and ai's live in
+# theirs, since the apis stack applies first and cannot name it.
+resource "google_cloud_run_v2_service_iam_member" "analytics_replay_apis_invoker" {
+  count = contains(keys(local.analytics_jobs_created), "replay") ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  name     = local.analytics_apis_service_name
+  role     = "roles/run.invoker"
+  member   = google_service_account.analytics_job["replay"].member
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,8 +351,9 @@ resource "google_cloud_run_v2_job" "analytics" {
         }
       }
 
-      # No vpc_access. The Jobs reach BigQuery, Cloud Storage, Langfuse Cloud
-      # and the Gemini API over the public internet.
+      # No vpc_access. The Jobs reach BigQuery, Cloud Storage, Langfuse Cloud,
+      # the model and search APIs and the apis service's run.app URL over the
+      # public internet.
     }
   }
 
@@ -269,11 +372,12 @@ resource "google_cloud_run_v2_job" "analytics" {
     google_bigquery_dataset_access.analytics_writer,
     google_bigquery_dataset_access.analytics_job_writer,
     google_secret_manager_secret_iam_member.analytics_job_secret_accessor,
+    google_cloud_run_v2_service_iam_member.analytics_replay_apis_invoker,
   ]
 }
 
 output "analytics_job_names" {
-  description = "Names of the analytics Jobs by command (dbt, edge, grade), empty while analytics_jobs_enabled is false."
+  description = "Names of the analytics Jobs by command (dbt, edge, grade, freshness, repos, lighthouse, replay, citations), empty while analytics_jobs_enabled is false."
   value       = { for name, job in google_cloud_run_v2_job.analytics : name => job.name }
 }
 
@@ -306,7 +410,7 @@ resource "google_service_account_iam_member" "analytics_deployer_act_as" {
 # Scheduler
 # ─────────────────────────────────────────────────────────────────────────────
 
-# One identity for the four triggers. It runs as nothing and holds only
+# One identity for the eight triggers. It runs as nothing and holds only
 # roles/run.invoker on each Job, which runs it with no overrides.
 resource "google_service_account" "analytics_scheduler" {
   count = local.analytics_jobs_count
@@ -395,10 +499,13 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
 
 # A failed run of these Jobs alerts at once, as export_job_failed (alerts.tf)
 # does. The grader runs once a day, so a failed run waits a day for its
-# retry. A failed freshness run is the alert itself: a source the dbt build
-# reads has stopped arriving, or the build has stopped writing it.
+# retry, and the four probes a week or a month. A failed freshness run is the
+# alert itself: a source the dbt build reads has stopped arriving, or the
+# build has stopped writing it. A probe whose trigger stops firing fails no
+# run, and the freshness Job catches it once the probe's source is older
+# than its threshold in the analytics repository's dbt/models/sources.yml.
 resource "google_monitoring_alert_policy" "analytics_job_failed" {
-  for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness"], name) }
+  for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness", "repos", "lighthouse", "replay", "citations"], name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job execution failed"

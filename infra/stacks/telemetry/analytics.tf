@@ -26,10 +26,10 @@ locals {
 
   # The datasets the analytics repository's Python jobs write, each with the
   # one job account (analytics_job_accounts below) that holds WRITER on it.
-  # The grader creates its own tables, and edge_export's are declared below.
-  # Both datasets exist whatever
-  # var.analytics_jobs_enabled says (analytics_jobs.tf), since the analytics
-  # changes that write them need them before the jobs run.
+  # The grader creates its own tables. Every other job's tables are declared
+  # below. Every dataset exists whatever var.analytics_jobs_enabled says
+  # (analytics_jobs.tf), since the analytics changes that write them need
+  # them before the jobs run.
   analytics_job_datasets = {
     edge_export = {
       description = "Dataset reads Cloudflare's edge answered, loaded hourly from the edge logs bucket by the ${var.namespace}-analytics-edge Job as ${var.namespace}-analytics-edge."
@@ -38,6 +38,22 @@ locals {
     studio_grades = {
       description = "Grades of finished Studio turns, written daily by the ${var.namespace}-analytics-grade Job as ${var.namespace}-analytics-grader."
       account     = "grader"
+    }
+    repo_search = {
+      description = "Public GitHub repositories that declare a DFO SDK or name the MCP endpoint, written weekly by the ${var.namespace}-analytics-repos Job as ${var.namespace}-analytics-repos."
+      account     = "repos"
+    }
+    lighthouse = {
+      description = "Throttled mobile Lighthouse measurements of the site's key pages from the PageSpeed Insights API, written weekly by the ${var.namespace}-analytics-lighthouse Job as ${var.namespace}-analytics-lighthouse."
+      account     = "lighthouse"
+    }
+    replay_probe = {
+      description = "Whether dfo-apis recomputes the frames behind a sample of share links to the same bytes, written weekly by the ${var.namespace}-analytics-replay Job as ${var.namespace}-analytics-replay."
+      account     = "replay"
+    }
+    citation_probe = {
+      description = "Answers of AI assistants to a fixed question set and whether they cite DFO, written monthly by the ${var.namespace}-analytics-citations Job as ${var.namespace}-analytics-citations."
+      account     = "citations"
     }
   }
 
@@ -53,6 +69,10 @@ locals {
     google_bigquery_dataset.web_history.dataset_id,
     google_bigquery_dataset.analytics_job["edge_export"].dataset_id,
     google_bigquery_dataset.analytics_job["studio_grades"].dataset_id,
+    google_bigquery_dataset.analytics_job["repo_search"].dataset_id,
+    google_bigquery_dataset.analytics_job["lighthouse"].dataset_id,
+    google_bigquery_dataset.analytics_job["replay_probe"].dataset_id,
+    google_bigquery_dataset.analytics_job["citation_probe"].dataset_id,
   ]
 
   # The service accounts, each with the one dataset it writes. The
@@ -267,11 +287,192 @@ resource "google_bigquery_table" "analytics_edge" {
   }
 }
 
+# The tables of the four probe jobs, declared here for the reason the edge
+# tables are: the first dbt build reads them as sources, and the citations
+# job refuses to run on a missing table. Each schema copies its job's schema
+# constant in the analytics repository column for column and in order, with
+# BigQuery's legacy type names (INTEGER, FLOAT, BOOLEAN) for the jobs' INT64,
+# FLOAT64 and BOOL. A job creates a table only when it is absent and appends
+# with its own schema, which a load job refuses where a mode differs, and the
+# replay job refuses to run on a table whose types or modes differ, so a
+# schema change in the analytics repository needs the same change here first.
+# Each table is day-partitioned on its run time column, as the job's own
+# TimePartitioning is, and none is clustered. deletion_protection keeps its
+# default of true, as on the edge tables.
+#
+#   repo_search.matches, runs       dfo_analytics/repos/job.py SCHEMA, RUNS_SCHEMA
+#   lighthouse.results, runs        dfo_analytics/lighthouse/job.py RESULTS_SCHEMA, RUNS_SCHEMA
+#   replay_probe.slot_results       dfo_analytics/replay/job.py SLOT_RESULTS_SCHEMA
+#   citation_probe.answers, runs    dfo_analytics/citations/job.py ANSWERS_SCHEMA, RUNS_SCHEMA
+locals {
+  analytics_probe_tables = {
+    "repo_search matches" = {
+      description     = "One row per query and public repository the ${var.namespace}-analytics-repos Job matched, with the repository's stars, push time and fork and archive flags."
+      partition_field = "run_at"
+      schema = [
+        { name = "run_id", type = "STRING", mode = "REQUIRED" },
+        { name = "run_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "query_id", type = "STRING", mode = "REQUIRED" },
+        { name = "query_kind", type = "STRING", mode = "REQUIRED" },
+        { name = "query_text", type = "STRING", mode = "REQUIRED" },
+        { name = "total_count", type = "INTEGER", mode = "REQUIRED" },
+        { name = "capped", type = "BOOLEAN", mode = "REQUIRED" },
+        { name = "repo_full_name", type = "STRING", mode = "REQUIRED" },
+        { name = "owner_login", type = "STRING", mode = "REQUIRED" },
+        { name = "owner_type", type = "STRING", mode = "REQUIRED" },
+        { name = "path", type = "STRING", mode = "REQUIRED" },
+        { name = "stars", type = "INTEGER", mode = "REQUIRED" },
+        { name = "pushed_at", type = "TIMESTAMP", mode = "NULLABLE" },
+        { name = "archived", type = "BOOLEAN", mode = "REQUIRED" },
+        { name = "fork", type = "BOOLEAN", mode = "REQUIRED" },
+      ]
+    }
+    "repo_search runs" = {
+      description     = "One row per query of each ${var.namespace}-analytics-repos run, with GitHub's total count, the repositories kept, and whether the query was capped, incomplete or failed."
+      partition_field = "run_at"
+      schema = [
+        { name = "run_id", type = "STRING", mode = "REQUIRED" },
+        { name = "run_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "query_id", type = "STRING", mode = "REQUIRED" },
+        { name = "query_kind", type = "STRING", mode = "REQUIRED" },
+        { name = "total_count", type = "INTEGER", mode = "REQUIRED" },
+        { name = "kept_count", type = "INTEGER", mode = "REQUIRED" },
+        { name = "capped", type = "BOOLEAN", mode = "REQUIRED" },
+        { name = "incomplete", type = "BOOLEAN", mode = "REQUIRED" },
+        { name = "failed", type = "BOOLEAN", mode = "REQUIRED" },
+        { name = "error", type = "STRING", mode = "NULLABLE" },
+      ]
+    }
+    "lighthouse results" = {
+      description     = "One row per URL and attempt of the ${var.namespace}-analytics-lighthouse Job, with the Lighthouse metrics PageSpeed Insights returned or the attempt's error."
+      partition_field = "run_at"
+      schema = [
+        { name = "run_id", type = "STRING", mode = "REQUIRED" },
+        { name = "run_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "url", type = "STRING", mode = "REQUIRED" },
+        { name = "attempt", type = "INTEGER", mode = "REQUIRED" },
+        { name = "status", type = "STRING", mode = "REQUIRED" },
+        { name = "error", type = "STRING", mode = "NULLABLE" },
+        { name = "lighthouse_version", type = "STRING", mode = "NULLABLE" },
+        { name = "performance_score", type = "FLOAT", mode = "NULLABLE" },
+        { name = "fcp_ms", type = "FLOAT", mode = "NULLABLE" },
+        { name = "lcp_ms", type = "FLOAT", mode = "NULLABLE" },
+        { name = "tbt_ms", type = "FLOAT", mode = "NULLABLE" },
+        { name = "cls", type = "FLOAT", mode = "NULLABLE" },
+        { name = "speed_index_ms", type = "FLOAT", mode = "NULLABLE" },
+        { name = "total_byte_weight", type = "INTEGER", mode = "NULLABLE" },
+        { name = "final_url", type = "STRING", mode = "NULLABLE" },
+        { name = "fetch_time", type = "TIMESTAMP", mode = "NULLABLE" },
+      ]
+    }
+    "lighthouse runs" = {
+      description     = "One row per ${var.namespace}-analytics-lighthouse run, with its URL and attempt counts and the URLs that had no successful attempt."
+      partition_field = "run_at"
+      schema = [
+        { name = "run_id", type = "STRING", mode = "REQUIRED" },
+        { name = "run_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "urls", type = "INTEGER", mode = "REQUIRED" },
+        { name = "attempts", type = "INTEGER", mode = "REQUIRED" },
+        { name = "failed_attempts", type = "INTEGER", mode = "REQUIRED" },
+        { name = "failed_urls", type = "STRING", mode = "REPEATED" },
+      ]
+    }
+    "replay_probe slot_results" = {
+      description     = "One row per card of a share the ${var.namespace}-analytics-replay Job sampled, or per share it could not read, with the outcome of recomputing or re-reading the card's frame. A share is named by share_digest, the HMAC of its id, and never by the id."
+      partition_field = "run_started_at"
+      schema = [
+        { name = "run_id", type = "STRING", mode = "REQUIRED" },
+        { name = "run_started_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "probe_version", type = "STRING", mode = "REQUIRED" },
+        { name = "share_digest", type = "STRING", mode = "REQUIRED" },
+        { name = "share_kind", type = "STRING", mode = "REQUIRED" },
+        { name = "share_mode", type = "STRING", mode = "REQUIRED" },
+        { name = "share_created_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "age_band", type = "STRING", mode = "REQUIRED" },
+        { name = "slot_source", type = "STRING", mode = "NULLABLE" },
+        { name = "slot", type = "INTEGER", mode = "NULLABLE" },
+        { name = "frame_kind", type = "STRING", mode = "NULLABLE" },
+        { name = "frame_spec_id", type = "STRING", mode = "NULLABLE" },
+        { name = "frame_content_version", type = "STRING", mode = "NULLABLE" },
+        { name = "stored_content_version", type = "STRING", mode = "NULLABLE" },
+        { name = "replayed_content_version", type = "STRING", mode = "NULLABLE" },
+        { name = "outcome", type = "STRING", mode = "REQUIRED" },
+        { name = "detail_code", type = "STRING", mode = "NULLABLE" },
+        { name = "http_status", type = "INTEGER", mode = "NULLABLE" },
+        { name = "latency_ms", type = "INTEGER", mode = "NULLABLE" },
+        { name = "execution_identity", type = "STRING", mode = "NULLABLE" },
+        { name = "stored_execution_identity", type = "STRING", mode = "NULLABLE" },
+        { name = "refusal_code", type = "STRING", mode = "NULLABLE" },
+        { name = "refusal_reason", type = "STRING", mode = "NULLABLE" },
+        { name = "head_freshness", type = "STRING", mode = "NULLABLE" },
+        { name = "head_served_from", type = "STRING", mode = "NULLABLE" },
+        { name = "head_confirmed_at", type = "TIMESTAMP", mode = "NULLABLE" },
+      ]
+    }
+    "citation_probe answers" = {
+      description     = "One row per answer an AI assistant gave the ${var.namespace}-analytics-citations Job, with the URLs it cites, whether it cites or names DFO, and its text."
+      partition_field = "run_at"
+      schema = [
+        { name = "run_id", type = "STRING", mode = "REQUIRED" },
+        { name = "run_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "provider", type = "STRING", mode = "REQUIRED" },
+        { name = "model", type = "STRING", mode = "REQUIRED" },
+        { name = "question_id", type = "STRING", mode = "REQUIRED" },
+        { name = "question_text", type = "STRING", mode = "REQUIRED" },
+        { name = "attempt", type = "INTEGER", mode = "REQUIRED" },
+        { name = "answered_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "cited_urls", type = "STRING", mode = "REPEATED" },
+        { name = "source_urls", type = "STRING", mode = "REPEATED" },
+        { name = "cites_dfo", type = "BOOLEAN", mode = "REQUIRED" },
+        { name = "mentions_dfo", type = "BOOLEAN", mode = "REQUIRED" },
+        { name = "answer_chars", type = "INTEGER", mode = "REQUIRED" },
+        { name = "answer_text", type = "STRING", mode = "REQUIRED" },
+        { name = "input_tokens", type = "INTEGER", mode = "NULLABLE" },
+        { name = "output_tokens", type = "INTEGER", mode = "NULLABLE" },
+        { name = "web_searches", type = "INTEGER", mode = "NULLABLE" },
+      ]
+    }
+    "citation_probe runs" = {
+      description     = "One row per provider and question of each ${var.namespace}-analytics-citations run, with the asks made, answered and failed, the last error, and whether the provider was skipped."
+      partition_field = "run_at"
+      schema = [
+        { name = "run_id", type = "STRING", mode = "REQUIRED" },
+        { name = "run_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "provider", type = "STRING", mode = "REQUIRED" },
+        { name = "model", type = "STRING", mode = "REQUIRED" },
+        { name = "question_id", type = "STRING", mode = "REQUIRED" },
+        { name = "attempts", type = "INTEGER", mode = "REQUIRED" },
+        { name = "answered", type = "INTEGER", mode = "REQUIRED" },
+        { name = "failed", type = "INTEGER", mode = "REQUIRED" },
+        { name = "skipped", type = "BOOLEAN", mode = "REQUIRED" },
+        { name = "error", type = "STRING", mode = "NULLABLE" },
+        { name = "started_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "finished_at", type = "TIMESTAMP", mode = "REQUIRED" },
+      ]
+    }
+  }
+}
+
+resource "google_bigquery_table" "analytics_probe" {
+  for_each = local.analytics_probe_tables
+
+  dataset_id  = google_bigquery_dataset.analytics_job[split(" ", each.key)[0]].dataset_id
+  table_id    = split(" ", each.key)[1]
+  description = each.value.description
+  schema      = jsonencode(each.value.schema)
+
+  time_partitioning {
+    type  = "DAY"
+    field = each.value.partition_field
+  }
+}
+
 # One account per Python job, each writing its own dataset and nothing else.
 # They exist whatever var.analytics_jobs_enabled says, so the dataset grants
 # are in place before a job first runs. What only a running job needs (the
 # edge logs bucket, the secrets) is granted in analytics_jobs.tf behind the
-# flag. The grader also reads langfuse_export, the turns it grades.
+# flag. The grader also reads langfuse_export, the turns it grades. The four
+# probe accounts read no other dataset.
 locals {
   analytics_job_accounts = {
     edge = {
@@ -285,6 +486,30 @@ locals {
       description  = "Runs the analytics repository's Studio turn grader: reads langfuse_export, writes studio_grades."
       dataset      = "studio_grades"
       readers      = ["langfuse_export"]
+    }
+    repos = {
+      display_name = "${var.namespace} analytics public repository search"
+      description  = "Runs the analytics repository's public GitHub repository search: calls the GitHub API, writes repo_search."
+      dataset      = "repo_search"
+      readers      = []
+    }
+    lighthouse = {
+      display_name = "${var.namespace} analytics Lighthouse probe"
+      description  = "Runs the analytics repository's Lighthouse probe: calls the PageSpeed Insights API, writes lighthouse."
+      dataset      = "lighthouse"
+      readers      = []
+    }
+    replay = {
+      display_name = "${var.namespace} analytics replay probe"
+      description  = "Runs the analytics repository's replay probe: calls the apis service's share sample and verify routes, writes replay_probe."
+      dataset      = "replay_probe"
+      readers      = []
+    }
+    citations = {
+      display_name = "${var.namespace} analytics citation probe"
+      description  = "Runs the analytics repository's AI assistant citation probe: calls the Anthropic, OpenAI and Perplexity APIs, writes citation_probe."
+      dataset      = "citation_probe"
+      readers      = []
     }
   }
 
@@ -333,6 +558,31 @@ resource "google_bigquery_dataset_access" "analytics_job_reader" {
 # the grade Job reads its latest version (README "Analytics jobs").
 resource "google_secret_manager_secret" "analytics_grader_gemini" {
   secret_id = "${var.namespace}-analytics-grader-gemini-api-key"
+
+  replication {
+    auto {}
+  }
+}
+
+# The probe jobs' third-party API keys, declared as the grader's Gemini key
+# is: no version, a project owner adds each key by hand before
+# var.analytics_jobs_enabled is switched on, and the Job reads its latest
+# version. Each key belongs to one Job, whose account alone may read it
+# (analytics_jobs.tf).
+locals {
+  analytics_probe_secrets = {
+    repos_github_token           = "${var.namespace}-analytics-repos-github-token"
+    lighthouse_psi_api_key       = "${var.namespace}-analytics-lighthouse-psi-api-key"
+    citations_anthropic_api_key  = "${var.namespace}-analytics-citations-anthropic-api-key"
+    citations_openai_api_key     = "${var.namespace}-analytics-citations-openai-api-key"
+    citations_perplexity_api_key = "${var.namespace}-analytics-citations-perplexity-api-key"
+  }
+}
+
+resource "google_secret_manager_secret" "analytics_probe" {
+  for_each = local.analytics_probe_secrets
+
+  secret_id = each.value
 
   replication {
     auto {}
