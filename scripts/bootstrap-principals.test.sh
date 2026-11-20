@@ -225,16 +225,17 @@ refuses "apis missing key" "$V" '{}' "missing top-level key invokers"
 refuses "apis ai file" "$V" '{"studio_token_readers": {}, "mcp_token_readers": {}}' "missing top-level key invokers"
 refuses "apis bare address" "$V" '{"invokers": {"x": "a@example.org"}}' "each invokers value must be"
 refuses "apis duplicate member" "$V" "{\"invokers\": {\"x\": $G, \"y\": $G}}" "invokers holds the same value"
-accepts "telemetry" "$T" "{\"readers\": {\"x\": $G, \"y\": $G2}, \"alerts\": {\"x\": \"a@example.org\"}}"
-refuses "telemetry missing readers" "$T" '{"alerts": {"x": "a@example.org"}}' "missing top-level key readers"
-refuses "telemetry empty alerts" "$T" "{\"readers\": {\"x\": $G}, \"alerts\": {}}" "alerts must hold at least 1 entry"
-refuses "telemetry prefixed alert" "$T" "{\"readers\": {}, \"alerts\": {\"x\": $G}}" "each alerts value must be a bare email address"
-refuses "telemetry reader with no prefix" "$T" '{"readers": {"x": "a@example.org"}, "alerts": {"x": "b@example.org"}}' "each readers value must be"
-accepts "telemetry 4-character alert" "$T" '{"readers": {}, "alerts": {"x": "a@bc"}}'
-refuses "telemetry 3-character alert" "$T" '{"readers": {}, "alerts": {"x": "a@b"}}' "at least 4 characters"
-refuses "telemetry number alert" "$T" '{"readers": {}, "alerts": {"x": 1234}}' "each alerts value must be"
-refuses "telemetry duplicate alert" "$T" '{"readers": {}, "alerts": {"x": "a@example.org", "y": "a@example.org"}}' "alerts holds the same value"
-refuses "telemetry alert with a trailing space" "$T" '{"readers": {}, "alerts": {"x": "a@example.org "}}' "each alerts value must be a bare email address"
+accepts "telemetry" "$T" "{\"analytics_developers\": {}, \"readers\": {\"x\": $G, \"y\": $G2}, \"alerts\": {\"x\": \"a@example.org\"}}"
+refuses "telemetry missing readers" "$T" '{"alerts": {"x": "a@example.org"}, "analytics_developers": {}}' "missing top-level key readers"
+refuses "telemetry missing analytics_developers" "$T" '{"readers": {}, "alerts": {"x": "a@example.org"}}' "missing top-level key analytics_developers"
+refuses "telemetry empty alerts" "$T" "{\"analytics_developers\": {}, \"readers\": {\"x\": $G}, \"alerts\": {}}" "alerts must hold at least 1 entry"
+refuses "telemetry prefixed alert" "$T" "{\"analytics_developers\": {}, \"readers\": {}, \"alerts\": {\"x\": $G}}" "each alerts value must be a bare email address"
+refuses "telemetry reader with no prefix" "$T" '{"analytics_developers": {}, "readers": {"x": "a@example.org"}, "alerts": {"x": "b@example.org"}}' "each readers value must be"
+accepts "telemetry 4-character alert" "$T" '{"analytics_developers": {}, "readers": {}, "alerts": {"x": "a@bc"}}'
+refuses "telemetry 3-character alert" "$T" '{"analytics_developers": {}, "readers": {}, "alerts": {"x": "a@b"}}' "at least 4 characters"
+refuses "telemetry number alert" "$T" '{"analytics_developers": {}, "readers": {}, "alerts": {"x": 1234}}' "each alerts value must be"
+refuses "telemetry duplicate alert" "$T" '{"analytics_developers": {}, "readers": {}, "alerts": {"x": "a@example.org", "y": "a@example.org"}}' "alerts holds the same value"
+refuses "telemetry alert with a trailing space" "$T" '{"analytics_developers": {}, "readers": {}, "alerts": {"x": "a@example.org "}}' "each alerts value must be a bare email address"
 
 # Every object that takes person values refuses each machine member type, so
 # loosening any of them fails a row here. <base> holds the stack's other keys.
@@ -256,7 +257,8 @@ refuses_machine_members "$F" ingestion_operators '{"applier_impersonators": {}, 
 refuses_machine_members "$A" studio_token_readers '{"mcp_token_readers": {}}'
 refuses_machine_members "$A" mcp_token_readers '{"studio_token_readers": {}}'
 refuses_machine_members "$V" invokers '{}'
-refuses_machine_members "$T" readers '{"alerts": {"x": "a@example.org"}}'
+refuses_machine_members "$T" readers '{"alerts": {"x": "a@example.org"}, "analytics_developers": {}}'
+refuses_machine_members "$T" analytics_developers '{"alerts": {"x": "a@example.org"}, "readers": {}}'
 
 # has <label> <pattern>: the logged calls contain <pattern>.
 has() { check "$1" "$([[ "$calls" == *"$2"* ]] && echo true || echo false)"; }

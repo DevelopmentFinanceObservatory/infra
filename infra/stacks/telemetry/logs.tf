@@ -37,7 +37,8 @@ resource "google_logging_project_sink" "telemetry" {
 
 # BigQuery roles decide who can query dfo_logs, whose entries hold request
 # IPs and user agents. The logs_daily query account reads it by its dataset
-# grant (logs_daily.tf). Project-level BigQuery data roles reach it too:
+# grant (logs_daily.tf), and the analytics service accounts and developers by
+# theirs (analytics.tf). Project-level BigQuery data roles reach it too:
 # today the applier's roles/bigquery.dataOwner, dfo-prod-dc-ing-pst-sa's
 # roles/bigquery.dataEditor, and the project owners. If the linked dataset
 # carries BigQuery's default projectWriters and projectReaders entries, the
