@@ -17,6 +17,15 @@
 #   t5 and t6, studio.refresh traces on two later days holding fetch tool
 #     calls: three of 1 second on the first day and one of 9 on the second.
 #     The pooled median is 1, and the mean of the two daily medians is 5.
+# Segmented turns are checked against their own rows, after the checks above,
+# so they leave those expectations alone:
+#   t7, a closed segmented turn in sess-3: two turn.segment roots an hour
+#     apart with a turn.pause between them, a generation in the first, and a
+#     zero-duration root turn at the close. Its start is the first segment's,
+#     its latency runs to the close and spans the pause, and its time to first
+#     token runs from the first segment's start to the generation's first token.
+#   t8, a paused segmented turn in sess-4 with no turn yet, which runs to its
+#     last observation's end.
 # o2 records 40 cached input tokens, o5 records 0 and the rest record none, so
 # the cached_input_tokens sums are 40, 0 and NULL.
 # Each turn's session sketch counts one session, and merged over all turns
@@ -108,5 +117,40 @@ check 'ai_observations_daily latency merged over two days of one name' \
   FROM ($OBSERVATIONS)
   WHERE name = 'fetch'
 ) AS t")"
+
+# shellcheck disable=SC2034 # read by query_rows in reporting-lib.sh
+SOURCES="WITH
+  observations AS (
+    SELECT * FROM UNNEST(ARRAY<STRUCT<id STRING, trace_id STRING, parent_observation_id STRING,
+      is_root_observation BOOL, session_id STRING, trace_name STRING, name STRING, type STRING,
+      level STRING, environment STRING, model STRING, start_time TIMESTAMP, end_time TIMESTAMP,
+      latency_seconds FLOAT64, time_to_first_token_seconds FLOAT64, input_tokens INT64,
+      output_tokens INT64, total_tokens INT64, input_cost_usd FLOAT64, output_cost_usd FLOAT64,
+      total_cost_usd FLOAT64, cached_input_tokens INT64>>[
+    ('s1', 't7', NULL, TRUE, 'sess-3', 'turn', 'turn.segment', 'SPAN', 'DEFAULT', 'dfo-prod-ai', NULL,
+      '2026-10-09 11:00:00+00', '2026-10-09 11:00:10+00', 10.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+    ('s2', 't7', 's1', FALSE, 'sess-3', 'turn', 'orchestrate', 'GENERATION', 'DEFAULT', 'dfo-prod-ai', 'gemini-3.8-flash',
+      '2026-10-09 11:00:02+00', '2026-10-09 11:00:04+00', 2.0, 0.5, 10, 2, 12, 0.25, 0.25, 0.5, NULL),
+    ('s3', 't7', NULL, TRUE, 'sess-3', 'turn', 'turn.pause', 'SPAN', 'DEFAULT', 'dfo-prod-ai', NULL,
+      '2026-10-09 11:00:10+00', '2026-10-09 11:00:10+00', 0.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+    ('s5', 't7', NULL, TRUE, 'sess-3', 'turn', 'turn', 'SPAN', 'DEFAULT', 'dfo-prod-ai', NULL,
+      '2026-10-09 12:00:20+00', '2026-10-09 12:00:20+00', 0.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+    ('s4', 't7', NULL, TRUE, 'sess-3', 'turn', 'turn.segment', 'SPAN', 'DEFAULT', 'dfo-prod-ai', NULL,
+      '2026-10-09 12:00:00+00', '2026-10-09 12:00:20+00', 20.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+    ('p1', 't8', NULL, TRUE, 'sess-4', 'turn', 'turn.segment', 'SPAN', 'DEFAULT', 'dfo-prod-ai', NULL,
+      '2026-10-09 13:00:00+00', '2026-10-09 13:00:08+00', 8.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+    ('p2', 't8', 'p1', FALSE, 'sess-4', 'turn', 'orchestrate', 'GENERATION', 'DEFAULT', 'dfo-prod-ai', 'gemini-3.8-flash',
+      '2026-10-09 13:00:01+00', '2026-10-09 13:00:03+00', 2.0, 0.25, 10, 2, 12, 0.25, 0.25, 0.5, NULL),
+    ('p3', 't8', NULL, TRUE, 'sess-4', 'turn', 'turn.pause', 'SPAN', 'DEFAULT', 'dfo-prod-ai', NULL,
+      '2026-10-09 13:00:08+00', '2026-10-09 13:00:08+00', 0.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)])
+  )"
+
+check 'ai_turns segmented turns' \
+    '{"day":"2026-10-09","started_at":"2026-10-09T11:00:00Z","session_sketch":1,"latency_seconds":3620,"time_to_first_token_seconds":2.5,"generations":1,"tool_calls":0,"input_tokens":10,"output_tokens":2,"cost_usd":0.5,"errored":false,"cached_input_tokens":null}
+{"day":"2026-10-09","started_at":"2026-10-09T13:00:00Z","session_sketch":1,"latency_seconds":8,"time_to_first_token_seconds":1.25,"generations":1,"tool_calls":0,"input_tokens":10,"output_tokens":2,"cost_usd":0.5,"errored":false,"cached_input_tokens":null}' \
+    "$(query_rows "SELECT TO_JSON_STRING(t) AS row FROM (
+  SELECT * REPLACE (HLL_COUNT.EXTRACT(session_sketch) AS session_sketch) FROM ($TURNS)
+) AS t
+ORDER BY t.started_at")"
 
 finish reporting_ai.test.sh
