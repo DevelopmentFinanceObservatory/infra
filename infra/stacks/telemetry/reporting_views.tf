@@ -4,17 +4,28 @@
 # only once var.reporting_sources lists that group, since a view cannot name
 # a table that does not exist yet. Readers of dfo_reporting get no access to
 # the sources, so each view is authorised on every dataset it reads.
+#
+# The logs, mcp, website_requests and website_pages views read the day tables
+# the logs_daily scheduled query writes. var.analytics_dbt_schedule_enabled
+# disables that query (logs_daily.tf), so under the same switch they read the
+# analytics dbt build's tables of the same name in the analytics dataset,
+# which carry the same columns, and are authorised on that dataset instead.
+# README "Analytics jobs" gives the parity check to run before the switch.
 locals {
+  # The dataset holding the log-fed day tables the views read.
+  reporting_log_dataset = var.analytics_dbt_schedule_enabled ? google_bigquery_dataset.analytics["analytics"].dataset_id : google_bigquery_dataset.logs_daily.dataset_id
+
   # The datasets each source group's views read. Its keys are the groups
   # var.reporting_sources may list (variables.tf). website_export and
   # langfuse_export are created by the website and ai stacks, the GA4 export
   # dataset by the GA4 BigQuery link, and the billing export dataset by the
   # foundation stack.
   reporting_source_datasets = {
-    logs             = [google_bigquery_dataset.logs_daily.dataset_id]
-    mcp              = [google_bigquery_dataset.logs_daily.dataset_id]
-    website_requests = [google_bigquery_dataset.logs_daily.dataset_id]
-    website_pages    = [google_bigquery_dataset.logs_daily.dataset_id, google_bigquery_dataset.web_history.dataset_id]
+    logs             = [local.reporting_log_dataset]
+    mcp              = [local.reporting_log_dataset]
+    website_requests = [local.reporting_log_dataset]
+    # analytics.website_page_views_daily already joins the rebuilt history.
+    website_pages    = var.analytics_dbt_schedule_enabled ? [local.reporting_log_dataset] : [local.reporting_log_dataset, google_bigquery_dataset.web_history.dataset_id]
     website          = ["website_export"]
     accounts         = ["website_export"]
     langfuse         = ["langfuse_export"]
@@ -25,9 +36,9 @@ locals {
     billing          = [var.billing_export_dataset]
   }
 
-  logs_daily_ref  = "${var.project_id}.${google_bigquery_dataset.logs_daily.dataset_id}"
-  web_history_ref = "${var.project_id}.${google_bigquery_dataset.web_history.dataset_id}"
-  langfuse_ref    = "${var.project_id}.langfuse_export.observations"
+  reporting_log_ref = "${var.project_id}.${local.reporting_log_dataset}"
+  web_history_ref   = "${var.project_id}.${google_bigquery_dataset.web_history.dataset_id}"
+  langfuse_ref      = "${var.project_id}.langfuse_export.observations"
   # events_2* matches the daily events_YYYYMMDD tables and leaves out
   # events_intraday_* should streaming export ever be turned on, since those
   # repeat the day's events.
@@ -37,40 +48,42 @@ locals {
     service_requests_daily = {
       source      = "logs"
       description = "Cloud Run requests per UTC day and service, with status counts and approximate latency quantiles."
-      query       = templatefile("${path.module}/sql/reporting/service_requests_daily.sql", { requests_daily = "${local.logs_daily_ref}.requests_daily" })
+      query       = templatefile("${path.module}/sql/reporting/service_requests_daily.sql", { requests_daily = "${local.reporting_log_ref}.requests_daily" })
     }
     service_routes_daily = {
       source      = "logs"
       description = "Cloud Run requests per UTC day, service, method and route, with ids in the route written :id."
-      query       = templatefile("${path.module}/sql/reporting/service_routes_daily.sql", { routes_daily = "${local.logs_daily_ref}.routes_daily" })
+      query       = templatefile("${path.module}/sql/reporting/service_routes_daily.sql", { routes_daily = "${local.reporting_log_ref}.routes_daily" })
     }
     service_errors_daily = {
       source      = "logs"
       description = "Cloud Run stdout and stderr entries at WARNING or above per UTC day, service or job, logger and severity. No message text."
-      query       = templatefile("${path.module}/sql/reporting/service_errors_daily.sql", { errors_daily = "${local.logs_daily_ref}.errors_daily" })
+      query       = templatefile("${path.module}/sql/reporting/service_errors_daily.sql", { errors_daily = "${local.reporting_log_ref}.errors_daily" })
     }
     mcp_daily = {
       source      = "mcp"
       description = "Combined MCP server tool calls, resource reads, resource lists and initializes per UTC day, caller kind, client, request and outcome, with an HLL++ sketch of the callers. No caller, trace id, URI or other text."
-      query       = templatefile("${path.module}/sql/reporting/mcp_daily.sql", { mcp_daily = "${local.logs_daily_ref}.mcp_daily" })
+      query       = templatefile("${path.module}/sql/reporting/mcp_daily.sql", { mcp_daily = "${local.reporting_log_ref}.mcp_daily" })
     }
     website_requests_daily = {
       source      = "website_requests"
       description = "Website request lines per UTC day, route, kind (page, api, rsc, prefetch, or unparsed), bot verdict and status class, with an HLL++ sketch of the callers. No caller, host, user agent or path beyond the route."
-      query       = templatefile("${path.module}/sql/reporting/website_requests_daily.sql", { website_requests_daily = "${local.logs_daily_ref}.website_requests_daily" })
+      query       = templatefile("${path.module}/sql/reporting/website_requests_daily.sql", { website_requests_daily = "${local.reporting_log_ref}.website_requests_daily" })
     }
     website_page_views_daily = {
       source      = "website_pages"
       description = "Website page views per UTC day, as page requests answered 2xx from visitors the website did not judge to be bots and from bots. Days before the request log's first parsed day come from the rebuilt Cloud Run history."
-      query = templatefile("${path.module}/sql/reporting/website_page_views_daily.sql", {
-        website_requests_daily = "${local.logs_daily_ref}.website_requests_daily"
+      query = var.analytics_dbt_schedule_enabled ? templatefile("${path.module}/sql/reporting/website_page_views_daily_analytics.sql", {
+        website_page_views_daily = "${local.reporting_log_ref}.website_page_views_daily"
+        }) : templatefile("${path.module}/sql/reporting/website_page_views_daily.sql", {
+        website_requests_daily = "${local.reporting_log_ref}.website_requests_daily"
         history                = "${local.web_history_ref}.website_page_history"
       })
     }
     deploys = {
       source      = "logs"
       description = "Each Cloud Run revision deployed while the logs source ran, timed at its first request."
-      query       = templatefile("${path.module}/sql/reporting/deploys.sql", { deploys = "${local.logs_daily_ref}.deploys" })
+      query       = templatefile("${path.module}/sql/reporting/deploys.sql", { deploys = "${local.reporting_log_ref}.deploys" })
     }
     product_events_daily = {
       source      = "website"

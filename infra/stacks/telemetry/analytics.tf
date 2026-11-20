@@ -24,6 +24,23 @@ locals {
     }
   }
 
+  # The datasets the analytics repository's Python jobs write, each with the
+  # one job account (analytics_job_accounts below) that holds WRITER on it.
+  # The grader creates its own tables, and edge_export's are declared below.
+  # Both datasets exist whatever
+  # var.analytics_jobs_enabled says (analytics_jobs.tf), since the analytics
+  # changes that write them need them before the jobs run.
+  analytics_job_datasets = {
+    edge_export = {
+      description = "Dataset reads Cloudflare's edge answered, loaded hourly from the edge logs bucket by the ${var.namespace}-analytics-edge Job as ${var.namespace}-analytics-edge."
+      account     = "edge"
+    }
+    studio_grades = {
+      description = "Grades of finished Studio turns, written daily by the ${var.namespace}-analytics-grade Job as ${var.namespace}-analytics-grader."
+      account     = "grader"
+    }
+  }
+
   # The datasets dbt/models/sources.yml in the analytics repository declares.
   # website_export and langfuse_export are created by the website and ai
   # stacks. dfo_logs holds request IPs and user agents, and both accounts and
@@ -34,6 +51,8 @@ locals {
     "langfuse_export",
     google_bigquery_dataset.logs_daily.dataset_id,
     google_bigquery_dataset.web_history.dataset_id,
+    google_bigquery_dataset.analytics_job["edge_export"].dataset_id,
+    google_bigquery_dataset.analytics_job["studio_grades"].dataset_id,
   ]
 
   # The service accounts, each with the one dataset it writes. The
@@ -90,8 +109,8 @@ resource "google_bigquery_dataset" "analytics" {
 }
 
 # The service accounts hold no keys. CI reaches its account through Workload
-# Identity Federation (analytics_ci_wif below), and the runner has no Cloud Run
-# job yet.
+# Identity Federation (analytics_ci_wif below), and the runner is the identity
+# of the dbt Job in analytics_jobs.tf.
 resource "google_service_account" "analytics" {
   for_each = local.analytics_accounts
 
@@ -147,6 +166,177 @@ resource "google_bigquery_dataset_access" "analytics_developers_source_reader" {
   role           = "READER"
   group_by_email = local.analytics_developer_principals[each.value.developer].kind == "group" ? local.analytics_developer_principals[each.value.developer].address : null
   user_by_email  = local.analytics_developer_principals[each.value.developer].kind == "user" ? local.analytics_developer_principals[each.value.developer].address : null
+}
+
+resource "google_bigquery_dataset" "analytics_job" {
+  for_each = local.analytics_job_datasets
+
+  dataset_id  = each.key
+  location    = local.bigquery_location
+  description = each.value.description
+
+  # Every grant on this dataset is a google_bigquery_dataset_access, as on the
+  # dbt datasets above.
+
+  depends_on = [google_project_service.apis]
+}
+
+# The three tables the edge extract writes (dfo_analytics.extract.edge in the
+# analytics repository), declared here so they exist before the first dbt
+# build, whose sources name them, whatever var.analytics_jobs_enabled says.
+# The extract creates a table only when absent, and refuses to run on an
+# existing table whose columns differ from its own in name, type, mode or
+# order, so each schema copies DELIVERIES_SCHEMA, LOADED_OBJECTS_SCHEMA and
+# RUNS_SCHEMA, and the partitioning and clustering copy _ensure_tables.
+# deletion_protection keeps its default of true, as on the stack's other data
+# tables, since no other table holds these rows.
+locals {
+  analytics_edge_tables = {
+    deliveries = {
+      description     = "Dataset reads Cloudflare's edge answered, one row per ray and start time, loaded hourly from the edge logs bucket by the ${var.namespace}-analytics-edge Job. Two overlapping runs can insert a ray twice."
+      partition_field = "edge_started_at"
+      clustering      = ["spec_id"]
+      schema = [
+        { name = "ray_id", type = "STRING", mode = "REQUIRED" },
+        { name = "edge_started_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "day", type = "DATE", mode = "REQUIRED" },
+        { name = "method", type = "STRING", mode = "REQUIRED" },
+        { name = "host", type = "STRING", mode = "NULLABLE" },
+        { name = "path_kind", type = "STRING", mode = "REQUIRED" },
+        { name = "spec_id", type = "STRING", mode = "NULLABLE" },
+        { name = "content_version", type = "STRING", mode = "NULLABLE" },
+        { name = "file_digest", type = "STRING", mode = "NULLABLE" },
+        { name = "caller", type = "STRING", mode = "NULLABLE" },
+        { name = "referer_host", type = "STRING", mode = "NULLABLE" },
+        { name = "origin_host", type = "STRING", mode = "NULLABLE" },
+        { name = "client", type = "STRING", mode = "NULLABLE" },
+        { name = "user_agent", type = "STRING", mode = "NULLABLE" },
+        { name = "country", type = "STRING", mode = "NULLABLE" },
+        { name = "cache_status", type = "STRING", mode = "NULLABLE" },
+        { name = "edge_status", type = "INTEGER", mode = "NULLABLE" },
+        { name = "edge_bytes", type = "INTEGER", mode = "NULLABLE" },
+        { name = "origin_status", type = "INTEGER", mode = "NULLABLE" },
+        { name = "served_by", type = "STRING", mode = "REQUIRED" },
+        { name = "source_object", type = "STRING", mode = "REQUIRED" },
+        { name = "loaded_at", type = "TIMESTAMP", mode = "REQUIRED" },
+      ]
+    }
+    loaded_objects = {
+      description     = "Each edge log object the ${var.namespace}-analytics-edge Job recorded, with its generation, row count and status (loaded, rejected or unreadable)."
+      partition_field = "loaded_at"
+      clustering      = null
+      schema = [
+        { name = "object_name", type = "STRING", mode = "REQUIRED" },
+        { name = "generation", type = "INTEGER", mode = "REQUIRED" },
+        { name = "row_count", type = "INTEGER", mode = "REQUIRED" },
+        { name = "loaded_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "status", type = "STRING", mode = "REQUIRED" },
+      ]
+    }
+    runs = {
+      description     = "Each ${var.namespace}-analytics-edge Job run, with the objects it recorded, the rows it inserted and whether it succeeded."
+      partition_field = null
+      clustering      = null
+      schema = [
+        { name = "run_id", type = "STRING", mode = "REQUIRED" },
+        { name = "started_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "ended_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "objects", type = "INTEGER", mode = "REQUIRED" },
+        { name = "row_count", type = "INTEGER", mode = "REQUIRED" },
+        { name = "status", type = "STRING", mode = "REQUIRED" },
+      ]
+    }
+  }
+}
+
+resource "google_bigquery_table" "analytics_edge" {
+  for_each = local.analytics_edge_tables
+
+  dataset_id  = google_bigquery_dataset.analytics_job["edge_export"].dataset_id
+  table_id    = each.key
+  description = each.value.description
+  schema      = jsonencode(each.value.schema)
+  clustering  = each.value.clustering
+
+  dynamic "time_partitioning" {
+    for_each = each.value.partition_field == null ? [] : [each.value.partition_field]
+    content {
+      type  = "DAY"
+      field = time_partitioning.value
+    }
+  }
+}
+
+# One account per Python job, each writing its own dataset and nothing else.
+# They exist whatever var.analytics_jobs_enabled says, so the dataset grants
+# are in place before a job first runs. What only a running job needs (the
+# edge logs bucket, the secrets) is granted in analytics_jobs.tf behind the
+# flag. The grader also reads langfuse_export, the turns it grades.
+locals {
+  analytics_job_accounts = {
+    edge = {
+      display_name = "${var.namespace} analytics edge extract"
+      description  = "Runs the analytics repository's edge delivery extract: reads the edge logs bucket, writes edge_export."
+      dataset      = "edge_export"
+      readers      = []
+    }
+    grader = {
+      display_name = "${var.namespace} analytics Studio turn grader"
+      description  = "Runs the analytics repository's Studio turn grader: reads langfuse_export, writes studio_grades."
+      dataset      = "studio_grades"
+      readers      = ["langfuse_export"]
+    }
+  }
+
+  analytics_job_account_reader_grants = merge([
+    for account, spec in local.analytics_job_accounts : {
+      for dataset in spec.readers : "${account} ${dataset}" => { account = account, dataset = dataset }
+    }
+  ]...)
+}
+
+resource "google_service_account" "analytics_job" {
+  for_each = local.analytics_job_accounts
+
+  account_id   = "${var.namespace}-analytics-${each.key}"
+  display_name = each.value.display_name
+  description  = each.value.description
+}
+
+resource "google_project_iam_member" "analytics_job_job_user" {
+  for_each = local.analytics_job_accounts
+
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = google_service_account.analytics_job[each.key].member
+}
+
+resource "google_bigquery_dataset_access" "analytics_job_writer" {
+  for_each = local.analytics_job_accounts
+
+  dataset_id    = google_bigquery_dataset.analytics_job[each.value.dataset].dataset_id
+  role          = "WRITER"
+  user_by_email = google_service_account.analytics_job[each.key].email
+}
+
+resource "google_bigquery_dataset_access" "analytics_job_reader" {
+  for_each = local.analytics_job_account_reader_grants
+
+  dataset_id    = each.value.dataset
+  role          = "READER"
+  user_by_email = google_service_account.analytics_job[each.value.account].email
+}
+
+# The grader's own Gemini API key, one key per caller as for the ai and apis
+# stacks. Terraform declares the secret and holds no version: a project owner
+# adds the key by hand before var.analytics_jobs_enabled is switched on, since
+# the grade Job reads its latest version (README "Analytics jobs").
+resource "google_secret_manager_secret" "analytics_grader_gemini" {
+  secret_id = "${var.namespace}-analytics-grader-gemini-api-key"
+
+  replication {
+    auto {}
+  }
 }
 
 # Copied from ../foundation's `pool_id` default and its
@@ -233,7 +423,7 @@ resource "google_artifact_registry_repository" "analytics" {
 resource "google_service_account" "analytics_deployer" {
   account_id   = "${var.namespace}-analytics-deployer"
   display_name = "${var.namespace} analytics image deployer"
-  description  = "Pushes the analytics repository's job images from its main branch. Writes the analytics Artifact Registry repository and nothing else."
+  description  = "Pushes the analytics repository's job images from its main branch and moves the analytics Jobs to each one. Writes the analytics Artifact Registry repository and those Jobs and nothing else."
 }
 
 resource "google_artifact_registry_repository_iam_member" "analytics_deployer_writer" {

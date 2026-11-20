@@ -12,6 +12,11 @@
 # only unparsed rows and has no row, and 2026-10-27 holds parsed rows but no
 # page view and has a row of zeros. With only the unparsed rows in the log,
 # every history row is kept.
+#
+# It also tests sql/reporting/website_page_views_daily_analytics.sql, the
+# template under var.analytics_dbt_schedule_enabled, against literal rows in
+# the analytics repository's website_page_views_daily contract, and pins its
+# columns and their order.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +50,11 @@ SOURCES="WITH
     ('2026-10-22', 500, 40),
     ('2026-10-23', 731, 60),
     ('2026-10-24', 999, 99)])
+  ),
+  analytics_page_views AS (
+    SELECT * FROM UNNEST(ARRAY<STRUCT<day DATE, page_views INT64, bot_page_views INT64>>[
+    ('2026-10-23', 731, 60),
+    ('2026-10-24', 439, 50)])
   )"
 
 check website_page_views_daily \
@@ -60,5 +70,10 @@ check 'website_page_views_daily, no parsed day' \
 {"day":"2026-10-23","page_views":731,"bot_page_views":60}
 {"day":"2026-10-24","page_views":999,"bot_page_views":99}' \
     "$(view_rows website_page_views_daily 't.day' website_requests_daily=unparsed_only history=history)"
+
+check website_page_views_daily_analytics \
+    '{"day":"2026-10-23","page_views":731,"bot_page_views":60}
+{"day":"2026-10-24","page_views":439,"bot_page_views":50}' \
+    "$(view_rows website_page_views_daily_analytics 't.day' website_page_views_daily=analytics_page_views)"
 
 finish reporting_website_page_views.test.sh
