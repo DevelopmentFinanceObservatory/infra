@@ -173,12 +173,18 @@ resource "google_service_account_iam_member" "logs_daily_transfer_agent" {
 # loads whole days up to yesterday, and starts each table from its latest
 # loaded day minus one, so the run reloads that day with any entry that
 # reached the source after the previous run.
+#
+# The analytics dbt Job's hourly build replaces it. The config stops running
+# once var.analytics_dbt_schedule_enabled starts that build
+# (analytics_jobs.tf), and its tables stay as the archive the build copies
+# its days before 2026-10-24 from.
 resource "google_bigquery_data_transfer_config" "logs_daily" {
   display_name         = "${var.namespace}-logs-daily"
   location             = local.bigquery_location
   data_source_id       = "scheduled_query"
   schedule             = "every day 02:00"
   service_account_name = google_service_account.logs_daily.email
+  disabled             = var.analytics_dbt_schedule_enabled
 
   params = {
     query = templatefile("${path.module}/sql/logs_daily.sql", {
