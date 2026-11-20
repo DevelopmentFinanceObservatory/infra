@@ -42,9 +42,10 @@ locals {
   bigquery_location = "EU"
 }
 
-# The reporting readers (reporting.tf) and alert recipients (alerts.tf), read
-# from a hand-made secret. The module holds the rules and this stack's schema,
-# and scripts/bootstrap-principals.sh writes it.
+# The reporting readers (reporting.tf), analytics developers (analytics.tf) and
+# alert recipients (alerts.tf), read from a hand-made secret. The module holds
+# the rules and this stack's schema, and scripts/bootstrap-principals.sh
+# writes it.
 module "principals" {
   source = "../../modules/principals-secret"
 
@@ -55,4 +56,46 @@ module "principals" {
 
 locals {
   principals = module.principals.principals
+}
+
+# Readers and analytics developers both run BigQuery jobs, and a project
+# binding is one per member and role, so roles/bigquery.jobUser is granted
+# once per label over the union of the two objects. A person in both carries
+# the same label in each, so removing them from one object leaves the label,
+# and the grant, in place while the other still lists them. The precondition
+# refuses a label that names two members and a member under two labels, either
+# of which would put one binding under two instances, where destroying one
+# revokes the other.
+locals {
+  people_job_user_principals = {
+    for label in setunion(nonsensitive(keys(local.principals.readers)), nonsensitive(keys(local.principals.analytics_developers))) :
+    label => try(local.principals.readers[label], local.principals.analytics_developers[label])
+  }
+
+  people_job_user_labels_consistent = nonsensitive(alltrue([
+    for label, member in local.principals.analytics_developers :
+    contains(keys(local.principals.readers), label) ? local.principals.readers[label] == member : !contains(values(local.principals.readers), member)
+  ]))
+}
+
+resource "google_project_iam_member" "people_job_user" {
+  for_each = local.people_job_user_principals
+
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = each.value
+
+  lifecycle {
+    precondition {
+      condition     = local.people_job_user_labels_consistent
+      error_message = "A member listed in both readers and analytics_developers must carry the same label in each, and a label in both must name the same member."
+    }
+  }
+}
+
+# The readers' grants were reporting_readers_job_user in reporting.tf, keyed
+# by the same labels, so their live bindings move with no change.
+moved {
+  from = google_project_iam_member.reporting_readers_job_user
+  to   = google_project_iam_member.people_job_user
 }

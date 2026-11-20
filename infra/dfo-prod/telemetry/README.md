@@ -1,6 +1,6 @@
 # telemetry (prod)
 
-Prod's telemetry plumbing in BigQuery, which the team dashboard reads through the `dfo_reporting` dataset. The stack routes Cloud Run logs into a Log Analytics bucket, holds a one-off copy of the Cloud Run logs from before that route started, aggregates both daily into `logs_daily`, holds the dataset Search Console exports into, builds the reporting views in `dfo_reporting`, and grants readers access to it. The `.tf` files, `ga4_user_ranges.yaml` and the `sql` directory are symlinks to `infra/stacks/telemetry`. This directory holds prod's backend, tfvars, and lock file. The stack exists in prod only.
+Prod's telemetry plumbing in BigQuery, which the team dashboard reads through the `dfo_reporting` dataset. The stack routes Cloud Run logs into a Log Analytics bucket, holds a one-off copy of the Cloud Run logs from before that route started, aggregates both daily into `logs_daily`, holds the dataset Search Console exports into, builds the reporting views in `dfo_reporting`, grants readers access to it, and holds the datasets and accounts of the analytics repository's dbt project. The `.tf` files, `ga4_user_ranges.yaml` and the `sql` directory are symlinks to `infra/stacks/telemetry`. This directory holds prod's backend, tfvars, and lock file. The stack exists in prod only.
 
 Every dataset is in the EU multi-region. Every dataset-level grant is a `google_bigquery_dataset_access`, and no dataset declares `access` blocks. Authoritative blocks, or `google_bigquery_dataset_iam_*` resources, would remove the other entries on the next apply, including the authorised-view entries the reporting views need on their sources.
 
@@ -8,7 +8,7 @@ Every dataset is in the EU multi-region. Every dataset-level grant is a `google_
 
 The sink `dfo-prod-telemetry` copies every `cloud_run_revision` and `cloud_run_job` entry from the `run.googleapis.com/requests`, `stdout` and `stderr` logs into the bucket `dfo-prod-telemetry` in `eu`, which keeps them for `log_retention_days` (365, set in `env.auto.tfvars`). The `_Default` bucket also receives the same entries. The filter names resource types and log ids, so a new or renamed service is routed with no change here. It leaves out the website's usage-event lines (`jsonPayload.message="event"` on `dfo-prod-website`'s stdout). They repeat the Postgres `event` table, which is the events source the website export copies, and their props carry the first 500 characters of each search query.
 
-The bucket's linked dataset `dfo_logs` exposes the entries to BigQuery as the view `dfo_logs._AllLogs`. The entries hold request IPs and user agents. BigQuery roles decide who can read them. The `dfo-prod-logs-daily` service account reads `dfo_logs` through its dataset grant. Any principal with a project-level BigQuery data role reads it too. Those are the applier (`roles/bigquery.dataOwner`), `dfo-prod-dc-ing-pst-sa` (`roles/bigquery.dataEditor`), and the project owners. If the linked dataset carries BigQuery's default `projectWriters` and `projectReaders` entries, as datasets Terraform creates here do, the project's editors and viewers read it as well. Those are the default compute service account and the Google APIs service agent (`roles/editor`) and `dfo-infra-planner` (`roles/viewer`).
+The bucket's linked dataset `dfo_logs` exposes the entries to BigQuery as the view `dfo_logs._AllLogs`. The entries hold request IPs and user agents. BigQuery roles decide who can read them. The `dfo-prod-logs-daily` service account reads `dfo_logs` through its dataset grant, and so do `dfo-prod-analytics-ci`, `dfo-prod-analytics-runner` and the analytics developers ("Analytics repo"). Any principal with a project-level BigQuery data role reads it too. Those are the applier (`roles/bigquery.dataOwner`), `dfo-prod-dc-ing-pst-sa` (`roles/bigquery.dataEditor`), and the project owners. If the linked dataset carries BigQuery's default `projectWriters` and `projectReaders` entries, as datasets Terraform creates here do, the project's editors and viewers read it as well. Those are the default compute service account and the Google APIs service agent (`roles/editor`) and `dfo-infra-planner` (`roles/viewer`).
 
 A sink routes only entries written after it exists, and this one routes every entry only from about 18:50 UTC on 2026-10-23. `logs_daily` therefore reads `dfo_logs` from a cut-off of 2026-10-23 19:00:00 UTC, and the backfill below before it.
 
@@ -328,22 +328,54 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 
 `edge_logs.tf` creates `dfo-prod-edge-logs-prod-fin-observatory`, the bucket the edge-logs stack's Cloudflare Logpush job writes dataset-read request lines to, one gzipped NDJSON batch at a time under `http_requests/<YYYYMMDD>/`. The lines hold raw client IPs, so batches (`*.log.gz`) are deleted three days after they are written, which leaves time to repair a fault in the load into BigQuery and soft delete is off. Cloudflare's `logpush@cloudflare-data.iam.gserviceaccount.com` holds `roles/storage.objectAdmin` on the bucket. The planner holds no object grant on it, since no pull-request plan runs the edge-logs stack. Copy the `edge_logs_bucket` output into the edge-logs stack's `edge_logpush_bucket`. [`infra/dfo-prod/edge-logs/README.md`](../edge-logs/README.md) has the order to turn the job and the cache on, and [`infra/dfo-prod/edge/README.md`](../edge/README.md), "Logpush", the fields and the cost.
 
+## Analytics repo
+
+The private repository `DevelopmentFinanceObservatory/analytics` holds a dbt project that turns the raw usage data into usage metrics. Every metric's logic lives there. This stack holds only the datasets the project writes and the accounts that run it (`analytics.tf`). The project reads five source datasets: `dfo_logs`, `website_export`, `langfuse_export`, `logs_daily` and `web_history`.
+
+Each dbt target writes one EU dataset:
+
+| Dataset         | Written by                                              | Table expiration |
+| --------------- | ------------------------------------------------------- | ---------------- |
+| `analytics`     | `dfo-prod-analytics-runner`, the `prod` target          | none             |
+| `analytics_ci`  | `dfo-prod-analytics-ci`, the `ci` target                | 1 day            |
+| `analytics_dev` | analytics developers' own credentials, the `dev` target | 7 days           |
+
+`dfo-prod-analytics-ci` runs the repository's `dbt-build` CI job. `dfo-prod-analytics-runner` is for the scheduled dbt run, which has no Cloud Run job yet. Each account holds `roles/bigquery.jobUser` on the project, `WRITER` on its own dataset alone, and `READER` on the four sources. The runner writes only `analytics`, so a model the analytics repository places in another dataset with `+schema` fails at build until `analytics.tf` grants the runner `WRITER` on that dataset.
+
+The principals secret's `analytics_developers` object lists the people who build models against prod data. Each gets `roles/bigquery.jobUser` on the project, `READER` on the four sources, and `WRITER` on `analytics_dev`. `dfo_logs` holds request IPs and user agents, so a developer reads those too. Someone who only reads the dashboard belongs in `readers` instead. Every developer builds into the one `analytics_dev` dataset, so the last build of a model replaces anyone else's. The analytics repository's `DBT_BIGQUERY_DEV_DATASET` variable points a developer's build at another dataset, which needs its own grant.
+
+The CI job reaches `dfo-prod-analytics-ci` through Workload Identity Federation on the shared GitHub pool, so the account has no key. `analytics_ci_wif` admits only a run on `refs/heads/main`, keyed on `attribute.repo_ref` as `dfo-dev-sdk-e2e` is, since the account reads `dfo_logs` with its request IPs and user agents and a pull request must not mint a token for it. The `dbt-build` job queries BigQuery only on pushes to main. The pool's attribute condition admits only the repositories in `foundation`'s `github_repositories`, so the id (1464310463) sits in both stacks: the `analytics` entry in `infra/dfo-prod/foundation/env.auto.tfvars` and `analytics_repository_id` in this directory's `env.auto.tfvars`. Foundation and telemetry apply on merge. Where `analytics_repository_id` is null, the binding does not exist and the `dbt-build` job is skipped. After the apply, set the repository variables the job reads:
+
+```sh
+gh variable set GCP_WIF_PROVIDER --repo DevelopmentFinanceObservatory/analytics \
+  --body "$(terraform -chdir=infra/dfo-prod/foundation output -raw workload_identity_provider)"
+gh variable set GCP_CI_SERVICE_ACCOUNT --repo DevelopmentFinanceObservatory/analytics \
+  --body dfo-prod-analytics-ci@prod-fin-observatory.iam.gserviceaccount.com
+```
+
+The repository's `Deploy` workflow pushes its job image to the Docker repository `analytics` in Artifact Registry (`europe-west1-docker.pkg.dev/prod-fin-observatory/analytics`, output `analytics_image_repository`) as `dfo-prod-analytics-deployer`, which holds `roles/artifactregistry.writer` on that repository and no other role. The repository keeps the ten newest images and deletes older tagged ones after 30 days. `analytics_deployer_wif` admits only a job on `refs/heads/main` that declares the `production` GitHub Environment, keyed on `attribute.repo_env_ref` as `dfo-ai-deployer` is, so a pull request cannot push an image. It shares `analytics_repository_id` with the CI binding and is absent while that is null. Give the analytics repository a `production` Environment whose deployment branch policy admits main alone, and set `GCP_DEPLOY_SERVICE_ACCOUNT` to the `analytics_deployer_service_account_email` output. Nothing runs the image yet.
+
 ## Readers
 
 The principals secret's `readers` object lists the readers of `dfo_reporting` as people, each `group:` or `user:` followed by an address. Each gets `READER` on `dfo_reporting`, and `roles/bigquery.jobUser` and `roles/mcp.toolUser` on the project, and no access to `logs_daily`, `dfo_logs`, `searchconsole`, or any other source dataset.
 
+Readers and analytics developers share one `roles/bigquery.jobUser` grant per label, `people_job_user` in `main.tf`, since IAM holds one binding per member and role. A person in both objects carries the same label in each, so removing them from one keeps the role while the other lists them. Plan fails on a label that names different members in the two objects, or a member under two labels. The grant was `reporting_readers_job_user` in `reporting.tf`, and a `moved` block in `main.tf` carries the readers' live bindings over, so the plan that introduces it shows each reader's grant moved with no change, and a create only for each developer whose label is not already a reader's.
+
 ## Principals secret
 
-The readers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. `readers` holds people (`group:` or `user:` followed by an address) and `alerts` at least one bare address. A service account gets its own Terraform resource in the stack that owns it, as [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states:
+The readers, analytics developers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. `readers` and `analytics_developers` hold people (`group:` or `user:` followed by an address), and `alerts` at least one bare address. A service account gets its own Terraform resource in the stack that owns it, as [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states:
 
 ```json
 {
   "readers": { "team": "group:readers@example.org" },
+  "analytics_developers": { "dev-1": "user:dev1@example.org" },
   "alerts": { "team": "alerts@example.org" }
 }
 ```
 
 To create the secret, follow "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `prod-fin-observatory` and `dfo-prod-telemetry-principals`. To change its members, run `scripts/bootstrap-principals.sh edit prod-fin-observatory dfo-prod-telemetry-principals`. Then dispatch the apply with `--ref main` and `stack=telemetry`. That page also states the rules the secret must meet and the relabel order.
+
+Plan fails while the secret's keys differ from the schema in `infra/modules/principals-secret/schemas.json`. A PR that adds a key to the telemetry schema, such as `analytics_developers`, lands in the order "Adding a key" gives in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `scripts/bootstrap-principals.sh edit prod-fin-observatory dfo-prod-telemetry-principals` as the edit step. Between that edit and the merge, every other telemetry plan and apply on `main` fails, since `main`'s schema lacks the key, so merge promptly. Members go in with a later `edit` and apply, once the key is on `main`.
 
 ## Apply order
 
@@ -358,6 +390,7 @@ Telemetry applies after `foundation`, which lets the applier write this stack's 
 
 ## After the first apply
 
+- The analytics repository's id in both stacks and its two repository variables, as "Analytics repo" shows. The repository's `dbt-build` job is skipped until then.
 - In Search Console, under Settings, Bulk data export, a property owner of developmentfinance.org enters the project `prod-fin-observatory`, the dataset `searchconsole`, and the location EU. The first export arrives within 48 hours.
 - `dfo-prod-ga4-user-ranges` first runs at the next 06:00 UTC, and `ga4_user_ranges` is empty until then. To fill it sooner, run it by hand as "GA4 unique users" shows.
 - `dfo-prod-logs-daily` first runs at the next 02:00 UTC. To run it sooner, start a manual run from the BigQuery console's Scheduled queries page.
