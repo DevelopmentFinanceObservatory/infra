@@ -227,9 +227,9 @@ locals {
     }
     # VERIFY_PRINCIPAL is the apis stack's verify principal
     # (verify_principal.tf), which opens the share sample and the analysis
-    # verify routes alone. EXPORT_ID_HMAC_KEY is the website stack's event
-    # export key (event_export.tf), so the Job's share_digest equals the
-    # export's digest of the same shareId.
+    # verify routes alone. EXPORT_ID_HMAC_KEY is the website stack's account
+    # key (account_key.tf), which the event export also hashes with, so the
+    # Job's share_digest equals the export's digest of the same shareId.
     replay = {
       account  = google_service_account.analytics_job["replay"]
       args     = ["python", "-m", "dfo_analytics.replay"]
@@ -314,12 +314,12 @@ resource "google_storage_bucket_iam_member" "analytics_edge_logs_reader" {
 }
 
 # The caller HMAC key and the verify principal are owned by the apis stack
-# (caller_hmac_key.tf, verify_principal.tf), the export ID key by the website
-# stack (event_export.tf), and the Langfuse keys are made by hand and read by
+# (caller_hmac_key.tf, verify_principal.tf), the account key by the website
+# stack (account_key.tf), and the Langfuse keys are made by hand and read by
 # the ai stack, so each grant is on that secret alone. The edge extract mounts
 # the same caller key as the website and dfo-apis, so one client carries one
-# caller in all three. The apis stack applies before this one, and the
-# website stack has created its key wherever event_export_enabled is on.
+# caller in all three. The apis and website stacks apply before this
+# one, and the website stack creates its key in every environment.
 resource "google_secret_manager_secret_iam_member" "analytics_job_secret_accessor" {
   for_each = local.analytics_job_secret_grants
 

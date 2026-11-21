@@ -8,11 +8,12 @@
 # The exporter's identity, its Postgres user and the `website_export_reader`
 # role exist in every tier, because dfo-website's migration that runs
 # `GRANT SELECT ON "event" TO website_export_reader` runs in every tier and
-# fails if the role is missing. The dataset, key, Job and trigger exist only
-# where var.event_export_enabled is true, which is dfo-prod.
+# fails if the role is missing. The dataset, Job and trigger exist only where
+# var.event_export_enabled is true, which is dfo-prod. The hashing key is the
+# website's account key (account_key.tf), which exists in every tier.
 
 variable "event_export_enabled" {
-  description = "Creates the website_export dataset, the ID hashing key, the export Job and its hourly trigger. On in dfo-prod, off in dfo-dev. The exporter identity and its database role exist either way."
+  description = "Creates the website_export dataset, the export Job and its hourly trigger, and grants the exporter access to the ID hashing key. On in dfo-prod, off in dfo-dev. The exporter identity, its database role and the key (account_key.tf) exist either way."
   type        = bool
   default     = false
 }
@@ -167,54 +168,15 @@ resource "google_bigquery_dataset_access" "website_export_writer" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ID hashing key (dfo-prod)
+# ID hashing key access (dfo-prod)
 # ─────────────────────────────────────────────────────────────────────────────
 
-locals {
-  # Single counter for the write-only pair below. The ephemeral key regenerates
-  # every plan but only reaches the secret version when this number changes.
-  # Bump it to rotate. Rotating changes every hashed id, so rows loaded before
-  # and after no longer join (see README.md).
-  website_export_hmac_key_version = 1
-}
-
-# Alphanumeric only, following the better-auth secret pattern.
-ephemeral "random_password" "website_export_hmac_key" {
-  count = local.event_export_count
-
-  length  = 48
-  special = false
-}
-
-resource "google_secret_manager_secret" "website_export_hmac_key" {
-  count = local.event_export_count
-
-  secret_id = "${local.website_name}-export-hmac-key"
-
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "website_export_hmac_key" {
-  count = local.event_export_count
-
-  secret                 = google_secret_manager_secret.website_export_hmac_key[0].id
-  secret_data_wo         = ephemeral.random_password.website_export_hmac_key[0].result
-  secret_data_wo_version = local.website_export_hmac_key_version
-
-  lifecycle {
-    # A counter bump replaces this resource, and the replacement must exist
-    # before the old version is destroyed so the Job's pinned reference never
-    # points at nothing.
-    create_before_destroy = true
-  }
-}
-
+# The key itself lives in account_key.tf, in every tier, since the website
+# service mounts it whether or not the export runs.
 resource "google_secret_manager_secret_iam_member" "website_export_hmac_key_access" {
   count = local.event_export_count
 
-  secret_id = google_secret_manager_secret.website_export_hmac_key[0].secret_id
+  secret_id = google_secret_manager_secret.website_export_hmac_key.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = google_service_account.website_export.member
 }
@@ -294,8 +256,8 @@ resource "google_cloud_run_v2_job" "website_export" {
           name = "EXPORT_ID_HMAC_KEY"
           value_source {
             secret_key_ref {
-              secret  = google_secret_manager_secret.website_export_hmac_key[0].secret_id
-              version = google_secret_manager_secret_version.website_export_hmac_key[0].version
+              secret  = google_secret_manager_secret.website_export_hmac_key.secret_id
+              version = google_secret_manager_secret_version.website_export_hmac_key.version
             }
           }
         }

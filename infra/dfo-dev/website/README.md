@@ -135,9 +135,17 @@ The website's database is `website-staging`. Its runtime user holds CONNECT only
 
 Schema management runs through an IAM service account, the migrator: a Job's target database is only an env var its container reads, so the migrator identity is what actually keeps the Job's DDL scoped to the `website-staging` database. The migrator carries no password and nothing sits in Secret Manager. Terraform grants it CONNECT and CREATE on only its own database, plus CREATE and USAGE on that database's public schema, and grants that same schema USAGE to the runtime user too. Nothing else is granted here. USAGE lives in Terraform rather than the app's migration because a migrator-issued `GRANT USAGE ON SCHEMA public` is a no-op (the migrator holds CREATE, not ownership or grant option), so only the applier can actually grant it. The app's `db/migrations/0000_bootstrap_grants.sql` migration issues `ALTER DEFAULT PRIVILEGES` in that schema, which is what gives the runtime user DML on the tables its migrator creates, plus one global default-privileges revoke (no schema clause, by design) that strips PUBLIC's EXECUTE on every routine the migrator ever creates. Runtime and migrator account IDs are operationally fixed. Renaming the runtime account strands its table and sequence ACLs and future default grants. Renaming the migrator strands object ownership and its `pg_default_acl` records. Account rotation is deferred until Cloud SQL's required memberships and administrator path have been live-tested. A Cloud Run Job applies the migrations, driven from the website app's deploy pipeline. Connection details for the runtime user and the migrator are in the outputs. The database resources lean on `sqladmin.googleapis.com`, enabled project-wide by `platform`. This stack declares only the `compute` and `dns` APIs it consumes directly, the same borrowing `apis` records.
 
+## Account key
+
+`account_key.tf` creates the ID hashing key in every tier: the secret `dfo-dev-website-staging-export-hmac-key` here and `dfo-prod-website-export-hmac-key` in prod, each generated like the auth secret. The website service mounts it as `EXPORT_ID_HMAC_KEY`, pinned to its version, and the app uses it to HMAC the signed-in user id into the `x-dfo-account` header it sends the Studio harness (`src/lib/proxy/account.ts` in dfo-website). Without the mount the app sends no `x-dfo-account`, and the harness sees every signed-in user as anonymous. The `cloud-run-service` module grants the website's runtime service account `roles/secretmanager.secretAccessor` on it, as it does for every secret in `secret_env_vars`.
+
+The secret keeps its export name because the event export, where it runs, hashes user ids with the same key and version, so a Studio account digest equals the exported user hash. Each tier has its own key, so digests from dev and prod do not match.
+
+Rotating the key means bumping `website_export_hmac_key_version`. The website service and, where it exists, the export Job take the new version in the same apply, so every Studio account digest and every exported user hash change together. Only the days the next export run reloads carry the new hashes, so a rotation in prod also needs the `event` table dropped for a full reload.
+
 ## Event export
 
-`event_export.tf` builds the exporter that copies the website database's `event` table into the BigQuery dataset `website_export` (EU multi-region) every hour, as dfo-website's `node dist/export-events.cjs`. Visitor and user ids leave Postgres only as HMAC-SHA256 under `EXPORT_ID_HMAC_KEY`, and no free text leaves at all. The job creates its own `event` table; Terraform owns the dataset and its grants only.
+`event_export.tf` builds the exporter that copies the website database's `event` table into the BigQuery dataset `website_export` (EU multi-region) every hour, as dfo-website's `node dist/export-events.cjs`. Visitor and user ids leave Postgres only as HMAC-SHA256 under `EXPORT_ID_HMAC_KEY`, the account key, and no free text leaves at all. The job creates its own `event` table; Terraform owns the dataset and its grants only.
 
 Every tier gets the exporter's identity and database access, because dfo-website's migration that runs `GRANT SELECT ON "event" TO website_export_reader` runs in every tier. The identity is the service account `dfo-dev-website-stg-export` (`dfo-prod-website-export` in prod), its IAM database user, and the same `roles/cloudsql.client` and login-only pair the runtime user holds. Two provision scripts create the NOLOGIN role `website_export_reader` if it is absent, grant it CONNECT on the website database and USAGE on its public schema, and make the exporter user a member. Every privilege sits on the role, so the exporter can read exactly what dfo-website's migrations grant that role. Postgres roles are instance-wide, and each instance hosts one website database, so one role name serves every tier.
 
@@ -145,15 +153,12 @@ Only `infra/dfo-prod/website/env.auto.tfvars` sets `event_export_enabled = true`
 
 - the `website_export` dataset, with `WRITER` for the exporter through `google_bigquery_dataset_access` and no `access` blocks, which would drop the grants such resources add here and in the telemetry stack;
 - `roles/bigquery.jobUser` on the project for the exporter;
-- the secret `dfo-prod-website-export-hmac-key`, generated like the auth secret and mounted pinned to its version;
-- the website service mounting the same secret as `EXPORT_ID_HMAC_KEY`, pinned to the same version, which the app uses to HMAC the signed-in user id into the `x-dfo-account` header it sends the Studio harness;
-- the Job `dfo-prod-website-export`, on the service's PSC network with the service's `WEBSITE_DB_*` settings and the exporter as `WEBSITE_DB_USER`, plus `EXPORT_BQ_PROJECT`, `EXPORT_BQ_DATASET` and `EXPORT_ID_HMAC_KEY`;
+- `roles/secretmanager.secretAccessor` for the exporter on the account key (see "Account key");
+- the Job `dfo-prod-website-export`, on the service's PSC network with the service's `WEBSITE_DB_*` settings and the exporter as `WEBSITE_DB_USER`, plus `EXPORT_BQ_PROJECT`, `EXPORT_BQ_DATASET` and `EXPORT_ID_HMAC_KEY`, the account key pinned to the version the website service mounts;
 - an hourly Cloud Scheduler trigger whose own service account holds `roles/run.invoker` on the Job alone;
 - `roles/run.developer` on the Job and `roles/iam.serviceAccountUser` on the exporter for the website deployer.
 
 The Job bootstraps from `gcr.io/cloudrun/hello`, which has no `node`, so an execution before dfo-website's deploy moves the image fails. The deploy finds the Job through `EXPORT_JOB_WEBSITE`, which `scripts/handoff.sh dfo-prod website` writes from the `export_job_name` output. Executions have a 30-minute timeout and no retry, since the next hourly run replaces the same days.
-
-Rotating the hashing key means bumping `website_export_hmac_key_version`. The Job and the website service take the new version in the same apply, so every exported user hash and every Studio account digest change together. Only the days the next run reloads carry the new hashes, so a rotation also needs the `event` table dropped for a full reload.
 
 ## Internal engineering accounts
 
