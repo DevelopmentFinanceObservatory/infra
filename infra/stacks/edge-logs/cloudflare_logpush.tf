@@ -24,9 +24,11 @@ locals {
   edge_logpush_destination = "gs://${coalesce(var.edge_logpush_bucket, "unset")}/http_requests/{DATE}"
 
   # Request headers logged through the custom fields below, in lower case as
-  # Cloudflare requires. Origin names the site a browser read came from, and
-  # x-dfo-client the SDK or tool that sent it.
-  edge_logpush_request_headers = ["origin", "x-dfo-client"]
+  # Cloudflare requires. Origin names the site a browser read came from,
+  # x-dfo-client the SDK or tool that sent it, and sec-fetch-site whether the
+  # read came from a developmentfinance.org page, which the website proxy uses
+  # to tell website reads from API reads.
+  edge_logpush_request_headers = ["origin", "x-dfo-client", "sec-fetch-site"]
 
   # GET on either dataset prefix, from any host. The Logpush filter has no
   # case-insensitive operator
