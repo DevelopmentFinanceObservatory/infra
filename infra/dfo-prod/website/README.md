@@ -6,6 +6,8 @@ Prod's copy of the website stack: the `dfo-prod-website` Cloud Run service, its 
 
 Website applies last, after `foundation`, `platform`, `dcp`, `apis`, and `ai`. It reads the `apis` stack's `dfo-prod-datasets-pin-principal` secret and the `ai` stack's `dfo-prod-studio-api-token` and `dfo-prod-mcp-api-token` secrets, and plan fails until they exist. It also grants its runtime account `roles/run.invoker` on `dfo-prod-apis`, so apply fails until that service exists. The service also mounts the `apis` stack's `dfo-prod-live-refresh-principal`, `dfo-prod-caller-principal`, and `dfo-prod-caller-hmac-key`, and a revision fails to start until they exist. The caller HMAC key was this stack's `dfo-prod-website-caller-hmac-key` until it moved to `apis`, and the apply that destroys the old secret here needs the `allow-destroy` label on its pull request. The new key is a fresh value, so every visitor's `ip:` caller id changes once. After a rotation in `apis`, this service keeps the old key until it takes a new revision. The commented lines in `env.auto.tfvars` take values from those stacks' outputs.
 
+The service also mounts `dfo-prod-website-export-hmac-key` as `EXPORT_ID_HMAC_KEY`, pinned to the version the export Job uses. The app HMACs the user id with it into the `x-dfo-account` header it sends the Studio harness, and the export Job hashes user ids with the same key. Rotating it (`website_export_hmac_key_version`) changes every exported user hash and every Studio account digest together.
+
 ## Made by hand first
 
 The six sign-in secrets, each with at least one version, since a secret with no version passes plan and then stops the revision from starting:
@@ -47,6 +49,19 @@ gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref m
 ## Event export
 
 `env.auto.tfvars` sets `event_export_enabled = true` (`infra/dfo-dev/website/README.md`, "Event export"). Apply this stack before the dfo-website deploy that carries the migration granting `SELECT` on `event` to `website_export_reader`, since that migration fails while the role is missing. Then run `scripts/handoff.sh dfo-prod website`, which writes `EXPORT_JOB_WEBSITE`, so the deploy moves the Job to the website image.
+
+## Internal engineering accounts
+
+The stack creates `dfo-prod-website-internal-eng-emails` with a first version holding the literal `none`, which marks nobody, so every event carries `internal_eng: false` until the real list is added. The list names staff, so it never appears in this repository. After the prod apply, add the list as a new version holding every entry, then roll a new revision, since running instances keep the value they started with and `min_instances = 1` keeps one running. A list change reaches new events only. The entries below are placeholders:
+
+```
+printf '%s' 'eng@example.org,example.net' | gcloud secrets versions add dfo-prod-website-internal-eng-emails \
+  --project prod-fin-observatory --data-file=-
+gcloud run services update dfo-prod-website --project prod-fin-observatory \
+  --region europe-west1 --update-labels=internal-eng-emails-rotated=$(date +%Y%m%d%H%M)
+```
+
+Dispatching the website's production deploy (`gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main`) also rolls a revision. `infra/dfo-dev/website/README.md` ("Internal engineering accounts") explains the mount and the list format in full.
 
 ## Share migration
 

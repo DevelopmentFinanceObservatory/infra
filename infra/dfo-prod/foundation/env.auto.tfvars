@@ -6,12 +6,13 @@ namespace       = "dfo-prod"
 github_owner    = "DevelopmentFinanceObservatory"
 github_owner_id = "305725777"
 github_repositories = {
-  infra   = { name = "infra", id = "1401633456" }
-  ai      = { name = "ai", id = "1401633727", deploy_environment = "production", deploy_branch = "main" }
-  apis    = { name = "apis", id = "1401633649", deploy_environment = "production", deploy_branch = "main" }
-  dcp     = { name = "dcp", id = "1431071058", deploy_environment = "production", deploy_branch = "main" }
-  website = { name = "website", id = "1401633828", deploy_environment = "production", deploy_branch = "main" }
-  docs    = { name = "docs", id = "1401634043", deploy_branch = "main" }
+  infra     = { name = "infra", id = "1401633456" }
+  ai        = { name = "ai", id = "1401633727", deploy_environment = "production", deploy_branch = "main" }
+  apis      = { name = "apis", id = "1401633649", deploy_environment = "production", deploy_branch = "main" }
+  dcp       = { name = "dcp", id = "1431071058", deploy_environment = "production", deploy_branch = "main" }
+  website   = { name = "website", id = "1401633828", deploy_environment = "production", deploy_branch = "main" }
+  docs      = { name = "docs", id = "1401634043", deploy_branch = "main" }
+  analytics = { name = "analytics", id = "1464310463" }
 }
 website_deployer_account_id    = "dfo-website-deployer"
 website_artifact_repository_id = "dfo-website"

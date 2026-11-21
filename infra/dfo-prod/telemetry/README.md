@@ -1,6 +1,6 @@
 # telemetry (prod)
 
-Prod's telemetry plumbing in BigQuery, which the team dashboard reads through the `dfo_reporting` dataset. The stack routes Cloud Run logs into a Log Analytics bucket, holds a one-off copy of the Cloud Run logs from before that route started, aggregates both daily into `logs_daily`, holds the dataset Search Console exports into, builds the reporting views in `dfo_reporting`, and grants readers access to it. The `.tf` files, `ga4_user_ranges.yaml` and the `sql` directory are symlinks to `infra/stacks/telemetry`. This directory holds prod's backend, tfvars, and lock file. The stack exists in prod only.
+Prod's telemetry plumbing in BigQuery, which the team dashboard reads through the `dfo_reporting` dataset. The stack routes Cloud Run logs into a Log Analytics bucket, holds a one-off copy of the Cloud Run logs from before that route started, aggregates both daily into `logs_daily`, holds the dataset Search Console exports into, builds the reporting views in `dfo_reporting`, grants readers access to it, and holds the datasets, accounts and scheduled Jobs of the analytics repository. The `.tf` files, `ga4_user_ranges.yaml` and the `sql` directory are symlinks to `infra/stacks/telemetry`. This directory holds prod's backend, tfvars, and lock file. The stack exists in prod only.
 
 Every dataset is in the EU multi-region. Every dataset-level grant is a `google_bigquery_dataset_access`, and no dataset declares `access` blocks. Authoritative blocks, or `google_bigquery_dataset_iam_*` resources, would remove the other entries on the next apply, including the authorised-view entries the reporting views need on their sources.
 
@@ -8,7 +8,7 @@ Every dataset is in the EU multi-region. Every dataset-level grant is a `google_
 
 The sink `dfo-prod-telemetry` copies every `cloud_run_revision` and `cloud_run_job` entry from the `run.googleapis.com/requests`, `stdout` and `stderr` logs into the bucket `dfo-prod-telemetry` in `eu`, which keeps them for `log_retention_days` (365, set in `env.auto.tfvars`). The `_Default` bucket also receives the same entries. The filter names resource types and log ids, so a new or renamed service is routed with no change here. It leaves out the website's usage-event lines (`jsonPayload.message="event"` on `dfo-prod-website`'s stdout). They repeat the Postgres `event` table, which is the events source the website export copies, and their props carry the first 500 characters of each search query.
 
-The bucket's linked dataset `dfo_logs` exposes the entries to BigQuery as the view `dfo_logs._AllLogs`. The entries hold request IPs and user agents. BigQuery roles decide who can read them. The `dfo-prod-logs-daily` service account reads `dfo_logs` through its dataset grant. Any principal with a project-level BigQuery data role reads it too. Those are the applier (`roles/bigquery.dataOwner`), `dfo-prod-dc-ing-pst-sa` (`roles/bigquery.dataEditor`), and the project owners. If the linked dataset carries BigQuery's default `projectWriters` and `projectReaders` entries, as datasets Terraform creates here do, the project's editors and viewers read it as well. Those are the default compute service account and the Google APIs service agent (`roles/editor`) and `dfo-infra-planner` (`roles/viewer`).
+The bucket's linked dataset `dfo_logs` exposes the entries to BigQuery as the view `dfo_logs._AllLogs`. The entries hold request IPs and user agents. BigQuery roles decide who can read them. The `dfo-prod-logs-daily` service account reads `dfo_logs` through its dataset grant, and so do `dfo-prod-analytics-ci`, `dfo-prod-analytics-runner` and the analytics developers ("Analytics repo"). Any principal with a project-level BigQuery data role reads it too. Those are the applier (`roles/bigquery.dataOwner`), `dfo-prod-dc-ing-pst-sa` (`roles/bigquery.dataEditor`), and the project owners. If the linked dataset carries BigQuery's default `projectWriters` and `projectReaders` entries, as datasets Terraform creates here do, the project's editors and viewers read it as well. Those are the default compute service account and the Google APIs service agent (`roles/editor`) and `dfo-infra-planner` (`roles/viewer`).
 
 A sink routes only entries written after it exists, and this one routes every entry only from about 18:50 UTC on 2026-10-23. `logs_daily` therefore reads `dfo_logs` from a cut-off of 2026-10-23 19:00:00 UTC, and the backfill below before it.
 
@@ -55,7 +55,7 @@ The run's progress shows on the BigQuery console's Scheduled queries page. The d
 
 ## logs_daily
 
-The scheduled query `dfo-prod-logs-daily` runs `sql/logs_daily.sql` at 02:00 UTC every day as `dfo-prod-logs-daily`. It reads `logs_daily.entries`, which is `dfo_logs` from the cut-off on and `backfill_entries` before it. It creates the six tables if they are missing and writes them in one transaction:
+The scheduled query `dfo-prod-logs-daily` runs `sql/logs_daily.sql` at 02:00 UTC every day as `dfo-prod-logs-daily`, until `analytics_dbt_schedule_enabled` disables it and the analytics dbt Job takes over ("Analytics jobs"). It reads `logs_daily.entries`, which is `dfo_logs` from the cut-off on and `backfill_entries` before it. It creates the six tables if they are missing and writes them in one transaction:
 
 - `requests_daily`: requests per day and service, with 4xx and 5xx counts and approximate p50, p95 and p99 latency in milliseconds.
 - `routes_daily`: the same per day, service, method and route.
@@ -125,13 +125,23 @@ A share id made only of lower-case letters keeps its value, since nothing in its
 Each address in the principals secret's `alerts` object gets its own Cloud Monitoring email channel, named by its label, and every alert in this stack notifies all of them. Seven policies watch the data pipeline the dashboard reads:
 
 - `logs_daily scheduled query failed` fires when a run logs an error against the config, or when the Data Transfer Service counts a run as `FAILED`. A run that keeps failing for longer than the bucket's retention loses those days for good.
-- `logs_daily scheduled query not succeeding` fires when the config has no succeeded run in the last 26 hours of stored data, including a paused, disabled, or deleted config, which completes no run and so trips neither failure condition. The Data Transfer Service writes zero-valued `SUCCEEDED` points, so the query sums the succeeded runs over the window and also tests for absence. A PromQL condition evaluates it every 5 minutes over stored data, because an absence condition cannot watch a once-a-day success. A config with no success in the 26 hours before the policy exists, such as a newly created config, alerts within minutes, and the incident closes after its first success. It is its own policy with a seven-day auto-close.
+- `logs_daily scheduled query not succeeding`, which exists while `analytics_dbt_schedule_enabled` is false, fires when the config has no succeeded run in the last 26 hours of stored data, including a paused, disabled, or deleted config, which completes no run and so trips neither failure condition. The Data Transfer Service writes zero-valued `SUCCEEDED` points, so the query sums the succeeded runs over the window and also tests for absence. A PromQL condition evaluates it every 5 minutes over stored data, because an absence condition cannot watch a once-a-day success. A config with no success in the 26 hours before the policy exists, such as a newly created config, alerts within minutes, and the incident closes after its first success. It is its own policy with a seven-day auto-close.
 - `dfo-prod-website-export Job execution failed` fires when an execution of the website's hourly event export Job fails.
 - `dfo-prod-langfuse-export Job execution failed` fires when an execution of the ai stack's hourly Langfuse export Job fails. Langfuse Cloud keeps observations for a limited time, so a long run of failures loses data.
 - `dfo-prod-website-export Job not succeeding` and `dfo-prod-langfuse-export Job not succeeding` fire when a Job has no succeeded execution for three hours. They catch what the failure policies cannot see: a paused or failing Scheduler trigger, a renamed or deleted Job, or every run failing. Each is its own policy with a seven-day auto-close, since a shorter timer would close the incident while no execution succeeds.
 - `dfo-prod-ga4-user-ranges workflow execution failed` fires when an execution of the daily GA4 range pull fails, scheduled or run by hand. It reads Workflows' `workflows.googleapis.com/finished_execution_count` with `status="FAILED"`. A paused Scheduler trigger starts no execution and trips nothing, and `fetched_at` in `ga4_user_ranges` then stops moving.
 
-The four Job policies read Cloud Run's `run.googleapis.com/job/completed_execution_count`, with `result="failed"` or `result="succeeded"`, filtered by job name. The Jobs belong to the website and ai stacks, and this stack names them by their fixed names. A Job not yet created has no series, so its policies stay quiet, and the absence policy starts watching after the Job's first succeeded execution, since Cloud Monitoring needs one measurement before a series can go absent.
+With `analytics_jobs_enabled` on, `analytics_jobs.tf` adds twelve more, and three once `analytics_dbt_schedule_enabled` is on too:
+
+- `dfo-prod-analytics-edge Job not succeeding` fires when the edge extract has no succeeded execution for three hours, and `dfo-prod-analytics-dbt Job not succeeding` and `dfo-prod-analytics-freshness Job not succeeding` do the same for the dbt build and the freshness check once `analytics_dbt_schedule_enabled` gives them triggers. A single failed dbt or edge run raises nothing, since the next run retries it: the dbt build replaces the last three days, and the extract reads each object for three days after it lands. A failed freshness run alerts through its own failure policy below. Each has a seven-day auto-close.
+- `dfo-prod-analytics-grade Job execution failed` fires when an execution of the daily grader fails, since its retry is a day away.
+- `dfo-prod-analytics-grade Job not succeeding` fires when the grader has no succeeded execution in the last 26 hours, a PromQL condition built as the logs_daily one is. It alerts within minutes of the flag going on and closes after the Job's first success.
+- `dfo-prod-analytics-edge lost rejected, unreadable or deleted objects` fires when the edge extract's `run summary:` line, its last stdout line, carries `rejected=`, `unreadable=` or `deleted=` above zero. The log-based metric `dfo-prod-analytics-edge-objects-lost` counts those lines with the filter `textPayload=~"^run summary: .* (rejected|unreadable|deleted)=[1-9]"` on the edge Job, as the analytics repository's README documents. Each such object's deliveries are lost: a rejected one was named in `EDGE_REJECT_OBJECTS`, an unreadable one could not be decompressed or exceeded 256 MiB, and a deleted one left the bucket between the listing and the read. The run itself succeeds, so no Job policy sees it.
+- `dfo-prod-analytics-freshness Job execution failed` fires when an hourly `dbt source freshness` run fails, which means a source the dbt build reads is older than the error threshold the analytics repository's `dbt/models/sources.yml` sets for it.
+- `dfo-prod-analytics-repos Job execution failed`, `dfo-prod-analytics-lighthouse Job execution failed`, `dfo-prod-analytics-replay Job execution failed` and `dfo-prod-analytics-citations Job execution failed` fire when an execution of a probe fails, since its retry is a week or a month away. A probe whose trigger stops firing fails no run, which the next policy catches.
+- `dfo-prod-analytics-repos Job not succeeding`, `dfo-prod-analytics-lighthouse Job not succeeding` and `dfo-prod-analytics-replay Job not succeeding` fire when a weekly probe has no succeeded execution in 192 hours, and `dfo-prod-analytics-citations Job not succeeding` when the monthly probe has none in 840 hours. Each is a PromQL condition built as the grade one is, so it catches a paused trigger or a deleted Job without the freshness Job. It exists only once its probe is switched on in `analytics_probes_enabled`, after a canary execution has succeeded, and closes after the probe's next success. Cloud Monitoring lets a PromQL condition that looks back 8 to 16 days evaluate hourly at most, and one that looks back 32 to 93 days every 6 hours, so the three weekly alerts evaluate every 3600 seconds and the citation alert every 21600 seconds. Each has a seven-day auto-close.
+
+The Job policies read Cloud Run's `run.googleapis.com/job/completed_execution_count`, with `result="failed"` or `result="succeeded"`, filtered by job name. The Jobs belong to the website and ai stacks, and this stack names them by their fixed names. A Job not yet created has no series, so its policies stay quiet, and the absence policy starts watching after the Job's first succeeded execution, since Cloud Monitoring needs one measurement before a series can go absent.
 
 ## Search Console
 
@@ -277,7 +287,9 @@ It prints the execution's result, the number of requests and the `MERGE` job's i
 
 The `_sketch` columns other than `latency_sketch` are HLL++ sketches (`HLL_COUNT.INIT(x, 14)`), so distinct visitors, users, accounts, sessions, MCP callers and website callers over any set of rows come from `HLL_COUNT.MERGE` over those rows, and no id or hash of one reaches `dfo_reporting`. `ga4_daily`'s `users_sketch` holds the active users' `user_pseudo_id` values on export days and is NULL on history days, so a merge over a window reaching before the export counts only its export days, and `ga4_user_ranges` covers those windows (see "GA4 unique users"). The other figures sum across rows, except quantiles and active users, which hold for their own row only. GA4 sessions sum across days but not across pages, and a session that crosses midnight counts on both days, so a sum over several days runs slightly high.
 
-The service views, `website_requests_daily` and `mcp_daily` read `logs_daily`, and `deploys` keeps only the revisions deployed while the logs source ran (`before_source` false), which are the deploy markers.
+The service views, `website_requests_daily`, `website_page_views_daily` and `mcp_daily` read `logs_daily`, and `deploys` keeps only the revisions deployed while the logs source ran (`before_source` false), which are the deploy markers.
+
+`analytics_dbt_schedule_enabled` disables the `dfo-prod-logs-daily` scheduled query, so the `logs_daily` tables stop growing under it. Under the same switch those seven views read the analytics dbt build's tables in `analytics` instead, and their authorised-view entries move from `logs_daily` and `web_history` to `analytics`. Each view reads the table of the same name: `requests_daily`, `routes_daily`, `errors_daily`, `mcp_daily`, `website_requests_daily`, `website_page_views_daily` and `deploys`. Those tables carry the columns and types the views select. `website_page_views_daily` then reads `analytics.website_page_views_daily`, which the build makes with the rule below, through `sql/reporting/website_page_views_daily_analytics.sql`. Step 6 of "Switching the Jobs on" checks that the two sources agree before the switch.
 
 `website_page_views_daily` counts the website's page views per day: requests of kind `page` answered 2xx, from visitors the website did not judge to be bots in `page_views` and from bots in `bot_page_views`. From the request log's first parsed day, the first day on which `logs_daily.website_requests_daily` holds a row other than `unparsed`, it sums those rows. Before that day it reads `web_history.website_page_history` (see "Website page views before the request log"), which counts the public hosts only, while the request log counts every host the service answers. The seam is read from the request log inside the view, so no day is counted twice, and a day such as 2026-10-23, which holds only unparsed lines, keeps its history row. A later day holding only unparsed lines has no row. The view has no callers sketch, since the history cannot rebuild the website's caller digest, so distinct networks come from `website_requests_daily` and start on its first parsed day.
 
@@ -328,22 +340,207 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 
 `edge_logs.tf` creates `dfo-prod-edge-logs-prod-fin-observatory`, the bucket the edge-logs stack's Cloudflare Logpush job writes dataset-read request lines to, one gzipped NDJSON batch at a time under `http_requests/<YYYYMMDD>/`. The lines hold raw client IPs, so batches (`*.log.gz`) are deleted three days after they are written, which leaves time to repair a fault in the load into BigQuery and soft delete is off. Cloudflare's `logpush@cloudflare-data.iam.gserviceaccount.com` holds `roles/storage.objectAdmin` on the bucket. The planner holds no object grant on it, since no pull-request plan runs the edge-logs stack. Copy the `edge_logs_bucket` output into the edge-logs stack's `edge_logpush_bucket`. [`infra/dfo-prod/edge-logs/README.md`](../edge-logs/README.md) has the order to turn the job and the cache on, and [`infra/dfo-prod/edge/README.md`](../edge/README.md), "Logpush", the fields and the cost.
 
+## Analytics repo
+
+The private repository `DevelopmentFinanceObservatory/analytics` holds a dbt project that turns the raw usage data into usage metrics. Every metric's logic lives there. This stack holds only the datasets the project writes and the accounts that run it (`analytics.tf`). The project reads eleven source datasets: `dfo_logs`, `website_export`, `langfuse_export`, `logs_daily`, `web_history`, `edge_export`, `studio_grades`, `repo_search`, `lighthouse`, `replay_probe` and `citation_probe`. The last six are written by the repository's own Python jobs ("Analytics jobs").
+
+Each dbt target writes one EU dataset:
+
+| Dataset         | Written by                                              | Table expiration |
+| --------------- | ------------------------------------------------------- | ---------------- |
+| `analytics`     | `dfo-prod-analytics-runner`, the `prod` target          | none             |
+| `analytics_ci`  | `dfo-prod-analytics-ci`, the `ci` target                | 1 day            |
+| `analytics_dev` | analytics developers' own credentials, the `dev` target | 7 days           |
+
+`dfo-prod-analytics-ci` runs the repository's `dbt-build` CI job. `dfo-prod-analytics-runner` runs the scheduled dbt build, the `dfo-prod-analytics-dbt` Job. Each account holds `roles/bigquery.jobUser` on the project, `WRITER` on its own dataset alone, and `READER` on the eleven sources. The runner writes only `analytics`, so a model the analytics repository places in another dataset with `+schema` fails at build until `analytics.tf` grants the runner `WRITER` on that dataset.
+
+The principals secret's `analytics_developers` object lists the people who build models against prod data. Each gets `roles/bigquery.jobUser` on the project, `READER` on the eleven sources, and `WRITER` on `analytics_dev`. `dfo_logs` holds request IPs and user agents, so a developer reads those too. Someone who only reads the dashboard belongs in `readers` instead. Every developer builds into the one `analytics_dev` dataset, so the last build of a model replaces anyone else's. The analytics repository's `DBT_BIGQUERY_DEV_DATASET` variable points a developer's build at another dataset, which needs its own grant.
+
+The CI job reaches `dfo-prod-analytics-ci` through Workload Identity Federation on the shared GitHub pool, so the account has no key. `analytics_ci_wif` admits only a run on `refs/heads/main`, keyed on `attribute.repo_ref` as `dfo-dev-sdk-e2e` is, since the account reads `dfo_logs` with its request IPs and user agents and a pull request must not mint a token for it. The `dbt-build` job queries BigQuery only on pushes to main. The pool's attribute condition admits only the repositories in `foundation`'s `github_repositories`, so the id (1464310463) sits in both stacks: the `analytics` entry in `infra/dfo-prod/foundation/env.auto.tfvars` and `analytics_repository_id` in this directory's `env.auto.tfvars`. Foundation and telemetry apply on merge. Where `analytics_repository_id` is null, the binding does not exist and the `dbt-build` job is skipped. After the apply, set the repository variables the job reads:
+
+```sh
+gh variable set GCP_WIF_PROVIDER --repo DevelopmentFinanceObservatory/analytics \
+  --body "$(terraform -chdir=infra/dfo-prod/foundation output -raw workload_identity_provider)"
+gh variable set GCP_CI_SERVICE_ACCOUNT --repo DevelopmentFinanceObservatory/analytics \
+  --body dfo-prod-analytics-ci@prod-fin-observatory.iam.gserviceaccount.com
+```
+
+The repository's `Deploy` workflow pushes its job image to the Docker repository `analytics` in Artifact Registry (`europe-west1-docker.pkg.dev/prod-fin-observatory/analytics`, output `analytics_image_repository`) as `dfo-prod-analytics-deployer`, which holds `roles/artifactregistry.writer` on that repository and, with `analytics_jobs_enabled` on, the grants that move the Jobs to a new image ("Analytics jobs"). The repository keeps the ten newest images and deletes older tagged ones after 30 days. `analytics_deployer_wif` admits only a job on `refs/heads/main` that declares the `production` GitHub Environment, keyed on `attribute.repo_env_ref` as `dfo-ai-deployer` is, so a pull request cannot push an image. It shares `analytics_repository_id` with the CI binding and is absent while that is null. Give the analytics repository a `production` Environment whose deployment branch policy admits main alone, and set `GCP_DEPLOY_SERVICE_ACCOUNT` to the `analytics_deployer_service_account_email` output.
+
+## Analytics jobs
+
+Eight Cloud Run Jobs in `europe-west1` run the analytics repository's image, declared in `analytics_jobs.tf`. The image has no entrypoint, so each Job's args are its whole command line:
+
+| Job                             | Args                                                                      | Runs as                         | Schedule (UTC)            | Task timeout | Memory |
+| ------------------------------- | ------------------------------------------------------------------------- | ------------------------------- | ------------------------- | ------------ | ------ |
+| `dfo-prod-analytics-dbt`        | `dbt build --target prod`                                                 | `dfo-prod-analytics-runner`     | hourly at minute 25       | 45 minutes   | 1 GiB  |
+| `dfo-prod-analytics-edge`       | `python -m dfo_analytics.extract.edge`                                    | `dfo-prod-analytics-edge`       | hourly at minute 5        | 45 minutes   | 2 GiB  |
+| `dfo-prod-analytics-grade`      | `python -m dfo_analytics.grade`                                           | `dfo-prod-analytics-grader`     | daily at 04:30            | 60 minutes   | 1 GiB  |
+| `dfo-prod-analytics-freshness`  | `dbt source freshness --target prod --project-dir dbt --profiles-dir dbt` | `dfo-prod-analytics-runner`     | hourly at minute 50       | 15 minutes   | 1 GiB  |
+| `dfo-prod-analytics-repos`      | `python -m dfo_analytics.repos`                                           | `dfo-prod-analytics-repos`      | Mondays at 04:00          | 60 minutes   | 1 GiB  |
+| `dfo-prod-analytics-lighthouse` | `python -m dfo_analytics.lighthouse`                                      | `dfo-prod-analytics-lighthouse` | Mondays at 05:00          | 60 minutes   | 1 GiB  |
+| `dfo-prod-analytics-replay`     | `python -m dfo_analytics.replay`                                          | `dfo-prod-analytics-replay`     | Mondays at 06:00          | 60 minutes   | 1 GiB  |
+| `dfo-prod-analytics-citations`  | `python -m dfo_analytics.citations`                                       | `dfo-prod-analytics-citations`  | 1st of the month at 06:00 | 6 hours      | 1 GiB  |
+
+No Job retries a failed task, so the next scheduled run is the retry, and each timeout ends an execution before the next trigger. The edge extract runs at minute 5 so the build at minute 25 reads its load, and the freshness check at minute 50 reads the sources after both. The freshness Job exists only once `analytics_dbt_schedule_enabled` is on, since it checks the sources the scheduled build reads. The grade Job sets `GRADE_RUN_TIMEOUT_MINUTES` to 60 and its task timeout from the same number, so each run finds the last run's lease ended or lapsed. An edge object at the extract's 256 MiB cap peaks near 1.3 GiB, hence its 2 GiB. The Lighthouse probe makes 15 PageSpeed Insights calls in sequence, each up to 180 seconds with three tries, a worst case near 2.3 hours with backoff, so its timeout is 3 hours. The citation probe runs its three providers in parallel threads, each asking 60 times in sequence with each ask capped at 20 minutes; a month's run takes a few hours, and its 24-hour timeout ends only a pathological one.
+
+The edge extract writes `edge_export` and the grader `studio_grades`, two EU datasets in `analytics.tf`. The grader creates its own tables. `analytics.tf` declares the extract's three, `edge_export.deliveries`, `loaded_objects` and `runs`, whatever `analytics_jobs_enabled` says, so the first dbt build finds the sources it names. Each copies the extract's schema, partitioning and clustering exactly: `deliveries` is day-partitioned on `edge_started_at` and clustered on `spec_id`, `loaded_objects` is day-partitioned on `loaded_at`, and `runs` is unpartitioned. The extract creates a table only when it is absent, and refuses to run on one whose columns differ from its own in name, type, mode or order, so a schema change in `dfo_analytics/extract/edge.py` needs the same change here first. The tables keep deletion protection.
+
+The four probes write four more EU datasets in `analytics.tf`, each with tables Terraform declares whatever `analytics_jobs_enabled` says, since the analytics changes that add each probe build dbt models over them and the citation probe refuses to run on a missing table:
+
+| Dataset          | Written by                      | Tables                 | Source in the analytics repository                                    |
+| ---------------- | ------------------------------- | ---------------------- | --------------------------------------------------------------------- |
+| `repo_search`    | `dfo-prod-analytics-repos`      | `matches`, `runs`      | `SCHEMA`, `RUNS_SCHEMA` in `dfo_analytics/repos/job.py`               |
+| `lighthouse`     | `dfo-prod-analytics-lighthouse` | `results`, `runs`      | `RESULTS_SCHEMA`, `RUNS_SCHEMA` in `dfo_analytics/lighthouse/job.py`  |
+| `replay_probe`   | `dfo-prod-analytics-replay`     | `slot_results`, `runs` | `SLOT_RESULTS_SCHEMA`, `RUNS_SCHEMA` in `dfo_analytics/replay/job.py` |
+| `citation_probe` | `dfo-prod-analytics-citations`  | `answers`, `runs`      | `ANSWERS_SCHEMA`, `RUNS_SCHEMA` in `dfo_analytics/citations/job.py`   |
+
+Each table copies its job's schema column for column and in order, with BigQuery's legacy type names for `INT64`, `FLOAT64` and `BOOL`, and is day-partitioned on its run time column (`run_started_at` for the replay tables, `run_at` for the rest) and unclustered, as the job's own `TimePartitioning` is. A job creates a table only when it is absent and appends with its own schema, which a load job refuses where a mode differs, and the replay probe refuses to run on a table whose types or modes differ, so a schema change in the analytics repository needs the same change here first. The tables keep deletion protection.
+
+Each Job has its own account, `dfo-prod-analytics-edge`, `dfo-prod-analytics-grader`, `dfo-prod-analytics-repos`, `dfo-prod-analytics-lighthouse`, `dfo-prod-analytics-replay` and `dfo-prod-analytics-citations`, with `roles/bigquery.jobUser` on the project and `WRITER` on its dataset alone. The grader also holds `READER` on `langfuse_export`, the turns it grades. All six datasets are analytics sources, so the runner, the CI account and the analytics developers read them. The datasets, the six accounts and these grants exist whatever `analytics_jobs_enabled` says, since the analytics changes that write the datasets need them first.
+
+The edge extract reads `EDGE_LOGS_BUCKET` (`dfo-prod-edge-logs-prod-fin-observatory`, the bucket Cloudflare Logpush writes to, on which its account holds `roles/storage.objectViewer`), `EXPORT_BQ_PROJECT` and `EDGE_EXPORT_DATASET`, and `CALLER_HMAC_KEY` from the secret `dfo-prod-caller-hmac-key`, the key the website and dfo-apis use, so one client carries one caller in all three. The grader reads `GRADE_BQ_PROJECT`, `GRADE_SOURCE_DATASET`, `GRADE_DATASET`, `GRADE_RUN_TIMEOUT_MINUTES`, `LANGFUSE_BASE_URL` (`https://cloud.langfuse.com`) and `LANGFUSE_EXPORT_ENVIRONMENT` (`dfo-prod-ai`, the environment the ai service tags its traces with), with `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` from `dfo-prod-langfuse-public-key` and `dfo-prod-langfuse-secret-key`, the pair the ai service exports with, and `GOOGLE_API_KEY` from `dfo-prod-analytics-grader-gemini-api-key`. The probes read their project and dataset from `REPO_SEARCH_BQ_PROJECT` and `REPO_SEARCH_DATASET`, `LIGHTHOUSE_BQ_PROJECT` and `LIGHTHOUSE_DATASET`, `REPLAY_BQ_PROJECT` and `REPLAY_DATASET`, and `CITATION_PROBE_BQ_PROJECT` and `CITATION_PROBE_DATASET`, and their keys from secrets of their own:
+
+| Job                             | Variable             | Secret                                                     |
+| ------------------------------- | -------------------- | ---------------------------------------------------------- |
+| `dfo-prod-analytics-repos`      | `GITHUB_TOKEN`       | `dfo-prod-analytics-repos-github-token`                    |
+| `dfo-prod-analytics-lighthouse` | `PSI_API_KEY`        | `dfo-prod-analytics-lighthouse-psi-api-key`                |
+| `dfo-prod-analytics-replay`     | `VERIFY_PRINCIPAL`   | `dfo-prod-verify-principal`, from the apis stack           |
+| `dfo-prod-analytics-replay`     | `EXPORT_ID_HMAC_KEY` | `dfo-prod-website-export-hmac-key`, from the website stack |
+| `dfo-prod-analytics-citations`  | `ANTHROPIC_API_KEY`  | `dfo-prod-analytics-citations-anthropic-api-key`           |
+| `dfo-prod-analytics-citations`  | `OPENAI_API_KEY`     | `dfo-prod-analytics-citations-openai-api-key`              |
+| `dfo-prod-analytics-citations`  | `PERPLEXITY_API_KEY` | `dfo-prod-analytics-citations-perplexity-api-key`          |
+
+The replay probe calls `dfo-prod-apis` at `REPLAY_APIS_BASE_URL`, the service's deterministic URL (`https://dfo-prod-apis-<project number>.europe-west1.run.app`), with an ID token whose audience, `REPLAY_ID_TOKEN_AUDIENCE`, is the same URL, since the service admits only callers holding `roles/run.invoker`. Its account holds that role on `dfo-prod-apis` (`analytics_replay_apis_invoker`) while the Job exists. `VERIFY_PRINCIPAL` is the verify principal, the one value that opens dfo-apis' analysis verify route and Presentation share sample, which the apis stack generates and mounts on the service ("Verify principal" in `infra/dfo-dev/apis/README.md`). `EXPORT_ID_HMAC_KEY` is the website event export's key, so a `share_digest` in `replay_probe` equals the export's digest of the same `shareId`.
+
+Each account holds `roles/secretmanager.secretAccessor` on the secrets its Job mounts and no other, and a Job reads each secret's latest version when an execution starts. Terraform declares `dfo-prod-analytics-grader-gemini-api-key` and the five probe key secrets (`dfo-prod-analytics-repos-github-token`, `dfo-prod-analytics-lighthouse-psi-api-key`, and the three `dfo-prod-analytics-citations-*-api-key`) with no version, so each key goes in by hand before the Jobs exist. The verify principal and the export key are generated by their stacks.
+
+Terraform creates each Job with the image in `analytics_jobs_image`, a sha-tagged image from the analytics registry, and then ignores the Job's image, so a deploy moves the Jobs without reading as drift. `dfo-prod-analytics-deployer` holds `roles/run.developer` on each Job and `roles/iam.serviceAccountUser` on each Job's account, which `gcloud run jobs update <job> --image <image> --region europe-west1 --project prod-fin-observatory` needs. The analytics repository's `Deploy` workflow runs that update after each push for every Job named in its repository variable `ANALYTICS_JOBS` (DevelopmentFinanceObservatory/analytics#7). Set the variable to the seven Jobs' names once they exist, `dfo-prod-analytics-dbt dfo-prod-analytics-edge dfo-prod-analytics-grade dfo-prod-analytics-repos dfo-prod-analytics-lighthouse dfo-prod-analytics-replay dfo-prod-analytics-citations`; until then a Job keeps the image it was created with. The freshness Job exists only once `analytics_dbt_schedule_enabled` is on, and a named Job that does not exist fails the deploy, so add `dfo-prod-analytics-freshness` to the variable after that apply.
+
+Cloud Scheduler starts each Job as `dfo-prod-analytics-scheduler`, which holds `roles/run.invoker` on each Job and nothing else, through the triggers `dfo-prod-analytics-dbt-tick`, `dfo-prod-analytics-edge-tick`, `dfo-prod-analytics-grade-tick`, `dfo-prod-analytics-freshness-tick`, `dfo-prod-analytics-repos-tick`, `dfo-prod-analytics-lighthouse-tick`, `dfo-prod-analytics-replay-tick` and `dfo-prod-analytics-citations-tick`. The dbt trigger exists only once `analytics_dbt_schedule_enabled` is true, which also disables the `dfo-prod-logs-daily` scheduled query and drops its absence alert, since the hourly build replaces it, and moves the `dfo_reporting` views over its tables to the `analytics` tables (see "Reporting views"). The `logs_daily` tables stay as the archive the build copies its days before 2026-10-24 from. A probe's trigger exists only while its entry in the map `analytics_probes_enabled` is true; every entry defaults to false, so each probe's Job exists with no trigger and no absence alert until its switch is on. The map's keys are `repos`, `lighthouse`, `replay` and `citations`, and it needs `analytics_jobs_enabled`.
+
+To run a Job outside its schedule, or with other args or settings, start one execution. Overrides need `run.jobs.runWithOverrides` on the Job, which a project owner holds:
+
+```sh
+gcloud run jobs execute dfo-prod-analytics-dbt --region europe-west1 --project prod-fin-observatory --wait \
+  --args='dbt,test,--target,prod,--select,tag:cutover'
+```
+
+`--args` takes the whole command line, comma-separated. `--update-env-vars` sets a setting for that execution alone, such as `DBT_MAXIMUM_BYTES_BILLED` for a dbt run that reads more than 20 GB, or `EDGE_REJECT_OBJECTS` for an edge run that moves past a held batch. The extract records a rejected object, so one execution is enough.
+
+### Switching the Jobs on
+
+1. Apply this stack with `analytics_jobs_enabled` false, which creates `edge_export` and its three tables, `studio_grades`, the four probe datasets and their tables, the six Job accounts and their dataset grants, and the empty Gemini and probe key secrets. The apis stack applies first and creates `dfo-prod-verify-principal`.
+
+2. Add the grader's Gemini key as the secret's first version, with `gcloud secrets versions add dfo-prod-analytics-grader-gemini-api-key --data-file=- --project=prod-fin-observatory` reading the key from stdin, and each probe key the same way: a GitHub token that may search public code to `dfo-prod-analytics-repos-github-token`, a PageSpeed Insights API key to `dfo-prod-analytics-lighthouse-psi-api-key`, and the Anthropic, OpenAI and Perplexity keys to `dfo-prod-analytics-citations-anthropic-api-key`, `dfo-prod-analytics-citations-openai-api-key` and `dfo-prod-analytics-citations-perplexity-api-key`. The edge logs bucket must exist, with the edge-logs stack's Logpush job writing to it.
+
+3. Merge the analytics changes that add the edge extract, the turn grader, the `logs_daily` port and the four probes, and let the `Deploy` workflow push the image. Note its sha. The replay probe also needs the dfo-apis release that adds the verify route and the share sample.
+
+4. Set `analytics_jobs_enabled = true` and `analytics_jobs_image = "europe-west1-docker.pkg.dev/prod-fin-observatory/analytics/dfo-analytics:<sha>"` in `env.auto.tfvars`, merge, and let the apply run. It creates the dbt, edge, grade, repos, lighthouse, replay and citations Jobs, the edge and grade triggers, their alerts, the edge object alert, and the replay account's invoker grant on `dfo-prod-apis`, and no dbt trigger or freshness Job. The grade absence alert opens within minutes; run `gcloud run jobs execute dfo-prod-analytics-grade --region europe-west1 --project prod-fin-observatory` to close it. The probes have no trigger and no absence alert yet, since `analytics_probes_enabled` is false for each; their canary executions and switches follow in "Switching a probe on". Each probe's canary also fills its source table, which `dbt source freshness` needs before step 7: it errors on an empty table.
+
+5. Run the `logs_daily` cutover as one-off executions of `dfo-prod-analytics-dbt` with their args replaced, in the order the analytics repository's README gives: `dbt,run-operation,copy_logs_daily_archive,--target,prod`, then `dbt,build,--target,prod,--select,tag:log_fed+,--exclude,tag:cutover,--vars,{log_lookback_days: N}` with N the days from 2026-10-24 through yesterday, then `dbt,test,--target,prod,--select,tag:cutover`. Each must succeed before the next starts.
+
+6. Check that the `dfo_reporting` views over `logs_daily` and the same SELECTs over `analytics` agree, since the switch moves the views from one to the other. Run the script below as a project owner, with `bq query --use_legacy_sql=false --location=EU < parity.sql`, after a scheduled `dfo-prod-logs-daily` run and a one-off `dfo-prod-analytics-dbt` build have both covered `last_day`. Set `last_day` to the day before yesterday, the newest day both sources hold whole. Each of the seven queries compares one view, `EXCEPT DISTINCT` both ways over the same days, and every one must return zero rows. A row names the side that holds it, and the switch waits until the analytics model is fixed. The latency quantiles come from `APPROX_QUANTILES` and `callers_sketch` is an HLL++ sketch, so two builds over the same rows can differ in those columns alone. A row that differs only there is checked instead by the cutover's `matches_legacy` tests, which compare each quantile within its tolerance and each sketch by its distinct count.
+
+   ```sql
+   DECLARE first_day DATE DEFAULT DATE '2026-10-24';
+   DECLARE last_day DATE DEFAULT DATE '2026-11-17';
+
+   -- service_requests_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.service_requests_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, service, requests, status_4xx, status_5xx, latency_p50_ms, latency_p95_ms, latency_p99_ms FROM `prod-fin-observatory.analytics.requests_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- service_routes_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.service_routes_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, service, method, route, requests, status_4xx, status_5xx, latency_p50_ms, latency_p95_ms, latency_p99_ms FROM `prod-fin-observatory.analytics.routes_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- service_errors_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.service_errors_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, resource_type, service, logger, severity, entries FROM `prod-fin-observatory.analytics.errors_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- mcp_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.mcp_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, caller_kind, client, request, outcome, calls, callers_sketch FROM `prod-fin-observatory.analytics.mcp_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- website_requests_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.website_requests_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, route, kind, bot, status_class, requests, callers_sketch FROM `prod-fin-observatory.analytics.website_requests_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- website_page_views_daily
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.website_page_views_daily` WHERE day BETWEEN first_day AND last_day),
+     a AS (SELECT day, page_views, bot_page_views FROM `prod-fin-observatory.analytics.website_page_views_daily` WHERE day BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+
+   -- deploys
+   WITH
+     v AS (SELECT * FROM `prod-fin-observatory.dfo_reporting.deploys` WHERE DATE(deployed_at) BETWEEN first_day AND last_day),
+     a AS (SELECT service, revision, first_request AS deployed_at FROM `prod-fin-observatory.analytics.deploys` WHERE NOT before_source AND DATE(first_request) BETWEEN first_day AND last_day)
+   SELECT 'logs_daily only' AS side, * FROM (SELECT * FROM v EXCEPT DISTINCT SELECT * FROM a)
+   UNION ALL
+   SELECT 'analytics only' AS side, * FROM (SELECT * FROM a EXCEPT DISTINCT SELECT * FROM v);
+   ```
+
+7. Check that each probe's canary execution has succeeded, then set `analytics_dbt_schedule_enabled = true`, merge, and let the apply run. It creates the dbt trigger and its alert, the freshness Job, its trigger and its alert, disables the `dfo-prod-logs-daily` scheduled query, and moves the seven views to `analytics`.
+
+### Switching a probe on
+
+Each probe is switched on alone, in this order, with the probe's entry in `analytics_probes_enabled` (`repos`, `lighthouse`, `replay` or `citations`) as the last step. Until then the Job, its account, its secrets and its tables exist and a manual execution works, and the probe has no trigger and no absence alert.
+
+1. Set the probe's secret values (the table under "Analytics jobs": the GitHub token for `repos`, the PageSpeed Insights key for `lighthouse`, the three provider keys for `citations`; `replay` mounts the verify principal and the export key, which the apis and website stacks generate).
+
+2. Build the image from the analytics repository's `Deploy` workflow with the probe's code, and set `analytics_jobs_image` to it, or move the Job with `gcloud run jobs update <job> --image <image> --region europe-west1 --project prod-fin-observatory`.
+
+3. Run one canary: `gcloud run jobs execute <job> --region europe-west1 --project prod-fin-observatory --wait` (add `--async` for `dfo-prod-analytics-citations`, which takes a few hours). Check three things:
+   - The execution exits 0.
+   - The probe's tables hold rows for the expected inputs: for `repos`, `repo_search.runs` has a row for each query; for `lighthouse`, `lighthouse.results` has a row for each of the 15 URLs and `lighthouse.runs` records the run; for `replay`, `replay_probe.runs` has a row for the run whose status is not a failure, and `slot_results` has rows for the shares sampled; for `citations`, `citation_probe.runs` has a row for each provider and question and `answers` has a row for each answered ask.
+   - The results are valid: no error or failure columns set where the run succeeded, a plausible number of rows, and values in range (for example Lighthouse scores between 0 and 1, and `answer_text` filled for each citation answer).
+
+4. Set the probe's entry to true in `analytics_probes_enabled` in `env.auto.tfvars`, merge, and let the apply run. It creates the probe's trigger and its absence alert.
+
 ## Readers
 
 The principals secret's `readers` object lists the readers of `dfo_reporting` as people, each `group:` or `user:` followed by an address. Each gets `READER` on `dfo_reporting`, and `roles/bigquery.jobUser` and `roles/mcp.toolUser` on the project, and no access to `logs_daily`, `dfo_logs`, `searchconsole`, or any other source dataset.
 
+Readers and analytics developers share one `roles/bigquery.jobUser` grant per label, `people_job_user` in `main.tf`, since IAM holds one binding per member and role. A person in both objects carries the same label in each, so removing them from one keeps the role while the other lists them. Plan fails on a label that names different members in the two objects, or a member under two labels. The grant was `reporting_readers_job_user` in `reporting.tf`, and a `moved` block in `main.tf` carries the readers' live bindings over, so the plan that introduces it shows each reader's grant moved with no change, and a create only for each developer whose label is not already a reader's.
+
 ## Principals secret
 
-The readers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. `readers` holds people (`group:` or `user:` followed by an address) and `alerts` at least one bare address. A service account gets its own Terraform resource in the stack that owns it, as [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states:
+The readers, analytics developers and alert recipients live in the Secret Manager secret `dfo-prod-telemetry-principals`. Prod plans run in public GitHub Actions logs, and every value from the secret prints there as `(sensitive value)`. `readers` and `analytics_developers` hold people (`group:` or `user:` followed by an address), and `alerts` at least one bare address. A service account gets its own Terraform resource in the stack that owns it, as [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md) states:
 
 ```json
 {
   "readers": { "team": "group:readers@example.org" },
+  "analytics_developers": { "dev-1": "user:dev1@example.org" },
   "alerts": { "team": "alerts@example.org" }
 }
 ```
 
 To create the secret, follow "Writing the secret" in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `prod-fin-observatory` and `dfo-prod-telemetry-principals`. To change its members, run `scripts/bootstrap-principals.sh edit prod-fin-observatory dfo-prod-telemetry-principals`. Then dispatch the apply with `--ref main` and `stack=telemetry`. That page also states the rules the secret must meet and the relabel order.
+
+Plan fails while the secret's keys differ from the schema in `infra/modules/principals-secret/schemas.json`. A PR that adds a key to the telemetry schema, such as `analytics_developers`, lands in the order "Adding a key" gives in [`infra/modules/principals-secret/README.md`](../../modules/principals-secret/README.md), with `scripts/bootstrap-principals.sh edit prod-fin-observatory dfo-prod-telemetry-principals` as the edit step. Between that edit and the merge, every other telemetry plan and apply on `main` fails, since `main`'s schema lacks the key, so merge promptly. Members go in with a later `edit` and apply, once the key is on `main`.
 
 ## Apply order
 
@@ -358,6 +555,8 @@ Telemetry applies after `foundation`, which lets the applier write this stack's 
 
 ## After the first apply
 
+- The analytics repository's id in both stacks and its two repository variables, as "Analytics repo" shows. The repository's `dbt-build` job is skipped until then.
+- The analytics Jobs, switched on in the order "Switching the Jobs on" gives.
 - In Search Console, under Settings, Bulk data export, a property owner of developmentfinance.org enters the project `prod-fin-observatory`, the dataset `searchconsole`, and the location EU. The first export arrives within 48 hours.
 - `dfo-prod-ga4-user-ranges` first runs at the next 06:00 UTC, and `ga4_user_ranges` is empty until then. To fill it sooner, run it by hand as "GA4 unique users" shows.
 - `dfo-prod-logs-daily` first runs at the next 02:00 UTC. To run it sooner, start a manual run from the BigQuery console's Scheduled queries page.

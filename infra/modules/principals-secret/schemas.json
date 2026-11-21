@@ -27,6 +27,7 @@
     },
     "telemetry": {
       "alerts": {"form": "email", "min": 1},
+      "analytics_developers": {"form": "person", "min": 0},
       "readers": {"form": "person", "min": 0}
     }
   }

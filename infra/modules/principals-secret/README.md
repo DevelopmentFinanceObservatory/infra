@@ -9,7 +9,7 @@ Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`
 - The secret is one JSON object whose keys are exactly the stack's schema keys, each holding an object.
 - The secret holds the compact, key-sorted JSON the script writes. For the characters the rules allow, that matches `jsonencode` byte for byte, so a version written any other way fails plan. The rule catches a repeated key, which `jsondecode` settles silently.
 - Each inner object maps labels to values. A label holds only lower-case letters, digits, hyphens and underscores. Labels key the stack's resources, since Terraform rejects sensitive `for_each` keys, so they appear in resource addresses, plan output and public plan comments, and an address cannot be one. Name a label by role, such as `dev-1` or `devs`.
-- A value is a string. A `person` value is `group:` or `user:` followed by an address, so it names a person or a group of people. Every object that grants IAM takes `person` values: `applier_impersonators`, `ingestion_operators`, `mcp_token_readers`, `studio_token_readers`, `readers` and `invokers`. A service account, a workload identity principal (`principal://` or `principalSet://`) or a domain gets a named Terraform resource in the stack that owns it, such as `infra/stacks/apis/eval_reader.tf`. A person who also holds the same role through a hand-made binding loses it when the entry is removed, so grant people through the secret only. An `email` value is a bare address with no prefix. The address is lower-case ASCII. Lower case makes the duplicate check exact, since IAM compares addresses without regard to case, and keeps CI's masking of each value exact.
+- A value is a string. A `person` value is `group:` or `user:` followed by an address, so it names a person or a group of people. Every object that grants IAM takes `person` values: `applier_impersonators`, `ingestion_operators`, `mcp_token_readers`, `studio_token_readers`, `readers`, `analytics_developers` and `invokers`. A service account, a workload identity principal (`principal://` or `principalSet://`) or a domain gets a named Terraform resource in the stack that owns it, such as `infra/stacks/apis/eval_reader.tf`. A person who also holds the same role through a hand-made binding loses it when the entry is removed, so grant people through the secret only. An `email` value is a bare address with no prefix. The address is lower-case ASCII. Lower case makes the duplicate check exact, since IAM compares addresses without regard to case, and keeps CI's masking of each value exact.
 - Each value, and its address with the type prefix removed, is at least `min_length` characters (4), the shortest `scripts/mask-principals.sh` can mask. The mask step reads every principals secret in the project, so a shorter value would block every CI plan there.
 - Each object holds at least its schema's minimum. Telemetry's `alerts` needs one entry, and every other object may be empty.
 - No value appears under two labels of one object, since removing either label would revoke both.
@@ -52,6 +52,17 @@ gh workflow run apply.yml --ref <dev or main> -f stack=<stack>
 
 The apply moves the stack's grants to the new members. A relabel is the exception: an apply that runs between the new version and the merge of the `moved` blocks can revoke members, so follow the order in [Relabelling](#relabelling) and dispatch no apply before the merge.
 
+## Adding a key
+
+The secret's keys must equal the stack's schema keys, so a PR that adds a key to `schemas.json` fails plan until the secret has it, and once the secret has it every plan of a branch without the key fails. Land it in this order:
+
+1. Open the PR with the new key in `schemas.json` and the resources that read it.
+2. From the PR's branch, so that the script validates against the new schema, run `scripts/bootstrap-principals.sh edit <project> <namespace>-<stack>-principals` and add the key with an empty object, such as `"analytics_developers": {}`.
+3. Re-run the PR's plan, which should now pass.
+4. Merge, so that the PR's own apply is the next apply of the stack.
+
+Every plan and apply of the stack on the environment's branch fails between the second step and the merge. Add members with a later `edit` and apply, once the key is on that branch. Removing a key runs the same order with the key deleted.
+
 ## Relabelling
 
 A relabel with the same value needs a `moved` block for each resource the label keys, for example `moved { from = google_service_account_iam_member.applier_impersonator["old"] to = google_service_account_iam_member.applier_impersonator["new"] }`. Without one, the plan destroys one instance and creates the other on the same binding in no fixed order, and a delete that runs last revokes the member. Labels are not addresses, so the block is safe to commit. The resources each label keys:
@@ -59,7 +70,7 @@ A relabel with the same value needs a `moved` block for each resource the label 
 - foundation: `applier_impersonator` for an impersonator; the five `ingestion_*` resources for an ingestion operator, where `ingestion_viewer` holds one instance per role, keyed `"<label> <role>"`; `budget_email` for a budget alert recipient.
 - apis: `apis_invoker` and `apis_viewer` for an invoker.
 - ai: `studio_api_token_reader` or `mcp_api_token_readers`.
-- telemetry: `reporting_readers`, `reporting_readers_job_user` and `reporting_readers_mcp_tool_user` for a reader; `alert_email` for an alert recipient.
+- telemetry: `reporting_readers`, `people_job_user` and `reporting_readers_mcp_tool_user` for a reader; `people_job_user` and `analytics_developers_writer` for an analytics developer, and `analytics_developers_source_reader`, which holds one instance per source dataset, keyed `"<label> <dataset>"`; `alert_email` for an alert recipient. `people_job_user` is keyed by the union of the two objects' labels, so a person in both carries the same label in each and is relabelled in both in one version.
 
 The stack reads the secret's latest version at every plan, so the new version and the `moved` blocks must land with no apply of that stack between them. Open the PR with the `moved` blocks, write the new version with the script, re-run the PR's plan, which should show only moves, and merge, so that the PR's own apply is the next apply of the stack. An apply that runs after the new version but before the merge sees the new labels without the `moved` blocks and replaces each grant in no fixed order, which can revoke the member; if one does, the next apply re-creates the grant. Merging the `moved` blocks before the new version exists moves state to labels the secret lacks and races the same way. The duplicate rule rules out a gentler path of adding the new label before removing the old one.
 
