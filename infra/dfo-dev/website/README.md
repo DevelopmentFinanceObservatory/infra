@@ -127,6 +127,50 @@ Running instances keep the values they started with. A change to `turnstile_site
 gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
 ```
 
+## Admin emails
+
+`ADMIN_EMAILS` is the comma-separated, case-insensitive list of verified emails that may open the website's admin page, `/admin/api-keys`. Unset, empty or naming nobody, the app has no admins and that page answers 404. The list is private and this repository is public, so it can't live in Terraform. `admin_emails.tf` owns the secret container (`dfo-dev-website-staging-admin-emails`) and the mount, and the list itself is added out-of-band as a version. The `cloud-run-service` module grants the website's runtime service account `roles/secretmanager.secretAccessor` on it, as it does for every secret in `secret_env_vars`, so nothing else needs granting.
+
+The mount tracks `latest`, so a change to the list is a new version plus a new revision, with no Terraform change. A placeholder first version holding the literal `none` guarantees the mount always resolves, since Cloud Run refuses to start a revision whose secret env var can't be read. `none` is not an email address, so the placeholder admits nobody. After the first apply, add the list as a new version holding every admin, not just the one you add. The emails below are placeholders:
+
+```
+printf '%s' 'a@example.org,b@example.org' | gcloud secrets versions add dfo-dev-website-staging-admin-emails \
+  --project dev-fin-observatory --data-file=-
+```
+
+`printf` rather than `echo` keeps a trailing newline out of the stored value. Running instances keep the value they started with, so after adding a version roll the service onto a new revision. Force one without a new image by changing a label:
+
+```
+gcloud run services update dfo-dev-website-staging --project dev-fin-observatory \
+  --region northamerica-northeast1 --update-labels=admin-emails-rotated=$(date +%Y%m%d%H%M)
+```
+
+Re-running dfo-website's `deploy.yml` is not enough on its own: a manual run applies the same path filter as a push, so it skips the deploy when the last commit on `dev` touched only docs or prototypes, and instances keep the old value.
+
+## API key tag secrets
+
+`API_KEY_TAG_SECRETS` is the comma-separated list of secrets that sign the 8-character tag at the end of every API key. The first entry signs new keys and every entry verifies, so the website's proxy can refuse a made-up key before it reads the key store. A production revision refuses to start without a valid list (each entry at least 32 characters). `api_key_tag_secrets.tf` owns the secret (`dfo-dev-website-staging-api-key-tag-secrets`) and generates its first version with the same ephemeral-`random_password`-plus-write-only-version shape as `auth_secret.tf`, so the value never lands in Terraform state and keys work from the first apply. It is kept apart from `BETTER_AUTH_SECRET`, so rotating that leaves keys alone.
+
+Unlike `BETTER_AUTH_SECRET`, the mount reads `latest`, and rotation is by hand, never by bumping the counter in `api_key_tag_secrets.tf`: a rotation has to carry the old secret beside the new one, and a secret dropped from the list voids every key it signed. Keys don't expire, so drop a secret only after its keys are replaced. Each step below is a new version, then a new revision:
+
+```
+OLD=$(gcloud secrets versions access latest --secret dfo-dev-website-staging-api-key-tag-secrets --project dev-fin-observatory)
+NEW=$(openssl rand -hex 32)
+# 1. The new secret verifies, the old one still signs.
+printf '%s' "$OLD,$NEW" | gcloud secrets versions add dfo-dev-website-staging-api-key-tag-secrets \
+  --project dev-fin-observatory --data-file=-
+gcloud run services update dfo-dev-website-staging --project dev-fin-observatory \
+  --region northamerica-northeast1 --update-labels=api-key-tag-rotated=$(date +%Y%m%d%H%M)
+# 2. Once every instance runs step 1: the new secret signs.
+printf '%s' "$NEW,$OLD" | gcloud secrets versions add dfo-dev-website-staging-api-key-tag-secrets \
+  --project dev-fin-observatory --data-file=-
+gcloud run services update dfo-dev-website-staging --project dev-fin-observatory \
+  --region northamerica-northeast1 --update-labels=api-key-tag-rotated=$(date +%Y%m%d%H%M)
+# 3. Only after every key signed by $OLD is replaced: add a version holding $NEW alone, then roll.
+```
+
+Two steps, so no instance ever meets a key signed by a secret it doesn't know. The label change forces each new revision, as in "Admin emails" above, since a manual `deploy.yml` run can skip the deploy.
+
 ## Tenant databases
 
 `database.tf` holds the website's database on the shared Cloud SQL instance from the `platform` stack: accounts, saved views, share links. ADK agent sessions live in the ai stack's own tenant database instead (#155), because ADK creates its schema over whatever connection it gets and the website runtime should hold DML only.

@@ -1,5 +1,5 @@
 terraform {
-  # 1.11 for the write-only arguments in auth_secret.tf.
+  # 1.11 for the write-only arguments in auth_secret.tf and api_key_tag_secrets.tf.
   required_version = ">= 1.11"
 
   required_providers {
@@ -160,6 +160,10 @@ module "website_service" {
     # The apis stack owns and pins the secret. This mount reads latest, as for
     # DFO_PRINCIPAL above. See README.
     DFO_CALLER_PRINCIPAL = { secret_id = var.caller_principal_secret_id }
+    # Comma-separated emails of the signed-in users who may open /admin/api-keys. Not version-pinned: the list is added out-of-band and the newest must win. See admin_emails.tf and README.
+    ADMIN_EMAILS = { secret_id = google_secret_manager_secret.website_admin_emails.secret_id }
+    # Comma-separated secrets that sign and verify the tag on every API key. Not version-pinned: a rotation adds versions by hand, each carrying the old secret beside the new, and the newest must win. See api_key_tag_secrets.tf and README.
+    API_KEY_TAG_SECRETS = { secret_id = google_secret_manager_secret.website_api_key_tag_secrets.secret_id }
   }, local.sign_in_secret_env_vars, local.email_sign_in_secret_env_vars)
 
   deployer_members = ["serviceAccount:${data.google_service_account.website_deployer.email}"]
@@ -186,8 +190,12 @@ module "website_service" {
     subnetwork = module.psc_network.subnetwork_id
   }
 
-  # The first revision that mounts TURNSTILE_SECRET_KEY must wait for the placeholder version (email_sign_in.tf), or it cannot resolve `latest`. See the module README's "Ordering a revision on out-of-module resources" section.
-  readiness_dependencies = [google_secret_manager_secret_version.website_turnstile_secret_key_placeholder.id]
+  # The first revision that mounts TURNSTILE_SECRET_KEY, ADMIN_EMAILS or API_KEY_TAG_SECRETS must wait for that secret's first version (email_sign_in.tf, admin_emails.tf, api_key_tag_secrets.tf), or it cannot resolve `latest`. See the module README's "Ordering a revision on out-of-module resources" section.
+  readiness_dependencies = [
+    google_secret_manager_secret_version.website_turnstile_secret_key_placeholder.id,
+    google_secret_manager_secret_version.website_admin_emails_placeholder.id,
+    google_secret_manager_secret_version.website_api_key_tag_secrets.id,
+  ]
 }
 
 # The website's server-side proxies call the apis service with an ID token

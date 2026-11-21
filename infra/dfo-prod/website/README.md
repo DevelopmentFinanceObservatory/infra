@@ -38,6 +38,28 @@ gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref m
 
 `GRAPH_EXPLORER_EMAIL_DOMAINS` is `var.graph_explorer_email_domains` joined with commas: the email domains whose verified accounts may open the Graph Explorer. An empty list admits nobody.
 
+## Admin emails
+
+The stack creates `dfo-prod-website-admin-emails` with a first version holding the literal `none`, which is not an email address, so nobody is an admin and `/admin/api-keys` answers 404. The list is private, so it never appears in this repository. After the first apply, add the list as a new version holding every admin, then roll a new revision, since running instances keep the value they started with. The runtime account's `secretAccessor` on the secret comes from the `cloud-run-service` module. The emails below are placeholders:
+
+```
+printf '%s' 'a@example.org,b@example.org' | gcloud secrets versions add dfo-prod-website-admin-emails \
+  --project prod-fin-observatory --data-file=-
+gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main
+```
+
+`infra/dfo-dev/website/README.md` explains the mount in full.
+
+## API key tag secrets
+
+The stack creates `dfo-prod-website-api-key-tag-secrets` and generates its first version (`api_key_tag_secrets.tf`), so API keys work from the first apply and the value never lands in Terraform state. A production revision refuses to start without it, so apply this before deploying a website that issues keys. Rotate by hand, never by bumping the counter: add a version holding `old,new`, roll a revision, then one holding `new,old`, and roll again. Drop the old secret only after every key it signed is replaced, since that voids them:
+
+```
+gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main
+```
+
+`infra/dfo-dev/website/README.md` gives the full commands.
+
 ## Email sign-in
 
 The stack creates `dfo-prod-website-turnstile-secret-key` with a first version holding a single space, which the app reads as blank, so email sign-in stays off. The Turnstile widget is "DFO website production" in the ONE Campaign Cloudflare account, for `developmentfinance.org` and its subdomains. `env.auto.tfvars` holds its site key as `turnstile_site_key`. Add its secret key as a new version with `read -rs KEY; printf '%s' "$KEY" | gcloud secrets versions add dfo-prod-website-turnstile-secret-key --project prod-fin-observatory --data-file=-`. Mail goes through the role `development-finance-observatory-ses-sender-production` in ONE's SES account, which trusts only `dfo-prod-website-run@prod-fin-observatory.iam.gserviceaccount.com` with the token audience `development-finance-observatory-production`. `env.auto.tfvars` sets both in `ses`. The apply for any tfvars change creates a new revision. A new secret version needs a manual roll:
