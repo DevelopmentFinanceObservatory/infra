@@ -232,6 +232,8 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.14.7"
+          # Off, so scripts/tf-capture.sh sees the plain binary's streams.
+          terraform_wrapper: false
 
       # A stack whose state prefix does not exist yet cannot be planned here:
       # init creates that state, creating it takes a lock, and the read-only
@@ -242,15 +244,15 @@ jobs:
       # stack README for the bootstrap step.
       - name: terraform init
         id: init
-        run: terraform init -input=false -no-color
+        run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" init terraform init -input=false -no-color'
 
       - name: terraform validate
         id: validate
-        run: terraform validate -no-color
+        run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" validate terraform validate -no-color'
 
       - name: terraform plan
         id: plan
-        run: terraform plan -input=false -lock=false -no-color -out=tfplan
+        run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" plan terraform plan -input=false -lock=false -no-color -out=tfplan'
 
       - name: Guard against destroying protected data
         id: guard
@@ -286,12 +288,6 @@ jobs:
           VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
           PLAN_OUTCOME: ${{ steps.plan.outcome }}
           GUARD_OUTCOME: ${{ steps.guard.outcome }}
-          INIT_STDOUT: ${{ steps.init.outputs.stdout }}
-          INIT_STDERR: ${{ steps.init.outputs.stderr }}
-          VALIDATE_STDOUT: ${{ steps.validate.outputs.stdout }}
-          VALIDATE_STDERR: ${{ steps.validate.outputs.stderr }}
-          PLAN_STDOUT: ${{ steps.plan.outputs.stdout }}
-          PLAN_STDERR: ${{ steps.plan.outputs.stderr }}
         with:
           script: |
             const comment = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/plan-comment.js`);
