@@ -116,17 +116,6 @@ variable "timeout_seconds" {
   }
 }
 
-variable "max_instance_request_concurrency" {
-  description = "Most requests Cloud Run sends one instance at once. Null (the default) leaves Cloud Run's own default of 80. Set it near what the app admits at once, since Cloud Run adds an instance only as in-flight requests approach this number, and requests the app refuses never get there."
-  type        = number
-  default     = null
-
-  validation {
-    condition     = var.max_instance_request_concurrency == null ? true : (var.max_instance_request_concurrency >= 1 && var.max_instance_request_concurrency <= 1000)
-    error_message = "max_instance_request_concurrency must be between 1 and 1000, Cloud Run's own bounds."
-  }
-}
-
 variable "allow_unauthenticated" {
   description = "Grant roles/run.invoker to allUsers. Provisional: there is no auth layer yet, so this defaults to true; tighten once an auth model exists."
   type        = bool

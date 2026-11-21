@@ -72,13 +72,6 @@ module "principals" {
 
 locals {
   principals = module.principals.principals
-
-  # Concurrent component reads the Presentation surface runs on each
-  # instance. The website checks every data card of a canvas at once when it
-  # creates a live link, up to its LIVE_SHARE_MAX_DATA_CARDS of 20, and
-  # dfo-apis answers each read past this limit with an immediate 503. The
-  # dfo-apis default is 4.
-  apis_components_max_concurrency = 20
 }
 
 # The service's Gemini API key secret, created outside Terraform and only
@@ -281,8 +274,12 @@ module "apis_service" {
     PRESENTATION_STORE_INSTANCE_CONNECTION_NAME = var.platform_postgres_connection_name
     PRESENTATION_STORE_RUNTIME_DB_USER          = google_sql_user.datasets_runtime.name
 
-    # See local.apis_components_max_concurrency.
-    PRESENTATION_COMPONENTS_MAX_CONCURRENCY = tostring(local.apis_components_max_concurrency)
+    # Concurrent component reads the Presentation surface runs on each
+    # instance. The website checks every data card of a canvas at once when it
+    # creates a live link, up to its LIVE_SHARE_MAX_DATA_CARDS of 20, and
+    # dfo-apis answers each read past this limit with an immediate 503. The
+    # dfo-apis default is 4.
+    PRESENTATION_COMPONENTS_MAX_CONCURRENCY = "20"
 
     # origin_catalogue.tf's bucket. The service raises at startup when no
     # published catalogue can be loaded.
@@ -357,21 +354,6 @@ module "apis_service" {
   memory = "4Gi"
 
   timeout_seconds = 300
-
-  # One instance serves Search, Graph, Skills, Datasets and Presentation, and
-  # the app admits only a few requests at once on its heavy paths: Datasets
-  # reads 8, mints and refreshes 4, analysis runs 2, each refusing the next
-  # with a retryable 503 (dfo-apis datasets_api/config.py). Cloud Run's
-  # default of 80 never fills, because refused requests return at once and
-  # use no CPU, so the service stayed on one instance while it refused work.
-  # Cloud Run's autoscaler weighs in-flight requests against this cap, so a
-  # cap near the app's admission lets sustained load add instances. The cap
-  # is the Presentation component limit, the largest burst one caller action
-  # sends: the website's live-link check of up to 20 data cards. A lower cap
-  # would send part of that burst to an instance still starting. 20 is also
-  # above the 14 the Datasets doors admit together, so Search and Graph
-  # requests keep room beside a full set of Datasets work.
-  max_instance_request_concurrency = local.apis_components_max_concurrency
 
   startup_cpu_boost = true
   cpu_idle          = true
