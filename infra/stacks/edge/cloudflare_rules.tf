@@ -280,18 +280,22 @@ resource "cloudflare_ruleset" "cache" {
   ]
 
   # last_complete is the end of the newest period the job has delivered, and
-  # stays empty until its first push
+  # stays empty until its first push. last_error and error_message are set
+  # while the job is failing and cleared by its next successful push
   # (https://registry.terraform.io/providers/cloudflare/cloudflare/5.27.0/docs/data-sources/logpush_jobs).
-  # A job created moments before has none yet, so the cache rule waits for an
-  # apply after the job has delivered.
+  # A job created moments before has no last_complete yet, so the cache rule
+  # waits for an apply after the job has delivered, and a job that delivered
+  # once and is failing now refuses it too.
   lifecycle {
     precondition {
       condition = !var.edge_cache_logpush_check || (
         length(local.edge_logpush_dataset_reads) == 1 &&
         try(local.edge_logpush_dataset_reads[0].enabled, false) == true &&
-        try(length(local.edge_logpush_dataset_reads[0].last_complete) > 0, false)
+        try(length(local.edge_logpush_dataset_reads[0].last_complete) > 0, false) &&
+        try(coalesce(local.edge_logpush_dataset_reads[0].last_error, ""), "") == "" &&
+        try(coalesce(local.edge_logpush_dataset_reads[0].error_message, ""), "") == ""
       )
-      error_message = "edge_cache_enabled needs exactly one dataset-reads Logpush job on the zone, enabled and with a delivered push: apply the edge-logs stack with edge_logpush_bucket set, and confirm lines arrive with scripts/check-edge-logpush.sh first (infra/dfo-prod/edge-logs/README.md)."
+      error_message = "edge_cache_enabled needs exactly one dataset-reads Logpush job on the zone, enabled, with a delivered push, and with no last_error or error_message, which Cloudflare sets while the job is failing: apply the edge-logs stack with edge_logpush_bucket set, and confirm lines arrive with scripts/check-edge-logpush.sh first (infra/dfo-prod/edge-logs/README.md)."
     }
   }
 }
