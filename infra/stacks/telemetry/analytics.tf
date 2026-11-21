@@ -27,8 +27,8 @@ locals {
   # The datasets the analytics repository's Python jobs write. Each account in
   # analytics_job_accounts below holds WRITER on the one dataset it names, so
   # the three topics accounts share topics.
-  # The grader creates its own tables. Every other job's tables are declared
-  # below. Every dataset exists whatever var.analytics_jobs_enabled says
+  # The grader and the topics Jobs create their own tables. Every other job's
+  # tables are declared below. Every dataset exists whatever var.analytics_jobs_enabled says
   # (analytics_jobs.tf), since the analytics changes that write them need
   # them before the jobs run.
   analytics_job_datasets = {
@@ -496,9 +496,10 @@ resource "google_bigquery_table" "analytics_probe" {
 # specs invoker grants on the apis service) is granted in analytics_jobs.tf
 # behind the flag. The grader and the topic-turns account also read
 # langfuse_export, the turns they label, and topic-specs reads the whole analytics
-# dataset, as every analytics job account does, for its request paths in
-# stg_log_lines, which holds no IP addresses (other analytics tables hold user
-# agents). The four probe accounts and topic-vars read no other dataset.
+# dataset, the only job account that does, for its request paths in
+# stg_log_lines. That table keeps the delivery lines' json_payload, which
+# carries user agents and hashed IP caller ids (ip:<hash>). The four probe
+# accounts and topic-vars read no other dataset.
 locals {
   analytics_job_accounts = {
     edge = {
