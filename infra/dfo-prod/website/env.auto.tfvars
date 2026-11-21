@@ -57,7 +57,7 @@ ses = {
 # account, for developmentfinance.org. Public: the login page renders it.
 turnstile_site_key = "0x4AAAAAAFiLPXQeqPLKYQs9"
 
-# The event export dataset, ID hashing key, Job and hourly trigger (event_export.tf).
+# The event export dataset, Job and hourly trigger (event_export.tf). The ID hashing key exists in every tier (account_key.tf).
 event_export_enabled = true
 
 # Organisations whose verified accounts may open the Graph Explorer.

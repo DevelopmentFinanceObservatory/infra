@@ -24,6 +24,8 @@ lifecycle {
 
 Five inputs size each instance: `cpu` (default `"1"`), `memory` (default `"512Mi"`), `cpu_idle` (default `true`, throttles CPU between requests so billing tracks request-handling time), `startup_cpu_boost` (default `true`, trades a small startup CPU cost for a shorter cold start), and `timeout_seconds` (default `300`, the longest a single request may run before Cloud Run cancels it). Every consumer stack sets these explicitly at its `module` call, since traffic and workload shapes differ across services.
 
+`max_instance_request_concurrency` (default null, which leaves Cloud Run's 80) caps the requests one instance receives at once. Cloud Run adds instances as in-flight requests approach this cap, so an app that admits only a few requests at once and refuses the rest needs the cap set near its own admission, or the refused requests never trigger a scale-out.
+
 ## Session affinity
 
 `session_affinity` (default `false`) routes a client's repeat requests to the same instance for a consumer that keeps per-client state in memory. Cloud Run treats it as best-effort, so the consumer must still tolerate a request landing on another instance.
