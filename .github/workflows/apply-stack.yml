@@ -78,14 +78,16 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.14.7"
+          # Off, so scripts/tf-capture.sh sees the plain binary's streams.
+          terraform_wrapper: false
 
       - name: terraform init
         id: init
-        run: terraform init -input=false -no-color
+        run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" init terraform init -input=false -no-color'
 
       - name: terraform validate
         id: validate
-        run: terraform validate -no-color
+        run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" validate terraform validate -no-color'
 
       # The Cloudflare provider reads CLOUDFLARE_API_TOKEN itself. Only the
       # edge stack uses it. Every other stack gets an empty value, so the
@@ -95,7 +97,7 @@ jobs:
         id: plan
         env:
           CLOUDFLARE_API_TOKEN: ${{ inputs.stack == 'edge' && secrets.CLOUDFLARE_API_TOKEN || '' }}
-        run: terraform plan -input=false -lock-timeout=300s -no-color -out=tfplan
+        run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" plan terraform plan -input=false -lock-timeout=300s -no-color -out=tfplan'
 
       - name: Resolve allow-destroy label
         id: prmeta
@@ -141,7 +143,7 @@ jobs:
         id: apply
         env:
           CLOUDFLARE_API_TOKEN: ${{ inputs.stack == 'edge' && secrets.CLOUDFLARE_API_TOKEN || '' }}
-        run: terraform apply -input=false -lock-timeout=300s -no-color tfplan
+        run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" apply terraform apply -input=false -lock-timeout=300s -no-color tfplan'
 
       - name: Comment apply result on PR
         if: always()
@@ -154,14 +156,6 @@ jobs:
           PLAN_OUTCOME: ${{ steps.plan.outcome }}
           GUARD_OUTCOME: ${{ steps.guard.outcome }}
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
-          INIT_STDOUT: ${{ steps.init.outputs.stdout }}
-          INIT_STDERR: ${{ steps.init.outputs.stderr }}
-          VALIDATE_STDOUT: ${{ steps.validate.outputs.stdout }}
-          VALIDATE_STDERR: ${{ steps.validate.outputs.stderr }}
-          PLAN_STDOUT: ${{ steps.plan.outputs.stdout }}
-          PLAN_STDERR: ${{ steps.plan.outputs.stderr }}
-          APPLY_STDOUT: ${{ steps.apply.outputs.stdout }}
-          APPLY_STDERR: ${{ steps.apply.outputs.stderr }}
         with:
           script: |
             const comment = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/apply-comment.js`);
