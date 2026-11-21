@@ -284,9 +284,8 @@ locals {
         CITATION_PROBE_DATASET    = google_bigquery_dataset.analytics_job["citation_probe"].dataset_id
       }
       secrets = {
-        ANTHROPIC_API_KEY = google_secret_manager_secret.analytics_probe["citations_anthropic_api_key"].secret_id
-        OPENAI_API_KEY    = google_secret_manager_secret.analytics_probe["citations_openai_api_key"].secret_id
-        GEMINI_API_KEY    = google_secret_manager_secret.analytics_probe["citations_gemini_api_key"].secret_id
+        OPENAI_API_KEY = google_secret_manager_secret.analytics_probe["citations_openai_api_key"].secret_id
+        GEMINI_API_KEY = google_secret_manager_secret.analytics_probe["citations_gemini_api_key"].secret_id
       }
     }
   }
