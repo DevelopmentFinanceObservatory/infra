@@ -75,14 +75,20 @@ manifest_v1_path="/api/v1/datasets/${manifest_path#/api/datasets/}"
 failures=0
 checks=0
 
-# status <path> [curl args...]: GETs base+path, discards the body, and prints
-# cf-cache-status on one line, or "none" when the response has none, then the
-# Access-Control-Allow-Origin value on a second line, or "none". A response
-# with a Cache-Tag header counts as a failure.
+# status [--any-status] <path> [curl args...]: GETs base+path, discards the
+# body, and prints cf-cache-status on one line, or "none" when the response has
+# none, then the Access-Control-Allow-Origin value on a second line, or "none".
+# A response other than 2xx or 3xx counts as a failure unless --any-status is
+# given. A response with a Cache-Tag header counts as a failure.
 status() {
-    local path="$1" headers
+    local fail=--fail-with-body path headers
+    if [ "$1" = --any-status ]; then
+        fail=
+        shift
+    fi
+    path="$1"
     shift
-    headers="$(curl -sS --fail-with-body -o /dev/null -D - "$@" "$base$path")" || {
+    headers="$(curl -sS $fail -o /dev/null -D - "$@" "$base$path")" || {
         echo "FAIL: GET $path did not answer 2xx or 3xx" >&2
         return 1
     }
@@ -185,7 +191,9 @@ else
     auth="$(status "$manifest_v1_path" -H "Authorization: Bearer edge-cache-check" | head -n 1)" || auth="error"
     expect "GET $manifest_v1_path with Authorization" "$auth" BYPASS DYNAMIC
 
-    head="$(status "$manifest_v1_path" -I | head -n 1)" || head="error"
+    # dfo-apis answers HEAD on these routes with 405; the check is on the edge,
+    # which must pass HEAD to the origin, whatever the origin answers.
+    head="$(status --any-status "$manifest_v1_path" -I | head -n 1)" || head="error"
     expect "HEAD $manifest_v1_path" "$head" DYNAMIC
 
     # The selector answers a 302, which curl does not follow without -L.

@@ -13,7 +13,8 @@ mkdir "$WORK/bin"
 export STUB_LOG="$WORK/calls.log" STUB_QUEUE="$WORK/queue" STUB_COUNT="$WORK/count"
 
 # curl: prints $STUB_QUEUE/N with CRLF line ends on its Nth call, and exits
-# 22, as --fail-with-body does on an error status, when that file says FAIL.
+# 22, as --fail-with-body does on an error status, when that file says FAIL
+# or, with --fail-with-body among its arguments, holds a 4xx or 5xx status.
 cat >"$WORK/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 echo "curl $*" >>"$STUB_LOG"
@@ -21,6 +22,8 @@ n=$(($(cat "$STUB_COUNT") + 1))
 echo "$n" >"$STUB_COUNT"
 [ "$(cat "$STUB_QUEUE/$n")" = "FAIL" ] && exit 22
 sed 's/$/\r/' "$STUB_QUEUE/$n"
+case " $* " in *" --fail-with-body "*) head -n 1 "$STUB_QUEUE/$n" | grep -qE '^HTTP/[0-9.]+ [45]' && exit 22 ;; esac
+exit 0
 STUB
 chmod +x "$WORK/bin/curl"
 export PATH="$WORK/bin:$PATH"
@@ -150,6 +153,20 @@ HAPPY[15]=HIT
 run "${HAPPY[@]}"
 check "a cached HEAD exits 1" "$(is "$status" 1)"
 check "a cached HEAD is named" "$(says "HEAD /api/v1/datasets/spec_a/cv_0123: got HIT, want DYNAMIC")"
+
+# 6b. The origin may refuse a HEAD (dfo-apis answers 405); the check reads the
+# edge's cache status whatever the origin answered. A GET that answers 405
+# still fails.
+happy
+HAPPY[15]=405:DYNAMIC
+run "${HAPPY[@]}"
+check "a refused uncached HEAD exits 0" "$(is "$status" 0)"
+check "a refused uncached HEAD passes" "$(says "ok: HEAD /api/v1/datasets/spec_a/cv_0123: DYNAMIC")"
+happy
+HAPPY[0]=405:MISS
+run "${HAPPY[@]}"
+check "a refused GET exits 1" "$(is "$status" 1)"
+check "a refused GET is named" "$(says "did not answer 2xx or 3xx")"
 
 # 7. A response that shows Cache-Tag to the visitor fails.
 happy
