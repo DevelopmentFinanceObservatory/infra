@@ -154,6 +154,26 @@ The Job bootstraps from `gcr.io/cloudrun/hello`, which has no `node`, so an exec
 
 Rotating the hashing key means bumping `website_export_hmac_key_version`. Every hashed id then changes, and only the days the next run reloads carry the new hashes, so a rotation also needs the `event` table dropped for a full reload.
 
+## Internal engineering accounts
+
+`INTERNAL_ENG_EMAILS` is the comma-separated list of email addresses and bare domains (`example.org`) whose signed-in users' events the app records with `internal_eng: true`, so analytics can leave engineering use out of usage metrics. Each entry is matched exactly and case-insensitively against a verified email only (`src/lib/events/internalEng.ts` in dfo-website). Unset or empty, the app marks nobody. The list names staff and this repository is public, so it lives in Secret Manager: `internal_eng_emails.tf` owns the secret container (`dfo-dev-website-staging-internal-eng-emails`) and the mount, and the list itself is added out-of-band as a version. The `cloud-run-service` module grants the website's runtime service account `roles/secretmanager.secretAccessor` on it, as it does for every secret in `secret_env_vars`.
+
+The mount tracks `latest`, so a change to the list is a new version plus a new revision, with no Terraform change. A placeholder first version holding the literal `none` keeps the mount resolvable, since Cloud Run refuses to start a revision whose secret env var can't be read. The app reads an entry without `@` as a domain and matches it exactly against a verified email's domain. `none` is a single-label name with no public mail domain, so the placeholder marks nobody. After the first apply, add the list as a new version holding every entry, since each version replaces the whole list. The entries below are placeholders:
+
+```
+printf '%s' 'eng@example.org,example.net' | gcloud secrets versions add dfo-dev-website-staging-internal-eng-emails \
+  --project dev-fin-observatory --data-file=-
+```
+
+`printf` rather than `echo` keeps a trailing newline out of the stored value. A secret env var resolves when an instance starts, so running instances keep the list they started with until the service rolls onto a new revision. Force one without a new image by changing a label:
+
+```
+gcloud run services update dfo-dev-website-staging --project dev-fin-observatory \
+  --region northamerica-northeast1 --update-labels=internal-eng-emails-rotated=$(date +%Y%m%d%H%M)
+```
+
+The app sets the flag when it records an event, so a list change reaches new events only, and events recorded earlier keep their flag. The anonymous events (`share.open`, `embed.view`, `feedback.submit`) carry only the email's domain, so on them only a domain entry sets the flag.
+
 ## Share migration
 
 `share_migrate_job.tf` builds the Job `dfo-dev-website-staging-share-migrate`, which runs dfo-website's `node dist/migrate-shares.cjs` once to move the website's `share` rows into dfo-apis's Presentation store. For each owned share it mints or reuses the owner's write token in `share_token` and calls dfo-apis's share import route with the token's SHA-256. Guest shares go with no digest. A share it cannot import prints `share <id>: <code> <detail>` and the run carries on, then exits 1. A re-run reuses stored tokens and dfo-apis answers an imported share as unchanged, so running it again after a fix is safe.

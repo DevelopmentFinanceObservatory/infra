@@ -52,6 +52,19 @@ gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref m
 
 `env.auto.tfvars` sets `event_export_enabled = true` (`infra/dfo-dev/website/README.md`, "Event export"). Apply this stack before the dfo-website deploy that carries the migration granting `SELECT` on `event` to `website_export_reader`, since that migration fails while the role is missing. Then run `scripts/handoff.sh dfo-prod website`, which writes `EXPORT_JOB_WEBSITE`, so the deploy moves the Job to the website image.
 
+## Internal engineering accounts
+
+The stack creates `dfo-prod-website-internal-eng-emails` with a first version holding the literal `none`, which marks nobody, so every event carries `internal_eng: false` until the real list is added. The list names staff, so it never appears in this repository. After the prod apply, add the list as a new version holding every entry, then roll a new revision, since running instances keep the value they started with and `min_instances = 1` keeps one running. A list change reaches new events only. The entries below are placeholders:
+
+```
+printf '%s' 'eng@example.org,example.net' | gcloud secrets versions add dfo-prod-website-internal-eng-emails \
+  --project prod-fin-observatory --data-file=-
+gcloud run services update dfo-prod-website --project prod-fin-observatory \
+  --region europe-west1 --update-labels=internal-eng-emails-rotated=$(date +%Y%m%d%H%M)
+```
+
+Dispatching the website's production deploy (`gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main`) also rolls a revision. `infra/dfo-dev/website/README.md` ("Internal engineering accounts") explains the mount and the list format in full.
+
 ## Share migration
 
 The Job `dfo-prod-website-share-migrate` moves the website's `share` rows into dfo-apis's Presentation store once ("Share migration" in `infra/dfo-dev/website/README.md`). Apply `apis` first, since this stack grants the runtime account read on `dfo-prod-share-import-principal`, then run `scripts/handoff.sh dfo-prod website`, which writes `SHARE_MIGRATE_JOB_WEBSITE`, so the deploy moves the Job to the website image. Once dfo-apis serves the share import route and that deploy has moved the image, run:
