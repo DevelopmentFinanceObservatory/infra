@@ -495,8 +495,10 @@ resource "google_bigquery_table" "analytics_probe" {
 # edge logs and origin catalogue buckets, the secrets, the replay and topics
 # specs invoker grants on the apis service) is granted in analytics_jobs.tf
 # behind the flag. The grader and the topic-turns account also read
-# langfuse_export, the turns they label, and topic-specs reads analytics
-# (analytics.stg_log_lines). The four probe accounts and topic-vars read no other dataset.
+# langfuse_export, the turns they label, and topic-specs reads the whole analytics
+# dataset, as every analytics job account does, for its request paths in
+# stg_log_lines, which holds no IP addresses (other analytics tables hold user
+# agents). The four probe accounts and topic-vars read no other dataset.
 locals {
   analytics_job_accounts = {
     edge = {
@@ -552,7 +554,7 @@ locals {
     }
     topic-specs = {
       display_name = "${var.namespace} analytics topics specs pass"
-      description  = "Runs the analytics repository's topics specs pass: reads analytics (stg_log_lines), calls the apis service, writes topics."
+      description  = "Runs the analytics repository's topics specs pass: reads analytics, whose stg_log_lines holds its request paths, calls the apis service, writes topics."
       dataset      = "topics"
       readers      = [google_bigquery_dataset.analytics["analytics"].dataset_id]
     }

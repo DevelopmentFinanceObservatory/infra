@@ -13,7 +13,7 @@
 #   dfo-prod-analytics-replay     python -m dfo_analytics.replay, Mondays at 06:00 UTC
 #   dfo-prod-analytics-citations  python -m dfo_analytics.citations, the 1st of each month at 06:00 UTC
 #   dfo-prod-analytics-topics-variables  python -m dfo_analytics.topics variables, Mondays at 07:00 UTC
-#   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:30 UTC
+#   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:45 UTC
 #   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 08:00 UTC
 #
 # var.analytics_jobs_enabled creates everything in this file, the
@@ -118,7 +118,9 @@ locals {
   analytics_jobs_count = var.analytics_jobs_enabled ? 1 : 0
 
   # The probes, each with the hours its absence alert looks back (the weekly
-  # period plus a day, or the monthly period plus four days) and the least
+  # period plus a day, the monthly period plus four days, or 26 hours for the
+  # daily topics turns pass, which evaluates every 300 s as the grade alert
+  # does) and the least
   # evaluation interval Cloud Monitoring allows for a PromQL condition that
   # looks that far back: 1 hour from 8 to 16 days, 6 hours from 32 to 93 days
   # (docs.cloud.google.com/monitoring/alerts/using-promql).
@@ -171,6 +173,8 @@ locals {
     TOPICS_DATASET     = google_bigquery_dataset.analytics_job["topics"].dataset_id
     TOPICS_CONCURRENCY = "10"
     TOPICS_MAX_ITEMS   = "50000"
+
+    TOPICS_RUN_DEADLINE_MINUTES = "50"
   }
 
   # Every Job has max_retries = 0, so a failed run is one failed execution and
@@ -319,12 +323,14 @@ locals {
     # One Job per pass, since each pass has its own account, env, secrets and
     # schedule, and one Job's absence and failure alerts then name the pass.
     # The Jobs read the dbt seed dbt/seeds/topic_taxonomy.csv from the image's
-    # /app, so TOPICS_TAXONOMY_PATH is left unset. The three passes share the
-    # TypeSafe key, so their Monday starts are an hour apart, past the turns
-    # pass's one-hour timeout. The turns pass runs daily at 05:30.
-    # Each variables request carries about 2,000 input tokens, so its rate is
-    # unmeasured: 20,000 items is a cap to raise after the canary run sets the
-    # real figure, inside the one-hour timeout.
+    # /app, so TOPICS_TAXONOMY_PATH is left unset. Each run stops starting
+    # chunks 50 minutes in (TOPICS_RUN_DEADLINE_MINUTES) and exits 0, inside
+    # the 3600 s task timeout. The variables and turns passes and the grader
+    # share the TypeSafe key (specs calls no model), so they do not overlap:
+    # the grader starts at 04:30 with a 60-minute timeout, turns at 05:45
+    # daily, and variables on Mondays at 07:00, after turns' timeout. Specs
+    # runs an hour later. Each variables request carries about 2,000 input
+    # tokens, so its items are capped at 20,000.
     "topics-variables" = {
       account  = google_service_account.analytics_job["topic-vars"]
       args     = ["python", "-m", "dfo_analytics.topics", "variables"]
@@ -345,7 +351,7 @@ locals {
       args     = ["python", "-m", "dfo_analytics.topics", "turns"]
       timeout  = "3600s"
       memory   = "2Gi"
-      schedule = "30 5 * * *"
+      schedule = "45 5 * * *"
       env = merge(local.analytics_topics_env, {
         TOPICS_SOURCE_DATASET       = "langfuse_export"
         TOPICS_TURN_LOOKBACK_DAYS   = "365"
