@@ -34,8 +34,9 @@ protected='^google_(spanner_instance|spanner_database|sql_database_instance|sql_
 # can interleave its own lines into a piped stdout and break jq parsing.
 terraform show -json "$plan" >"$plan.json"
 
+# A plan for a stack with no resources has no resource_changes key at all.
 destroys="$(jq -r --arg re "$protected" '
-  .resource_changes[]
+  (.resource_changes // [])[]
   | select(.change.actions | index("delete"))
   | select(.type | test($re))
   | "  \(.change.actions | join("+"))\t\(.address)\t(\(.action_reason // "n/a"))"
