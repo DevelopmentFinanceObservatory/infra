@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end tests for load-ga4-history.sh, load-search-console-history.sh,
-# load-cloudflare-history.sh and load-website-page-history.sh against stub
+# load-cloudflare-history.sh, load-cloudflare-pages-history.sh and
+# load-website-page-history.sh against stub
 # `curl`, `gcloud`, `terraform` and `sleep` commands, so nothing reaches
 # Google. The curl stub answers the GA4 and Search Console calls with
 # the hand-written responses in testdata/web-history, written to the shape the
@@ -21,7 +22,8 @@ mkdir "$WORK/bin"
 REPO="$WORK/repo"
 mkdir -p "$REPO/scripts" "$REPO/infra/dfo-prod/telemetry"
 cp "$SCRIPT_DIR"/web-history-lib.sh "$SCRIPT_DIR"/load-ga4-history.sh "$SCRIPT_DIR"/load-search-console-history.sh \
-    "$SCRIPT_DIR"/load-cloudflare-history.sh "$SCRIPT_DIR"/load-website-page-history.sh "$REPO/scripts/"
+    "$SCRIPT_DIR"/load-cloudflare-history.sh "$SCRIPT_DIR"/load-cloudflare-pages-history.sh \
+    "$SCRIPT_DIR"/load-website-page-history.sh "$REPO/scripts/"
 export STUB_LOG="$WORK/calls.log" STUB_STATE="$WORK/state" STUB_FIXTURES="$FIXTURES"
 export WEB_HISTORY_PAGE_SIZE=2
 
@@ -330,8 +332,9 @@ for row in '{"date":"2026-10-05","page_loads":1}' '{"date":"2026-10-05","page_lo
     '{"date":"2026-10-05","page_loads":1.5,"verified_bot_page_loads":0}' '{"date":"2026-02-30","page_loads":1,"verified_bot_page_loads":0}' \
     '{"date":"20261005","page_loads":1,"verified_bot_page_loads":0}' '[1]'; do
     bad_file "$row"
-    run load-cloudflare-history.sh "$WORK/bad.jsonl" 2026-01-01 2026-12-31
+    run load-cloudflare-history.sh "$WORK/bad.jsonl" 2026-01-01 2026-10-31
     check "cloudflare refuses the row $row with no calls" "$(is "$status/$calls" "2/")"
+    check "the refusal names the row $row" "$(says "$(printf 'rows without a YYYY-MM-DD date and whole, non-negative page_loads and verified_bot_page_loads:\n%s' "$row")")"
 done
 : >"$WORK/bad.jsonl"
 run load-cloudflare-history.sh "$WORK/bad.jsonl" 2026-10-05 2026-10-07
@@ -345,7 +348,59 @@ for args in "$FIXTURES/cloudflare.jsonl 2026-10-05" "$WORK/missing.jsonl 2026-10
     check "cloudflare refuses [${args#"$WORK"/}] with no calls" "$(is "$status/$calls" "2/")"
 done
 
-# 12. Website page views. The file's rows are staged sorted and cut to the
+# 12. Cloudflare per page: the file's rows are staged sorted and cut to the
+# table's four fields, with a BigQuery-only token. One day may hold several
+# paths, and a repeated day and path, a path that does not start with / and
+# the daily loader's bad rows are refused before any call.
+run load-cloudflare-pages-history.sh "$FIXTURES/cloudflare-pages.jsonl" 2026-10-05 2026-10-07
+check "cloudflare pages load exits 0" "$(is "$status" 0)"
+check "cloudflare pages impersonate with the BigQuery scope alone" "$(has "--impersonate-service-account=web-history@test-project.iam.gserviceaccount.com --scopes=https://www.googleapis.com/auth/bigquery")"
+check "cloudflare pages stage the rows cut to the table's fields" "$(is "$(staged cloudflare_pages_daily)" "$(printf '%s\n' \
+    '{"date":"2026-10-05","page_loads":40,"path":"/prototypes","verified_bot_page_loads":2}' \
+    '{"date":"2026-10-05","page_loads":9,"path":"/prototypes/debt","verified_bot_page_loads":0}' \
+    '{"date":"2026-10-07","page_loads":12,"path":"/prototypes/oda-counts","verified_bot_page_loads":1}')")"
+check "cloudflare pages create the table with its schema, partitioned by day" "$(query_has 'CREATE TABLE IF NOT EXISTS `test-project.web_history.cloudflare_pages_daily` (date DATE NOT NULL OPTIONS(description = "UTC day, as Cloudflare reports it."), path STRING NOT NULL OPTIONS(description = "Request path without the query string, as Cloudflare reports it."), page_loads INT64 NOT NULL')"
+check "cloudflare pages partition the table by day" "$(query_has 'verified_bot_page_loads INT64 NOT NULL OPTIONS(description = "The same requests from verified bots.")) PARTITION BY date;')"
+check "cloudflare pages replace the range in one transaction" "$(is "$(grep -E '^(BEGIN|DELETE|INSERT|COMMIT|DROP)' "$STUB_STATE/query.sql" | cut -d' ' -f1-3 | tr '\n' '|')" 'BEGIN TRANSACTION;|DELETE FROM `test-project.web_history.cloudflare_pages_daily`|INSERT INTO `test-project.web_history.cloudflare_pages_daily`|COMMIT TRANSACTION;|DROP TABLE `test-project.web_history._staging_cloudflare_pages_daily`;|')"
+check "cloudflare pages delete the whole range" "$(query_has "DELETE FROM \`test-project.web_history.cloudflare_pages_daily\` WHERE date BETWEEN DATE '2026-10-05' AND DATE '2026-10-07';")"
+check "cloudflare pages print the rows they loaded" "$(says "$(printf 'date\tpath\tpage_loads\tverified_bot_page_loads\n2026-10-05\t/prototypes\t40\t2\n2026-10-05\t/prototypes/debt\t9\t0\n2026-10-07\t/prototypes/oda-counts\t12\t1')")"
+printf '{"date":"%s","path":"/prototypes","page_loads":1,"verified_bot_page_loads":0}\n' "$yesterday" >"$WORK/yesterday.jsonl"
+run load-cloudflare-pages-history.sh "$WORK/yesterday.jsonl" "$yesterday" "$yesterday"
+check "cloudflare pages load an end date of yesterday" "$(is "$status" 0)"
+printf '{"date":"%s","path":"/prototypes","page_loads":1,"verified_bot_page_loads":0}\n' "$today" >"$WORK/today.jsonl"
+run load-cloudflare-pages-history.sh "$WORK/today.jsonl" "$today" "$today"
+check "cloudflare pages refuse an end date of today with no calls" "$(is "$status/$calls" "2/")"
+page5='{"date":"2026-10-05","path":"/prototypes","page_loads":1,"verified_bot_page_loads":0}'
+bad_file "$page5" '{"date":"2026-10-08","path":"/prototypes","page_loads":1,"verified_bot_page_loads":0}'
+run load-cloudflare-pages-history.sh "$WORK/bad.jsonl" 2026-10-05 2026-10-07
+check "cloudflare pages refuse a date outside the range with no calls" "$(is "$status/$calls" "2/")"
+check "the refusal names the page date outside the range" "$(says "$(printf 'dates outside 2026-10-05 to 2026-10-07:\n2026-10-08')")"
+bad_file "$page5" '{"date":"2026-10-05","path":"/prototypes/debt","page_loads":1,"verified_bot_page_loads":0}' "$page5"
+run load-cloudflare-pages-history.sh "$WORK/bad.jsonl" 2026-10-05 2026-10-07
+check "cloudflare pages refuse a repeated date and path with no calls" "$(is "$status/$calls" "2/")"
+check "the refusal names the repeated date and path alone" "$(is "$out" "$(printf 'dates and paths on more than one row:\n2026-10-05 /prototypes')")"
+for row in '{"date":"2026-10-05","page_loads":1,"verified_bot_page_loads":0}' '{"date":"2026-10-05","path":"prototypes","page_loads":1,"verified_bot_page_loads":0}' \
+    '{"date":"2026-10-05","path":7,"page_loads":1,"verified_bot_page_loads":0}' '{"date":"2026-10-05","path":"/prototypes","page_loads":1}' \
+    '{"date":"2026-10-05","path":"/prototypes","page_loads":-1,"verified_bot_page_loads":0}' '{"date":"2026-10-05","path":"/prototypes","page_loads":1.5,"verified_bot_page_loads":0}' \
+    '{"date":"2026-02-30","path":"/prototypes","page_loads":1,"verified_bot_page_loads":0}' '[1]'; do
+    bad_file "$row"
+    run load-cloudflare-pages-history.sh "$WORK/bad.jsonl" 2026-01-01 2026-10-31
+    check "cloudflare pages refuse the row $row with no calls" "$(is "$status/$calls" "2/")"
+    check "the refusal names the page row $row" "$(says "$(printf 'rows without a YYYY-MM-DD date, a path starting with / and whole, non-negative page_loads and verified_bot_page_loads:\n%s' "$row")")"
+done
+: >"$WORK/bad.jsonl"
+run load-cloudflare-pages-history.sh "$WORK/bad.jsonl" 2026-10-05 2026-10-07
+check "cloudflare pages refuse an empty file with no calls" "$(is "$status/$calls" "2/")"
+bad_file '{"date":'
+run load-cloudflare-pages-history.sh "$WORK/bad.jsonl" 2026-10-05 2026-10-07
+check "cloudflare pages refuse a file that is not JSON with no calls" "$(is "$status/$calls" "2/")"
+for args in "$FIXTURES/cloudflare-pages.jsonl 2026-10-05" "$WORK/missing.jsonl 2026-10-05 2026-10-07" "$FIXTURES/cloudflare-pages.jsonl 2026-10-07 2026-10-05"; do
+    # shellcheck disable=SC2086 # split the case into its arguments
+    run load-cloudflare-pages-history.sh $args
+    check "cloudflare pages refuse [${args#"$WORK"/}] with no calls" "$(is "$status/$calls" "2/")"
+done
+
+# 13. Website page views. The file's rows are staged sorted and cut to the
 # table's three fields, with a BigQuery-only token. The start may not be before
 # the day the public domain reached the service, and yesterday is the latest
 # end date.
@@ -379,8 +434,9 @@ check "website page views refuse a repeated date with no calls" "$(is "$status/$
 for row in '{"date":"2026-10-14","page_views":1}' '{"date":"2026-10-14","page_views":1,"bot_page_views":-1}' \
     '{"date":"2026-10-14","page_views":1.5,"bot_page_views":0}' '{"date":"2026-11-31","page_views":1,"bot_page_views":0}' '[1]'; do
     bad_file "$row"
-    run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-12-31
+    run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-10-31
     check "website page views refuse the row $row with no calls" "$(is "$status/$calls" "2/")"
+    check "the refusal names the website row $row" "$(says "$(printf 'rows without a YYYY-MM-DD date and whole, non-negative page_views and bot_page_views:\n%s' "$row")")"
 done
 : >"$WORK/bad.jsonl"
 run load-website-page-history.sh "$WORK/bad.jsonl" 2026-10-14 2026-10-16

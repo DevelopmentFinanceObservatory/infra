@@ -2,7 +2,7 @@
 
 The Cloudflare Logpush job that records every dataset read the edge handles, in prod only. The `.tf` files are symlinks to `infra/stacks/edge-logs`. This directory holds prod's backend, tfvars, and lock file.
 
-The stack holds the `dataset-reads` job, the ownership challenge it needs, and the zone's `http_log_custom_fields` ruleset. Each exists only while `edge_logpush_bucket` is set. The `edge_logpush_job_id` output is the job's id, or null while the bucket is unset. The edge stack's cache rule refuses to exist until this job is enabled and has delivered (`infra/dfo-prod/edge/README.md`, "Cloudflare").
+The stack holds the `dataset-reads` job, the ownership challenge it needs, and the zone's `http_log_custom_fields` ruleset. Each exists only while `edge_logpush_bucket` is set. The `edge_logpush_job_id` output is the job's id, or null while the bucket is unset. The edge stack's cache rule refuses to exist until this job is enabled, has delivered, and is not failing (`infra/dfo-prod/edge/README.md`, "Cloudflare").
 
 ## Tokens
 
@@ -21,7 +21,7 @@ It writes gzipped NDJSON batches named `<start>_<end>_<hash>.log.gz` to `gs://df
 Each line has these fields, in this order, with timestamps in RFC 3339 ([output options](https://developers.cloudflare.com/logs/logpush/logpush-job/log-output-options/)). `RequestHeaders` holds the two headers the custom fields rule names, as the request sent them ([custom fields](https://developers.cloudflare.com/logs/logpush/logpush-job/custom-fields/)). `OriginResponseStatus` is 0 when the edge answered without the origin.
 
 ```json
-{"EdgeStartTimestamp":"2026-11-19T11:30:01Z","RayID":"8e3f2a1b4c5d6e7f","ClientRequestMethod":"GET","ClientRequestHost":"developmentfinance.org","ClientRequestPath":"/api/datasets/spec_<id>/cv_<hex>/files/<digest>","ClientRequestReferer":"https://developmentfinance.org/","ClientRequestUserAgent":"Mozilla/5.0 ...","ClientIP":"192.0.2.1","ClientCountry":"gb","CacheCacheStatus":"hit","EdgeResponseStatus":200,"EdgeResponseBytes":48213,"OriginResponseStatus":0,"RequestHeaders":{"origin":"https://developmentfinance.org","x-dfo-client":"<client>"}}
+{"EdgeStartTimestamp":"2026-11-19T11:30:01Z","RayID":"8e3f2a1b4c5d6e7f","ClientRequestMethod":"GET","ClientRequestHost":"developmentfinance.org","ClientRequestPath":"/api/datasets/spec_<id>/cv_<hex>/files/<digest>","ClientRequestReferer":"https://developmentfinance.org/","ClientRequestUserAgent":"Mozilla/5.0 ...","ClientIP":"192.0.2.1","ClientCountry":"gb","CacheCacheStatus":"hit","EdgeResponseStatus":200,"EdgeResponseBytes":48213,"OriginResponseStatus":0,"RequestHeaders":{"origin":"https://developmentfinance.org","x-dfo-client":"<client>","sec-fetch-site":"same-origin"}}
 ```
 
 `ClientRequestPath` has no query string. The `/file` selector is the only dataset read with one, and it is never cached, so the website's request log carries its format.
@@ -55,6 +55,10 @@ curl -sS "https://api.cloudflare.com/client/v4/zones/e837f8819d4b16dce14e17cbe6b
 
 An empty answer means the create works. When the call lists an entrypoint, add an `import` block for `cloudflare_ruleset.log_custom_fields[0]` with the id `zones/e837f8819d4b16dce14e17cbe6ba3716/<ruleset id>` to `cloudflare_logpush.tf`, and make the resource's `name` and `kind` match the listed ones, since a change would replace the ruleset. Remove the block once state holds the ruleset.
 
+## Renewing the ownership challenge
+
+Cloudflare's ownership challenge token expires seven days after it is issued ([ownership challenge](https://developers.cloudflare.com/logs/logpush/logpush-job/logpush-ownership-challenge/)), but `cloudflare_logpush_ownership_challenge.edge_logs` stays in state with the first token. A job deleted outside Terraform is therefore recreated with an expired token, and the apply fails on `cloudflare_logpush_job.dataset_reads`. Terraform cannot replace the challenge when the job is recreated, since `replace_triggered_by` does not fire on a create and a reference from the challenge to the job would be a cycle. Raise `edge_logpush_challenge_generation` by one in `infra/dfo-prod/edge-logs/env.auto.tfvars` and release the change through the two `apply-stack.yml` jobs as usual. The plan replaces the challenge, Cloudflare writes a new `ownership-challenge-<random>.txt` to the bucket, and the job is created, or updated, with its token in the same apply. Do the same when an apply that updates the job fails on the challenge. The old challenge file can be deleted once the apply succeeds.
+
 ## Apply order
 
 The cache rule in the edge stack cannot exist without this job, and the job writes to the telemetry stack's bucket. Each step below is its own merge to main, since `apply.yml` runs telemetry, edge-logs and edge side by side as consumers.
@@ -62,6 +66,7 @@ The cache rule in the edge stack cannot exist without this job, and the job writ
 1. Apply the telemetry stack, which creates the bucket and the Logpush grant. Its `edge_logs_bucket` output is the bucket name.
 2. Run the check in "Before the first apply". Set `edge_logpush_bucket` in `infra/dfo-prod/edge-logs/env.auto.tfvars` to the bucket name and apply this stack. The apply creates the custom fields rule, asks Cloudflare for an ownership challenge, which Cloudflare writes to the bucket as `ownership-challenge-<random>.txt`, reads the token from that file, and creates the job with it ([ownership challenge](https://developers.cloudflare.com/logs/logpush/logpush-job/logpush-ownership-challenge/)). Leave the challenge file in place: every plan of this stack reads it, and the bucket's delete rule matches only `.log.gz`.
 3. Send a read and run `scripts/check-edge-logpush.sh` until it passes, as "Checking the feed" shows.
-4. Set `edge_cache_enabled = true` in `infra/dfo-prod/edge/env.auto.tfvars` and apply the edge stack. Its precondition reads the job and refuses the cache unless the job is enabled and reports a `last_complete`. Then run `scripts/check-edge-cache.sh` as `infra/dfo-prod/edge/README.md`, "Checking the cache after an apply", describes, and `scripts/check-edge-logpush.sh` again, which should now count `hit` lines.
+4. Confirm that the telemetry stack's edge extract Job, `dfo-prod-analytics-edge`, exists and its latest hourly execution succeeded, as step 4 of "Apply order for the cache" in `infra/dfo-prod/edge/README.md` shows. It loads these batches into BigQuery, and without it the reads the cache answers expire in the bucket uncounted.
+5. Set `edge_cache_enabled = true` in `infra/dfo-prod/edge/env.auto.tfvars` and apply the edge stack. Its precondition reads the job and refuses the cache unless the job is enabled, reports a `last_complete`, and reports no `last_error` or `error_message`. Then run `scripts/check-edge-cache.sh` as `infra/dfo-prod/edge/README.md`, "Checking the cache after an apply", describes, and `scripts/check-edge-logpush.sh` again, which should now count `hit` lines. The cache is live only when `infra/dfo-prod/edge/README.md`, "Confirming that a miss and a hit both reach BigQuery", passes; raw batches expire after three days, so run it inside that window.
 
 To turn the cache off, set `edge_cache_enabled` to false in the edge stack and apply. Remove the job only after that apply. This stack does not read the cache rule, so unsetting `edge_logpush_bucket` while the cache is on deletes the job and leaves cached reads unlogged until the next edge plan fails its precondition.

@@ -24,9 +24,11 @@ locals {
   edge_logpush_destination = "gs://${coalesce(var.edge_logpush_bucket, "unset")}/http_requests/{DATE}"
 
   # Request headers logged through the custom fields below, in lower case as
-  # Cloudflare requires. Origin names the site a browser read came from, and
-  # x-dfo-client the SDK or tool that sent it.
-  edge_logpush_request_headers = ["origin", "x-dfo-client"]
+  # Cloudflare requires. Origin names the site a browser read came from,
+  # x-dfo-client the SDK or tool that sent it, and sec-fetch-site whether the
+  # read came from a developmentfinance.org page, which the website proxy uses
+  # to tell website reads from API reads.
+  edge_logpush_request_headers = ["origin", "x-dfo-client", "sec-fetch-site"]
 
   # GET on either dataset prefix, from any host. The Logpush filter has no
   # case-insensitive operator
@@ -100,11 +102,30 @@ resource "cloudflare_ruleset" "log_custom_fields" {
 # (https://developers.cloudflare.com/logs/logpush/logpush-job/logpush-ownership-challenge/).
 # The bucket's delete rule leaves .txt objects alone, so the file stays for
 # every later plan's read below.
+#
+# The token expires seven days after it is issued, but the challenge stays in
+# state, so a job deleted outside Terraform is recreated with an expired token
+# and the create fails. Terraform cannot tie the challenge to the job's
+# recreation: replace_triggered_by fires on an update or a replacement, not on
+# a create, and a reference from the challenge to the job would be a cycle.
+# Raising var.edge_logpush_challenge_generation replaces the challenge instead,
+# and the job takes the new token in the same apply
+# (infra/dfo-prod/edge-logs/README.md, "Renewing the ownership challenge").
+resource "terraform_data" "edge_logpush_challenge_generation" {
+  count = local.edge_logpush ? 1 : 0
+
+  input = var.edge_logpush_challenge_generation
+}
+
 resource "cloudflare_logpush_ownership_challenge" "edge_logs" {
   count = local.edge_logpush ? 1 : 0
 
   zone_id          = var.cloudflare_zone_id
   destination_conf = local.edge_logpush_destination
+
+  lifecycle {
+    replace_triggered_by = [terraform_data.edge_logpush_challenge_generation[count.index]]
+  }
 }
 
 data "google_storage_bucket_object_content" "edge_logpush_challenge" {

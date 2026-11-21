@@ -23,3 +23,9 @@ variable "edge_logpush_bucket" {
     error_message = "edge_logpush_bucket must be a GCS bucket name, without the gs:// scheme."
   }
 }
+
+variable "edge_logpush_challenge_generation" {
+  description = "Raising it replaces the Logpush ownership challenge, so the job gets a fresh token in the same apply. Cloudflare's token expires seven days after issue, so raise it when an apply that creates or updates the job fails on the challenge, as after the job was deleted outside Terraform."
+  type        = number
+  default     = 0
+}

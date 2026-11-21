@@ -67,7 +67,7 @@ An empty answer means the create works. When the call lists an entrypoint, uncom
 
 The `dataset-reads` Logpush job writes one line for every GET the edge handles on a dataset path, cache hits included, unsampled, to the telemetry stack's bucket. A read Cloudflare answers from its cache never reaches the website, so these lines are the only record of it. The job, its custom fields and its ownership challenge live in the edge-logs stack, since every Logpush API call needs Logs Write on the zone, reads included ([permissions](https://developers.cloudflare.com/logs/logpush/permissions/)). [`infra/dfo-prod/edge-logs/README.md`](../edge-logs/README.md) has the fields, the cost, the health checks and `scripts/check-edge-logpush.sh`.
 
-`cloudflare_ruleset.cache` has a precondition that reads the zone's Logpush jobs through the `cloudflare_logpush_jobs` data source and fails unless exactly one job is named `dataset-reads` on `http_requests`, is enabled, and reports a `last_complete`, the end of the newest period it has delivered. The data source exists only while `edge_cache_enabled` and `edge_cache_logpush_check` are both true, and both of the provider's Logpush data sources accept only Logs Write ([`cloudflare_logpush_jobs`](https://registry.terraform.io/providers/cloudflare/cloudflare/5.27.0/docs/data-sources/logpush_jobs)). `edge_cache_logpush_check` defaults to true, so every apply checks the job. `plan-prod.yml` sets `TF_VAR_edge_cache_logpush_check=false` on pull-request plans, which use the read-only token and apply nothing, so they make no Logpush call and skip the precondition. A local plan with the plan token needs the same export once the cache is on. While `edge_cache_enabled` is false, no plan reads Logpush at all.
+`cloudflare_ruleset.cache` has a precondition that reads the zone's Logpush jobs through the `cloudflare_logpush_jobs` data source and fails unless exactly one job is named `dataset-reads` on `http_requests`, is enabled, reports a `last_complete`, the end of the newest period it has delivered, and reports no `last_error` or `error_message`. Cloudflare sets those two while the job is failing and clears them on its next successful push, so a job that delivered once and fails now also refuses the cache. The data source exists only while `edge_cache_enabled` and `edge_cache_logpush_check` are both true, and both of the provider's Logpush data sources accept only Logs Write ([`cloudflare_logpush_jobs`](https://registry.terraform.io/providers/cloudflare/cloudflare/5.27.0/docs/data-sources/logpush_jobs)). `edge_cache_logpush_check` defaults to true, so every apply checks the job. `plan-prod.yml` sets `TF_VAR_edge_cache_logpush_check=false` on pull-request plans, which use the read-only token and apply nothing, so they make no Logpush call and skip the precondition. A local plan with the plan token needs the same export once the cache is on. While `edge_cache_enabled` is false, no plan reads Logpush at all.
 
 ### Apply order for the cache
 
@@ -76,7 +76,8 @@ Each step is its own merge to main:
 1. Apply the telemetry stack, which creates the bucket.
 2. Set `edge_logpush_bucket` in `infra/dfo-prod/edge-logs/env.auto.tfvars` and apply the edge-logs stack, which creates the job.
 3. Send a read and run `scripts/check-edge-logpush.sh` until it passes.
-4. Set `edge_cache_enabled = true` in `infra/dfo-prod/edge/env.auto.tfvars` and apply this stack. Then run `scripts/check-edge-cache.sh` as "Checking the cache after an apply" describes, and `scripts/check-edge-logpush.sh` again, which should now count `hit` lines.
+4. Confirm that the edge extract Job `dfo-prod-analytics-edge` exists and runs on its hourly trigger, so the edge reads reach `edge_export.deliveries` in BigQuery. The telemetry stack creates it while `analytics_jobs_enabled` is on in `infra/dfo-prod/telemetry/env.auto.tfvars` ("Analytics jobs" in `infra/dfo-prod/telemetry/README.md`). Its latest scheduled execution must have succeeded: `gcloud run jobs executions list --job=dfo-prod-analytics-edge --region=europe-west1 --project=prod-fin-observatory --limit=3`. Without it, every read the cache answers stays in the bucket and expires there after three days.
+5. Set `edge_cache_enabled = true` in `infra/dfo-prod/edge/env.auto.tfvars` and apply this stack. Then run `scripts/check-edge-cache.sh` as "Checking the cache after an apply" describes, `scripts/check-edge-logpush.sh` again, which should now count `hit` lines, and the BigQuery check in "Confirming that a miss and a hit both reach BigQuery". The cache is live only when that check passes.
 
 The edge-logs README has the detail of each step. To turn the cache off, set `edge_cache_enabled` to false and apply; the ruleset is deleted. Remove the job only after that.
 
@@ -94,7 +95,15 @@ curl -sS https://api.cloudflare.com/client/v4/zones/e837f8819d4b16dce14e17cbe6ba
   -d '{"tags": ["cv_<hex>", "cv_<hex of a derived version>"]}'
 ```
 
-The call answers `"success": true` once the purge is queued, and the next read of each purged path shows `cf-cache-status: MISS` and the API's 410. A purge cannot reach browser caches. A pinned file's `max-age=3600` means a returning visitor's browser can show the revoked file for up to an hour.
+The call answers `"success": true` once the purge is queued. Then run `scripts/check-edge-cache.sh --revoked`, which reads each variant of a revoked file and its manifest, and the v1 manifest, once, and passes only when every answer is 410 and its `cf-cache-status` is neither `HIT` nor `STALE`:
+
+```bash
+scripts/check-edge-cache.sh --revoked \
+  /api/datasets/spec_<id>/cv_<hex>/files/<digest> \
+  '/api/datasets/spec_<id>/cv_<hex>/file?format=csv'
+```
+
+Do not use `--after-purge` here: it expects the 200 a live version answers and fails on a 410. A purge cannot reach browser caches. A pinned file's `max-age=3600` means a returning visitor's browser can show the revoked file for up to an hour.
 
 ## Checking the cache after an apply
 
@@ -106,7 +115,7 @@ scripts/check-edge-cache.sh \
   '/api/datasets/spec_<id>/cv_<hex>/file?format=csv'
 ```
 
-After purging the version's tag as in "Revoking a dataset version", `--after-purge` skips the `HIT` reads, reads each file and manifest variant once, and expects `MISS` for every one. Run it only on a version the first run has already filled.
+After purging a live version's tag, `--after-purge` skips the `HIT` reads, reads each file and manifest variant once, and expects `MISS` for every one. Run it only on a version the first run has already filled. After a revocation, use `--revoked` instead ("Revoking a dataset version").
 
 ```bash
 scripts/check-edge-cache.sh --after-purge \
@@ -116,6 +125,32 @@ scripts/check-edge-cache.sh --after-purge \
 
 `scripts/check-edge-cache.test.sh` tests the script against a stub `curl`.
 
+### Confirming that a miss and a hit both reach BigQuery
+
+The cache stays on only after one request has been counted as an origin miss and again as an edge hit in BigQuery. `check-edge-logpush.sh` stops at the bucket, so this check follows the data into BigQuery. It needs the cache on, since a hit cannot exist before it, so it runs right after the apply in step 5 of "Apply order for the cache". Activation waits on it: until it passes, nothing treats the cache as live, and a failure means setting `edge_cache_enabled` back to false and applying. The batches in the bucket expire three days after they are written, so the load into BigQuery and this query must both finish inside that window, or the hit row is gone before it can be checked.
+
+1. Run `scripts/check-edge-cache.sh` on a version no one has read since its last purge. Its first read of the file in each variant is an origin miss and its second an edge hit. Note the UTC time before the first read and after the last, and the `spec_<id>` and `cv_<hex>` of the file path.
+2. Wait for the next hourly run of the `dfo-prod-analytics-edge` Cloud Run Job (`python -m dfo_analytics.extract.edge`, at minute 5), which loads the Logpush batches into `prod-fin-observatory.edge_export.deliveries` (one row per GET, keyed by `ray_id`). Then run the query below with `<spec_id>`, `<content_version>`, `<start>` and `<end>` set from step 1. The first branch counts edge rows by `cache_status` and whether they carry an `origin_status`. The second counts the dfo-apis delivery lines (`datasets_api.delivery`) in `dfo_logs._AllLogs` for the `files` door, which serves `/files/<digest>`. Both branches count file reads alone, since `check-edge-cache.sh` also reads the manifest, which logs its own delivery line under the `snapshot` door, and the `/file` selector, which logs one under `file_selector`. Both filter on their partition column.
+
+```bash
+bq query --project_id=prod-fin-observatory --location=EU --use_legacy_sql=false \
+  "SELECT 'edge' AS source, cache_status AS kind, origin_status IS NOT NULL AS has_origin_status, COUNT(*) AS n
+   FROM \`prod-fin-observatory.edge_export.deliveries\`
+   WHERE edge_started_at BETWEEN TIMESTAMP '<start>' AND TIMESTAMP '<end>'
+     AND spec_id = '<spec_id>' AND content_version = '<content_version>' AND path_kind = 'file'
+   GROUP BY kind, has_origin_status
+   UNION ALL
+   SELECT 'dfo_apis_delivery', 'delivery_line', NULL, COUNT(*)
+   FROM \`prod-fin-observatory.dfo_logs._AllLogs\`
+   WHERE timestamp BETWEEN TIMESTAMP '<start>' AND TIMESTAMP '<end>'
+     AND JSON_VALUE(json_payload, '\$.logger') = 'datasets_api.delivery'
+     AND JSON_VALUE(json_payload, '\$.door') = 'files'
+     AND JSON_VALUE(json_payload, '\$.spec_id') = '<spec_id>'
+     AND JSON_VALUE(json_payload, '\$.content_version') = '<content_version>'"
+```
+
+Expected, for the file reads of one `check-edge-cache.sh` run (three variants, each read twice): an `edge` row with `kind` `miss` and `has_origin_status` true, `n` 3; an `edge` row with `kind` `hit` and `has_origin_status` false, `n` 3; and a `dfo_apis_delivery` row with `n` 3, one `files` delivery line for each miss and none for the hits. A missing `miss` or `hit` row means the Logpush row did not reach BigQuery, so check the extract job's latest run. A delivery count below the miss count means a miss did not reach dfo-apis' log. A count above it means a hit did reach the origin. Any of these fails the check.
+
 ## Counting dataset reads
 
 The website's request log misses every read that Cloudflare answers from its cache, which is most of what the cache rule exists to serve. `scripts/edge-usage.sh <start_date> <end_date>` estimates them at the edge. It queries the GraphQL Analytics API's `httpRequestsAdaptiveGroups` for GET requests to the dataset paths under both prefixes, and prints a tab-separated table of UTC day, prefix, kind (`file`, `manifest`, or `selector`), cache status, requests, bytes (`edgeResponseBytes`) and the `sampled` interval (`avg { sampleInterval }`; 1 means unsampled, 10 means one request in ten was sampled, and folded rows show the request-weighted mean). `EDGE_USAGE_BY_REFERER=1` adds the referring host as a column through the `clientRefererHost` dimension. Cloudflare's pages list `clientRequestPath` ([example](https://developers.cloudflare.com/analytics/graphql-api/tutorials/end-customer-analytics/)) and the 31-day minimum retention of adaptive datasets ([limits](https://developers.cloudflare.com/analytics/graphql-api/limits/)) but not each dataset's dimensions, so confirm `cacheStatus` and `clientRefererHost` by [introspection](https://developers.cloudflare.com/analytics/graphql-api/features/discovery/introspection/) with the analytics token before relying on the output; Cloudflare answers an unknown field with an error, which the script prints. These figures are sampled estimates; the Logpush lines ("Logpush") are the unsampled record of the same reads. `httpRequestsAdaptiveGroups` is an adaptive dataset, so Cloudflare samples it at a rate the caller cannot set ([sampling](https://developers.cloudflare.com/analytics/graphql-api/sampling/)) and scales the counts and bytes up from the sample. Use them for the cache hit share and the bytes served from the edge. They are a separate source from the analytics repo's dataset uses, which count dfo-apis delivery lines, and are never added to them. The query follows Cloudflare's [colo migration guide](https://developers.cloudflare.com/analytics/graphql-api/migration-guides/zone-analytics-colos/), which requests `sum { edgeResponseBytes }` and `avg { sampleInterval }` on this dataset. The script exits 1 when an answer reaches the 10,000-row limit, so query a shorter range.
@@ -124,7 +159,7 @@ The token is read-only: Analytics Read on the zone, in the macOS keychain servic
 
 ## Apply order
 
-Turning the cache on follows the order in "Apply order for the cache": telemetry, then edge-logs, then `scripts/check-edge-logpush.sh`, then `edge_cache_enabled = true` here. All three stacks are consumers in `apply.yml` and run side by side, so each step merges only after the one before it has applied. Edge also applies after `foundation`, which grants the applier the load balancer, Cloud Armor, and Certificate Manager roles and lets it write this stack's state, and after `website`, whose Cloud Run service the endpoint group names. The stack enables `certificatemanager.googleapis.com` itself. The first apply can fail with `SERVICE_DISABLED` on the Certificate Manager resources while the API propagates. Recover with a `workflow_dispatch` of `apply.yml` with `stack=edge`. The same dispatch recovers an apply where the `apis` producer tier failed and skipped edge.
+Turning the cache on follows the order in "Apply order for the cache": telemetry, then edge-logs, then `scripts/check-edge-logpush.sh`, then a check that the `dfo-prod-analytics-edge` extract Job runs, then `edge_cache_enabled = true` here. All three stacks are consumers in `apply.yml` and run side by side, so each step merges only after the one before it has applied. Edge also applies after `foundation`, which grants the applier the load balancer, Cloud Armor, and Certificate Manager roles and lets it write this stack's state, and after `website`, whose Cloud Run service the endpoint group names. The stack enables `certificatemanager.googleapis.com` itself. The first apply can fail with `SERVICE_DISABLED` on the Certificate Manager resources while the API propagates. Recover with a `workflow_dispatch` of `apply.yml` with `stack=edge`. The same dispatch recovers an apply where the `apis` producer tier failed and skipped edge.
 
 ## Made by hand first
 
