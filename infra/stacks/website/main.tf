@@ -162,7 +162,17 @@ module "website_service" {
     DFO_CALLER_PRINCIPAL = { secret_id = var.caller_principal_secret_id }
     # Comma-separated emails or bare domains whose signed-in users' events carry internal_eng: true. Not version-pinned: the list is added out-of-band and the newest must win. See internal_eng_emails.tf and README.
     INTERNAL_ENG_EMAILS = { secret_id = google_secret_manager_secret.website_internal_eng_emails.secret_id }
-  }, local.sign_in_secret_env_vars, local.email_sign_in_secret_env_vars)
+    },
+    # The export key (event_export.tf), where the export is enabled. The app HMACs the user id with it into the x-dfo-account header it sends the harness, so a Studio account digest equals the exported user hash. Pinned to the Job's version, so a rotation reaches the service and the Job in one apply. The module grants this runtime account accessor on the secret. See README.
+    var.event_export_enabled ? {
+      EXPORT_ID_HMAC_KEY = {
+        secret_id = google_secret_manager_secret.website_export_hmac_key[0].secret_id
+        version   = google_secret_manager_secret_version.website_export_hmac_key[0].version
+      }
+    } : {},
+    local.sign_in_secret_env_vars,
+    local.email_sign_in_secret_env_vars,
+  )
 
   deployer_members = ["serviceAccount:${data.google_service_account.website_deployer.email}"]
 
