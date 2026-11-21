@@ -530,7 +530,7 @@ locals {
     }
     citations = {
       display_name = "${var.namespace} analytics citation probe"
-      description  = "Runs the analytics repository's AI assistant citation probe: calls the Anthropic, OpenAI and Gemini APIs, writes citation_probe."
+      description  = "Runs the analytics repository's AI assistant citation probe: calls the OpenAI and Gemini APIs, writes citation_probe."
       dataset      = "citation_probe"
       readers      = []
     }
@@ -603,11 +603,10 @@ resource "google_secret_manager_secret" "analytics_grader_gemini" {
 # (analytics_jobs.tf).
 locals {
   analytics_probe_secrets = {
-    repos_github_token          = "${var.namespace}-analytics-repos-github-token"
-    lighthouse_psi_api_key      = "${var.namespace}-analytics-lighthouse-psi-api-key"
-    citations_anthropic_api_key = "${var.namespace}-analytics-citations-anthropic-api-key"
-    citations_openai_api_key    = "${var.namespace}-analytics-citations-openai-api-key"
-    citations_gemini_api_key    = "${var.namespace}-analytics-citations-gemini-api-key"
+    repos_github_token       = "${var.namespace}-analytics-repos-github-token"
+    lighthouse_psi_api_key   = "${var.namespace}-analytics-lighthouse-psi-api-key"
+    citations_openai_api_key = "${var.namespace}-analytics-citations-openai-api-key"
+    citations_gemini_api_key = "${var.namespace}-analytics-citations-gemini-api-key"
   }
 }
 
