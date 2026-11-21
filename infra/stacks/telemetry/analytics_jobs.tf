@@ -86,6 +86,27 @@ variable "analytics_probes_enabled" {
   }
 }
 
+variable "analytics_grade_decision_backend" {
+  description = "The decision model the grade Job asks, set as GRADE_DECISION_BACKEND: jev (TypeSafe) or gemini. The Job mounts only that backend's key, from analytics_grade_backend_keys, so a backend's secret needs a version only while it is selected."
+  type        = string
+  default     = "jev"
+
+  validation {
+    condition     = contains(["jev", "gemini"], var.analytics_grade_decision_backend)
+    error_message = "analytics_grade_decision_backend must be jev or gemini."
+  }
+}
+
+locals {
+  # Each grader backend's key variable and secret. The grade Job mounts the
+  # selected backend's alone.
+  analytics_grade_backend_keys = {
+    jev    = { variable = "TYPESAFE_API_KEY", secret = google_secret_manager_secret.analytics_grader_typesafe.secret_id }
+    gemini = { variable = "GOOGLE_API_KEY", secret = google_secret_manager_secret.analytics_grader_gemini.secret_id }
+  }
+  analytics_grade_backend_key = local.analytics_grade_backend_keys[var.analytics_grade_decision_backend]
+}
+
 locals {
   analytics_jobs_count = var.analytics_jobs_enabled ? 1 : 0
 
@@ -170,13 +191,14 @@ locals {
         GRADE_SOURCE_DATASET        = "langfuse_export"
         GRADE_DATASET               = google_bigquery_dataset.analytics_job["studio_grades"].dataset_id
         GRADE_RUN_TIMEOUT_MINUTES   = tostring(local.analytics_grade_run_timeout_minutes)
+        GRADE_DECISION_BACKEND      = var.analytics_grade_decision_backend
         LANGFUSE_BASE_URL           = local.analytics_langfuse_base_url
         LANGFUSE_EXPORT_ENVIRONMENT = local.analytics_langfuse_environment
       }
       secrets = {
-        LANGFUSE_PUBLIC_KEY = "${var.namespace}-langfuse-public-key"
-        LANGFUSE_SECRET_KEY = "${var.namespace}-langfuse-secret-key"
-        GOOGLE_API_KEY      = google_secret_manager_secret.analytics_grader_gemini.secret_id
+        LANGFUSE_PUBLIC_KEY                          = "${var.namespace}-langfuse-public-key"
+        LANGFUSE_SECRET_KEY                          = "${var.namespace}-langfuse-secret-key"
+        (local.analytics_grade_backend_key.variable) = local.analytics_grade_backend_key.secret
       }
     }
     # Fails when a source's newest row is older than the error threshold its
@@ -262,9 +284,9 @@ locals {
         CITATION_PROBE_DATASET    = google_bigquery_dataset.analytics_job["citation_probe"].dataset_id
       }
       secrets = {
-        ANTHROPIC_API_KEY  = google_secret_manager_secret.analytics_probe["citations_anthropic_api_key"].secret_id
-        OPENAI_API_KEY     = google_secret_manager_secret.analytics_probe["citations_openai_api_key"].secret_id
-        PERPLEXITY_API_KEY = google_secret_manager_secret.analytics_probe["citations_perplexity_api_key"].secret_id
+        ANTHROPIC_API_KEY = google_secret_manager_secret.analytics_probe["citations_anthropic_api_key"].secret_id
+        OPENAI_API_KEY    = google_secret_manager_secret.analytics_probe["citations_openai_api_key"].secret_id
+        GEMINI_API_KEY    = google_secret_manager_secret.analytics_probe["citations_gemini_api_key"].secret_id
       }
     }
   }
