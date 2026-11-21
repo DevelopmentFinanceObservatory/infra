@@ -12,9 +12,9 @@
 #   dfo-prod-analytics-lighthouse python -m dfo_analytics.lighthouse, Mondays at 05:00 UTC
 #   dfo-prod-analytics-replay     python -m dfo_analytics.replay, Mondays at 06:00 UTC
 #   dfo-prod-analytics-citations  python -m dfo_analytics.citations, the 1st of each month at 06:00 UTC
-#   dfo-prod-analytics-topics-variables  python -m dfo_analytics.topics variables, Mondays at 06:00 UTC
+#   dfo-prod-analytics-topics-variables  python -m dfo_analytics.topics variables, Mondays at 07:00 UTC
 #   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:30 UTC
-#   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 07:00 UTC
+#   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 08:00 UTC
 #
 # var.analytics_jobs_enabled creates everything in this file, the
 # freshness Job also waits for var.analytics_dbt_schedule_enabled, and each
@@ -318,17 +318,22 @@ locals {
   analytics_jobs_topics = {
     # One Job per pass, since each pass has its own account, env, secrets and
     # schedule, and one Job's absence and failure alerts then name the pass.
-    # 50,000 items at about 60 calls per second take about 14 minutes, so the
-    # hour is slack for retries and slow calls. TOPICS_TAXONOMY_PATH is left
-    # unset for the packaged taxonomy.
+    # The Jobs read the dbt seed dbt/seeds/topic_taxonomy.csv from the image's
+    # /app, so TOPICS_TAXONOMY_PATH is left unset. The three passes share the
+    # TypeSafe key, so their Monday starts are an hour apart, past the turns
+    # pass's one-hour timeout. The turns pass runs daily at 05:30.
+    # Each variables request carries about 2,000 input tokens, so its rate is
+    # unmeasured: 20,000 items is a cap to raise after the canary run sets the
+    # real figure, inside the one-hour timeout.
     "topics-variables" = {
       account  = google_service_account.analytics_job["topic-vars"]
       args     = ["python", "-m", "dfo_analytics.topics", "variables"]
       timeout  = "3600s"
       memory   = "2Gi"
-      schedule = "0 6 * * 1"
+      schedule = "0 7 * * 1"
       env = merge(local.analytics_topics_env, {
         TOPICS_CATALOGUE_BUCKET = local.analytics_origin_catalogue_bucket
+        TOPICS_MAX_ITEMS        = "20000"
       })
       secrets = {
         TYPESAFE_API_KEY = google_secret_manager_secret.analytics_grader_typesafe.secret_id
@@ -353,18 +358,18 @@ locals {
         LANGFUSE_SECRET_KEY = "${var.namespace}-langfuse-secret-key"
       }
     }
-    # The apis service, called as the replay Job calls it, and the logs and
-    # analytics datasets the pass reads.
+    # The apis service, called as the replay Job calls it, and the analytics
+    # dataset the pass reads request paths from (stg_log_lines).
     "topics-specs" = {
       account  = google_service_account.analytics_job["topic-specs"]
       args     = ["python", "-m", "dfo_analytics.topics", "specs"]
       timeout  = "3600s"
       memory   = "2Gi"
-      schedule = "0 7 * * 1"
+      schedule = "0 8 * * 1"
       env = merge(local.analytics_topics_env, {
+        TOPICS_SPEC_SERVICES     = "${local.analytics_apis_service_name},${var.namespace}-website"
         TOPICS_APIS_URL          = local.analytics_apis_url
         TOPICS_APIS_AUDIENCE     = local.analytics_apis_url
-        TOPICS_LOGS_DATASET      = google_logging_linked_dataset.telemetry.link_id
         TOPICS_ANALYTICS_DATASET = google_bigquery_dataset.analytics["analytics"].dataset_id
       })
       secrets = {}

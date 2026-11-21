@@ -492,9 +492,11 @@ resource "google_bigquery_table" "analytics_probe" {
 # One account per Python job, each writing its own dataset and nothing else.
 # They exist whatever var.analytics_jobs_enabled says, so the dataset grants
 # are in place before a job first runs. What only a running job needs (the
-# edge logs bucket, the secrets) is granted in analytics_jobs.tf behind the
-# flag. The grader also reads langfuse_export, the turns it grades. The four
-# probe accounts read no other dataset.
+# edge logs and origin catalogue buckets, the secrets, the replay and topics
+# specs invoker grants on the apis service) is granted in analytics_jobs.tf
+# behind the flag. The grader and the topic-turns account also read
+# langfuse_export, the turns they label, and topic-specs reads analytics
+# (analytics.stg_log_lines). The four probe accounts and topic-vars read no other dataset.
 locals {
   analytics_job_accounts = {
     edge = {
@@ -550,9 +552,9 @@ locals {
     }
     topic-specs = {
       display_name = "${var.namespace} analytics topics specs pass"
-      description  = "Runs the analytics repository's topics specs pass: reads dfo_logs and analytics, calls the apis service, writes topics."
+      description  = "Runs the analytics repository's topics specs pass: reads analytics (stg_log_lines), calls the apis service, writes topics."
       dataset      = "topics"
-      readers      = [google_logging_linked_dataset.telemetry.link_id, google_bigquery_dataset.analytics["analytics"].dataset_id]
+      readers      = [google_bigquery_dataset.analytics["analytics"].dataset_id]
     }
   }
 
