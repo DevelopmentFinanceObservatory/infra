@@ -36,11 +36,14 @@ const run = async (script, prefixes) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "comment-"));
   const file = path.join(dir, "principal-addresses");
   fs.writeFileSync(file, forms.map((f) => `${f}\n`).join(""));
-  const env = { STACK: "apis", PRINCIPALS_FILE: file };
+  // Each step's output in the files scripts/tf-capture.sh writes.
+  const outputDir = path.join(dir, "tf-output");
+  fs.mkdirSync(outputDir);
+  const env = { STACK: "apis", PRINCIPALS_FILE: file, TF_OUTPUT_DIR: outputDir };
   for (const p of prefixes) {
     env[`${p}_OUTCOME`] = "success";
-    env[`${p}_STDOUT`] = output;
-    env[`${p}_STDERR`] = output;
+    fs.writeFileSync(path.join(outputDir, `${p.toLowerCase()}.stdout`), output);
+    fs.writeFileSync(path.join(outputDir, `${p.toLowerCase()}.stderr`), output);
   }
   const saved = { ...process.env };
   Object.assign(process.env, env);
