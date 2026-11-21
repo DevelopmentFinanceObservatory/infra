@@ -239,6 +239,7 @@ locals {
         { name = "served_by", type = "STRING", mode = "REQUIRED" },
         { name = "source_object", type = "STRING", mode = "REQUIRED" },
         { name = "loaded_at", type = "TIMESTAMP", mode = "REQUIRED" },
+        { name = "sec_fetch_site", type = "STRING", mode = "NULLABLE" },
       ]
     }
     loaded_objects = {
