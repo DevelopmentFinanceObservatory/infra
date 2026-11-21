@@ -529,7 +529,7 @@ locals {
     }
     citations = {
       display_name = "${var.namespace} analytics citation probe"
-      description  = "Runs the analytics repository's AI assistant citation probe: calls the Anthropic, OpenAI and Perplexity APIs, writes citation_probe."
+      description  = "Runs the analytics repository's AI assistant citation probe: calls the Anthropic, OpenAI and Gemini APIs, writes citation_probe."
       dataset      = "citation_probe"
       readers      = []
     }
@@ -574,10 +574,19 @@ resource "google_bigquery_dataset_access" "analytics_job_reader" {
   user_by_email = google_service_account.analytics_job[each.value.account].email
 }
 
-# The grader's own Gemini API key, one key per caller as for the ai and apis
-# stacks. Terraform declares the secret and holds no version: a project owner
-# adds the key by hand before var.analytics_jobs_enabled is switched on, since
+# The grader's own API keys, one per decision backend and one key per caller as
+# for the ai and apis stacks: TypeSafe's for Jev and a Gemini key. Terraform
+# declares each secret and holds no version: a project owner adds the selected
+# backend's key by hand before var.analytics_jobs_enabled is switched on, since
 # the grade Job reads its latest version (README "Analytics jobs").
+resource "google_secret_manager_secret" "analytics_grader_typesafe" {
+  secret_id = "${var.namespace}-analytics-grader-typesafe-api-key"
+
+  replication {
+    auto {}
+  }
+}
+
 resource "google_secret_manager_secret" "analytics_grader_gemini" {
   secret_id = "${var.namespace}-analytics-grader-gemini-api-key"
 
@@ -586,18 +595,18 @@ resource "google_secret_manager_secret" "analytics_grader_gemini" {
   }
 }
 
-# The probe jobs' third-party API keys, declared as the grader's Gemini key
+# The probe jobs' third-party API keys, declared as the grader's key
 # is: no version, a project owner adds each key by hand before
 # var.analytics_jobs_enabled is switched on, and the Job reads its latest
 # version. Each key belongs to one Job, whose account alone may read it
 # (analytics_jobs.tf).
 locals {
   analytics_probe_secrets = {
-    repos_github_token           = "${var.namespace}-analytics-repos-github-token"
-    lighthouse_psi_api_key       = "${var.namespace}-analytics-lighthouse-psi-api-key"
-    citations_anthropic_api_key  = "${var.namespace}-analytics-citations-anthropic-api-key"
-    citations_openai_api_key     = "${var.namespace}-analytics-citations-openai-api-key"
-    citations_perplexity_api_key = "${var.namespace}-analytics-citations-perplexity-api-key"
+    repos_github_token          = "${var.namespace}-analytics-repos-github-token"
+    lighthouse_psi_api_key      = "${var.namespace}-analytics-lighthouse-psi-api-key"
+    citations_anthropic_api_key = "${var.namespace}-analytics-citations-anthropic-api-key"
+    citations_openai_api_key    = "${var.namespace}-analytics-citations-openai-api-key"
+    citations_gemini_api_key    = "${var.namespace}-analytics-citations-gemini-api-key"
   }
 }
 
