@@ -5,7 +5,8 @@
 # a table that does not exist yet. Readers of dfo_reporting get no access to
 # the sources, so each view is authorised on every dataset it reads.
 locals {
-  # The datasets each source group's views read. website_export and
+  # The datasets each source group's views read. Its keys are the groups
+  # var.reporting_sources may list (variables.tf). website_export and
   # langfuse_export are created by the website and ai stacks, the GA4 export
   # dataset by the GA4 BigQuery link, and the billing export dataset by the
   # foundation stack.
@@ -20,6 +21,7 @@ locals {
     ga4              = [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
     search_console   = [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
     cloudflare       = [google_bigquery_dataset.web_history.dataset_id]
+    cloudflare_pages = [google_bigquery_dataset.web_history.dataset_id]
     billing          = [var.billing_export_dataset]
   }
 
@@ -139,6 +141,11 @@ locals {
       source      = "cloudflare"
       description = "Cloudflare page loads per UTC day: eyeball GET requests answered 200 with HTML on the website's hosts, from no verified bot and from verified bots, for the days scripts/load-cloudflare-history.sh loaded."
       query       = templatefile("${path.module}/sql/reporting/cloudflare_daily.sql", { history = "${local.web_history_ref}.cloudflare_daily" })
+    }
+    cloudflare_pages_daily = {
+      source      = "cloudflare_pages"
+      description = "Cloudflare page loads per UTC day for the prototypes app's paths under /prototypes, the only paths captured: eyeball GET requests answered 200 with HTML on the website's hosts, from no verified bot and from verified bots, for the days scripts/load-cloudflare-pages-history.sh loaded."
+      query       = templatefile("${path.module}/sql/reporting/cloudflare_pages_daily.sql", { history = "${local.web_history_ref}.cloudflare_pages_daily" })
     }
     model_spend_daily = {
       source      = "billing"

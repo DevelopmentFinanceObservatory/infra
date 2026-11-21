@@ -167,7 +167,7 @@ scripts/load-ga4-history.sh <ga4_property_id> 2026-10-05 <day before the GA4 exp
 scripts/load-search-console-history.sh <site_url> 2026-10-05 <day before the bulk export's first day>
 ```
 
-`scripts/web-history.test.sh` runs these loaders, `scripts/load-cloudflare-history.sh` and `scripts/load-website-page-history.sh` against stub `curl`, `gcloud` and `terraform` commands and the hand-written API responses and rows in `scripts/testdata/web-history`. Run it by hand after changing a loader or `scripts/web-history-lib.sh`.
+`scripts/web-history.test.sh` runs these loaders, `scripts/load-cloudflare-history.sh`, `scripts/load-cloudflare-pages-history.sh` and `scripts/load-website-page-history.sh` against stub `curl`, `gcloud` and `terraform` commands and the hand-written API responses and rows in `scripts/testdata/web-history`. Run it by hand after changing a loader or `scripts/web-history-lib.sh`.
 
 ## Cloudflare page loads
 
@@ -184,6 +184,22 @@ scripts/load-cloudflare-history.sh <rows.jsonl> <start_date> <end_date>
 ```
 
 The loader runs as the same service account as the history loaders above and needs only `roles/iam.serviceAccountTokenCreator` on it. It replaces every day from start to end in `cloudflare_daily`, creating the table on its first run, so a rerun of a range with the same file gives the same table, and a day the file leaves out has no row afterwards. It refuses a file with no rows, a row without a date and whole, non-negative counts, a date outside the range and a date on more than one row. Cloudflare's figures are final once the UTC day ends, so the end date may be as late as yesterday in UTC, in place of the 4-day rule of the GA4 and Search Console loaders. Today is refused, since its figures are still partial.
+
+### Page loads per path
+
+The prototypes app at developmentfinance.org/prototypes is a Cloudflare Worker, so its page loads never reach the website's request log. `web_history.cloudflare_pages_daily` holds them per UTC day and path for 2026-11-16 to 2026-11-17, from the same query with `clientRequestPath_like: "/prototypes%"` added to the filter and `clientRequestPath` to the dimensions:
+
+```graphql
+httpRequestsAdaptiveGroups(limit: 1000, orderBy: [date_ASC], filter: {date_geq: $start, date_leq: $end, requestSource: "eyeball", edgeResponseContentTypeName: "html", clientRequestHTTPMethodName: "GET", edgeResponseStatus: 200, clientRequestHTTPHost_in: ["developmentfinance.org", "www.developmentfinance.org"], clientRequestPath_like: "/prototypes%"}) { dimensions { date clientRequestPath verifiedBotCategory } count }
+```
+
+`page_loads` sums a day's groups for a path with an empty `verifiedBotCategory`, and `verified_bot_page_loads` the rest. The filter counts GET requests only, so HEAD requests from link checkers are left out. A capture that returns 1,000 groups may have been cut short, so split its range. Write the figures as JSON lines, one per day and path with `date`, `path`, `page_loads` and `verified_bot_page_loads`, and from the repository root run:
+
+```sh
+scripts/load-cloudflare-pages-history.sh <rows.jsonl> <start_date> <end_date>
+```
+
+The loader runs as the daily one does, replacing every day from start to end in `cloudflare_pages_daily` and creating the table on its first run. It refuses the same files and end dates, and also a row whose `path` is not a string starting with `/`. A day may hold many paths, and a day and path on more than one row is refused. Both loaders check their files with `wh_read_rows` in `scripts/web-history-lib.sh`.
 
 ## Website page views before the request log
 
@@ -256,6 +272,7 @@ It prints the execution's result, the number of requests and the `MERGE` job's i
 | `search_console_daily`     | Pacific Time day                                         | `day`, `clicks`, `impressions`, `sum_position`                                                                                                                                                                                      |
 | `search_console_pages`     | Pacific Time day, page URL                               | `day`, `url`, `clicks`, `impressions`, `sum_position`                                                                                                                                                                               |
 | `cloudflare_daily`         | UTC day                                                  | `day`, `page_loads`, `verified_bot_page_loads`                                                                                                                                                                                      |
+| `cloudflare_pages_daily`   | UTC day, path                                            | `day`, `path`, `page_loads`, `verified_bot_page_loads`                                                                                                                                                                              |
 | `model_spend_daily`        | UTC day, caller, service, SKU, currency                  | `day`, `caller`, `service`, `sku`, `cost`, `credits`, `net_cost`, `currency`                                                                                                                                                        |
 
 The `_sketch` columns other than `latency_sketch` are HLL++ sketches (`HLL_COUNT.INIT(x, 14)`), so distinct visitors, users, accounts, sessions, MCP callers and website callers over any set of rows come from `HLL_COUNT.MERGE` over those rows, and no id or hash of one reaches `dfo_reporting`. `ga4_daily`'s `users_sketch` holds the active users' `user_pseudo_id` values on export days and is NULL on history days, so a merge over a window reaching before the export counts only its export days, and `ga4_user_ranges` covers those windows (see "GA4 unique users"). The other figures sum across rows, except quantiles and active users, which hold for their own row only. GA4 sessions sum across days but not across pages, and a session that crosses midnight counts on both days, so a sum over several days runs slightly high.
@@ -280,6 +297,8 @@ The Search Console views keep web search only. `search_console_pages` strips the
 
 `cloudflare_daily` reads `web_history.cloudflare_daily` (see "Cloudflare page loads") and renames `date` to `day`. Its `page_loads` count every visitor, whatever their consent, so they run above GA4's page views.
 
+`cloudflare_pages_daily` reads `web_history.cloudflare_pages_daily` (see "Page loads per path") and renames `date` to `day`. It holds only the paths the capture asked for, the prototypes app's pages under `/prototypes`, so its rows do not sum to `cloudflare_daily`.
+
 `model_spend_daily` reads the standard usage cost export, `billing_export.gcp_billing_export_v1_*`, and keeps only the projects in `spend_callers` (`reporting.auto.tfvars`), labelled with their caller, since the billing account also bills projects outside DFO. Add each Gemini caller's AI Studio key project there. Cloud Billing keeps adding cost to a day for about a day after it ends, so the view keeps only days before yesterday (UTC), and every day it holds is whole. `credits` is negative and `net_cost` is `cost` plus `credits`.
 
 `tests/reporting_*.test.sh` in `infra/stacks/telemetry` run each view over literal source rows and fail on any row that differs from the ones they pin. Run them by hand after changing a view.
@@ -300,6 +319,7 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 | `ga4`              | `ga4_daily`, `ga4_pages_daily`, `ga4_user_ranges` | an `analytics_<property id>.events_YYYYMMDD` table, and `web_history.ga4_daily` and `ga4_pages_daily` from `scripts/load-ga4-history.sh`. Terraform creates `web_history.ga4_user_ranges`.        |
 | `search_console`   | `search_console_daily`, `search_console_pages`    | `searchconsole.searchdata_site_impression` and `searchdata_url_impression`, and `web_history.search_console_daily` and `search_console_pages_daily` from `scripts/load-search-console-history.sh` |
 | `cloudflare`       | `cloudflare_daily`                                | `web_history.cloudflare_daily`, from `scripts/load-cloudflare-history.sh`                                                                                                                         |
+| `cloudflare_pages` | `cloudflare_pages_daily`                          | `web_history.cloudflare_pages_daily`, from `scripts/load-cloudflare-pages-history.sh`                                                                                                             |
 | `billing`          | `model_spend_daily`                               | a `billing_export.gcp_billing_export_v1_*` table                                                                                                                                                  |
 
 `bq ls prod-fin-observatory:<dataset>` lists a dataset's tables.
