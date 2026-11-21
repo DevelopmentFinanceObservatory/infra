@@ -1,7 +1,7 @@
 terraform {
   # 1.11 for the write-only arguments in datasets_first_party_principal.tf,
   # datasets_pin_principal.tf, live_refresh_principal.tf, caller_principal.tf,
-  # caller_hmac_key.tf, and share_import_principal.tf.
+  # caller_hmac_key.tf, share_import_principal.tf, and verify_principal.tf.
   required_version = ">= 1.11"
 
   required_providers {
@@ -15,7 +15,7 @@ terraform {
       # 3.7.0 for the ephemeral random_password in
       # datasets_first_party_principal.tf, datasets_pin_principal.tf,
       # live_refresh_principal.tf, caller_principal.tf, caller_hmac_key.tf,
-      # and share_import_principal.tf.
+      # share_import_principal.tf, and verify_principal.tf.
       source  = "hashicorp/random"
       version = ">= 3.7.0"
     }
@@ -180,6 +180,16 @@ module "apis_service" {
       # The pin moves with the version resource, rolling the service in the
       # same apply.
       version = google_secret_manager_secret_version.share_import_principal.version
+    }
+
+    # Authenticates the analysis verify route and the Presentation share
+    # sample the telemetry stack's replay Job calls. See verify_principal.tf.
+    VERIFY_PRINCIPAL = {
+      secret_id = google_secret_manager_secret.verify_principal.secret_id
+      # Pinned so warm and new instances never disagree during a rotation.
+      # The pin moves with the version resource, rolling the service in the
+      # same apply.
+      version = google_secret_manager_secret_version.verify_principal.version
     }
     }, {
     # Mounted only when search_binder sends calls to Jev, so a gemini
