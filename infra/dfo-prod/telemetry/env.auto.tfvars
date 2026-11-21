@@ -18,3 +18,14 @@ analytics_repository_id = "1464310463"
 # in the repository variable ANALYTICS_JOBS to each later image.
 analytics_jobs_enabled = true
 analytics_jobs_image   = "europe-west1-docker.pkg.dev/prod-fin-observatory/analytics/dfo-analytics:23beaee9f8fab78caca8685546397676bf250136"
+
+# The hourly dbt build and its freshness Job replace the logs_daily scheduled
+# query, and the dfo_reporting views read the analytics tables. The probes
+# whose canary execution wrote valid rows run on their schedules; the
+# citation probe stays off.
+analytics_dbt_schedule_enabled = true
+analytics_probes_enabled = {
+  repos      = true
+  lighthouse = true
+  replay     = true
+}
