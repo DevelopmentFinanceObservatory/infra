@@ -144,13 +144,14 @@ Only `infra/dfo-prod/website/env.auto.tfvars` sets `event_export_enabled = true`
 - the `website_export` dataset, with `WRITER` for the exporter through `google_bigquery_dataset_access` and no `access` blocks, which would drop the grants such resources add here and in the telemetry stack;
 - `roles/bigquery.jobUser` on the project for the exporter;
 - the secret `dfo-prod-website-export-hmac-key`, generated like the auth secret and mounted pinned to its version;
+- the website service mounting the same secret as `EXPORT_ID_HMAC_KEY`, pinned to the same version, which the app uses to HMAC the signed-in user id into the `x-dfo-account` header it sends the Studio harness;
 - the Job `dfo-prod-website-export`, on the service's PSC network with the service's `WEBSITE_DB_*` settings and the exporter as `WEBSITE_DB_USER`, plus `EXPORT_BQ_PROJECT`, `EXPORT_BQ_DATASET` and `EXPORT_ID_HMAC_KEY`;
 - an hourly Cloud Scheduler trigger whose own service account holds `roles/run.invoker` on the Job alone;
 - `roles/run.developer` on the Job and `roles/iam.serviceAccountUser` on the exporter for the website deployer.
 
 The Job bootstraps from `gcr.io/cloudrun/hello`, which has no `node`, so an execution before dfo-website's deploy moves the image fails. The deploy finds the Job through `EXPORT_JOB_WEBSITE`, which `scripts/handoff.sh dfo-prod website` writes from the `export_job_name` output. Executions have a 30-minute timeout and no retry, since the next hourly run replaces the same days.
 
-Rotating the hashing key means bumping `website_export_hmac_key_version`. Every hashed id then changes, and only the days the next run reloads carry the new hashes, so a rotation also needs the `event` table dropped for a full reload.
+Rotating the hashing key means bumping `website_export_hmac_key_version`. The Job and the website service take the new version in the same apply, so every exported user hash and every Studio account digest change together. Only the days the next run reloads carry the new hashes, so a rotation also needs the `event` table dropped for a full reload.
 
 ## Share migration
 
