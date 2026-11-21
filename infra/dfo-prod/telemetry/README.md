@@ -403,7 +403,6 @@ The edge extract reads `EDGE_LOGS_BUCKET` (`dfo-prod-edge-logs-prod-fin-observat
 | `dfo-prod-analytics-lighthouse` | `PSI_API_KEY`        | `dfo-prod-analytics-lighthouse-psi-api-key`                |
 | `dfo-prod-analytics-replay`     | `VERIFY_PRINCIPAL`   | `dfo-prod-verify-principal`, from the apis stack           |
 | `dfo-prod-analytics-replay`     | `EXPORT_ID_HMAC_KEY` | `dfo-prod-website-export-hmac-key`, from the website stack |
-| `dfo-prod-analytics-citations`  | `ANTHROPIC_API_KEY`  | `dfo-prod-analytics-citations-anthropic-api-key`           |
 | `dfo-prod-analytics-citations`  | `OPENAI_API_KEY`     | `dfo-prod-analytics-citations-openai-api-key`              |
 | `dfo-prod-analytics-citations`  | `GEMINI_API_KEY`     | `dfo-prod-analytics-citations-gemini-api-key`              |
 
@@ -428,7 +427,7 @@ gcloud run jobs execute dfo-prod-analytics-dbt --region europe-west1 --project p
 
 1. Apply this stack with `analytics_jobs_enabled` false, which creates `edge_export` and its three tables, `studio_grades`, the four probe datasets and their tables, the six Job accounts and their dataset grants, and the empty Gemini and probe key secrets. The apis stack applies first and creates `dfo-prod-verify-principal`.
 
-2. Add the grader's TypeSafe key as the secret's first version, with `gcloud secrets versions add dfo-prod-analytics-grader-typesafe-api-key --data-file=- --project=prod-fin-observatory` reading the key from stdin, and each probe key the same way: a GitHub token that may search public code to `dfo-prod-analytics-repos-github-token`, a PageSpeed Insights API key to `dfo-prod-analytics-lighthouse-psi-api-key`, and the Anthropic, OpenAI and Gemini keys to `dfo-prod-analytics-citations-anthropic-api-key`, `dfo-prod-analytics-citations-openai-api-key` and `dfo-prod-analytics-citations-gemini-api-key`. The edge logs bucket must exist, with the edge-logs stack's Logpush job writing to it.
+2. Add the grader's TypeSafe key as the secret's first version, with `gcloud secrets versions add dfo-prod-analytics-grader-typesafe-api-key --data-file=- --project=prod-fin-observatory` reading the key from stdin, and each probe key the same way: a GitHub token that may search public code to `dfo-prod-analytics-repos-github-token`, a PageSpeed Insights API key to `dfo-prod-analytics-lighthouse-psi-api-key`, and the OpenAI and Gemini keys to `dfo-prod-analytics-citations-openai-api-key` and `dfo-prod-analytics-citations-gemini-api-key`. The citation probe skips a provider whose key is unset, and the Job mounts no Anthropic key, so it asks OpenAI and Gemini. The edge logs bucket must exist, with the edge-logs stack's Logpush job writing to it.
 
 3. Merge the analytics changes that add the edge extract, the turn grader, the `logs_daily` port and the four probes, and let the `Deploy` workflow push the image. Note its sha. The replay probe also needs the dfo-apis release that adds the verify route and the share sample.
 
