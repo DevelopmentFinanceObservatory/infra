@@ -20,8 +20,9 @@ infra/
 │   ├── pipelines/
 │   ├── platform/
 │   └── website/
-└── dfo-prod/       # prod environment: the same stacks except pipelines, plus the public edge and telemetry
+└── dfo-prod/       # prod environment: the same stacks except pipelines, plus the public edge, its logs, and telemetry
     ├── edge/
+    ├── edge-logs/
     └── telemetry/
 scripts/            # helpers for CI, GitHub setup and the dcp stack
 justfile            # task runner recipes (run `just` to list them)
@@ -31,6 +32,7 @@ A change to one stack appears only in that stack's plan. The stacks are:
 
 - [dcp](infra/dfo-dev/dcp): the Data Commons Platform. The upstream stack module (services, Spanner, Redis, ingestion) plus DFO additions in `dfo.tf`. The `dcp` repository's CI builds images and opens an auto-merged pull request that pins them here.
 - [edge](infra/dfo-prod/edge): prod only. The load balancer and certificate for developmentfinance.org, the Cloud Armor policy that admits only Cloudflare, and the Cloudflare zone's DNS and rules.
+- [edge-logs](infra/dfo-prod/edge-logs): prod only. The Cloudflare Logpush job that records every dataset read the edge handles, cache hits included. Every Logpush call needs Logs Write, so it plans and applies only with the `production` environment's Cloudflare token, and no pull-request plan runs it.
 - [foundation](infra/dfo-dev/foundation): shared plumbing. Artifact Registry, Workload Identity Federation, and the deployer service accounts.
 - [ai](infra/dfo-dev/ai): the AI service (agent harness and MCP servers). The `ai` repository's CI deploys images onto it.
 - [apis](infra/dfo-dev/apis): the Search and Datasets APIs on one Cloud Run service, with the storage, database and private-network access the Datasets API needs. The `apis` repository's CI deploys images onto it.
