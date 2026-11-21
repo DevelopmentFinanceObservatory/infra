@@ -14,7 +14,7 @@
 #   dfo-prod-analytics-citations  python -m dfo_analytics.citations, the 1st of each month at 06:00 UTC
 #   dfo-prod-analytics-topics-variables  python -m dfo_analytics.topics variables, Mondays at 06:00 UTC
 #   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:30 UTC
-#   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 06:00 UTC
+#   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 07:00 UTC
 #
 # var.analytics_jobs_enabled creates everything in this file, the
 # freshness Job also waits for var.analytics_dbt_schedule_enabled, and each
@@ -25,7 +25,7 @@
 # the order to switch it on.
 
 variable "analytics_jobs_enabled" {
-  description = "Creates the analytics Jobs, their Scheduler triggers and alerts, and the grants only a running Job needs (the edge logs bucket, the secrets, the replay Job's invoker grant on the apis service, the deployer's). Needs analytics_jobs_image."
+  description = "Creates the analytics Jobs, their Scheduler triggers and alerts, and the grants only a running Job needs (the edge logs bucket, the origin catalogue bucket, the secrets, the replay and topics specs Jobs' invoker grants on the apis service, the deployer's). Needs analytics_jobs_image."
   type        = bool
   default     = false
 }
@@ -94,7 +94,7 @@ variable "analytics_probes_enabled" {
 }
 
 variable "analytics_grade_decision_backend" {
-  description = "The decision model the grade Job asks, set as GRADE_DECISION_BACKEND: jev (TypeSafe) or gemini. The Job mounts only that backend's key, from analytics_grade_backend_keys, so a backend's secret needs a version only while it is selected."
+  description = "The decision model the grade Job asks, set as GRADE_DECISION_BACKEND: jev (TypeSafe) or gemini. The Job mounts only that backend's key, from analytics_grade_backend_keys, so a backend's secret needs a version only while it is selected. The exception is the TypeSafe key: the topics Jobs read it too, so it needs a live version whatever backend is selected."
   type        = string
   default     = "jev"
 
@@ -360,7 +360,7 @@ locals {
       args     = ["python", "-m", "dfo_analytics.topics", "specs"]
       timeout  = "3600s"
       memory   = "2Gi"
-      schedule = "0 6 * * 1"
+      schedule = "0 7 * * 1"
       env = merge(local.analytics_topics_env, {
         TOPICS_APIS_URL          = local.analytics_apis_url
         TOPICS_APIS_AUDIENCE     = local.analytics_apis_url
@@ -670,7 +670,8 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
 
 # A failed run of these Jobs alerts at once, as export_job_failed (alerts.tf)
 # does. The grader runs once a day, so a failed run waits a day for its
-# retry, and the four probes a week or a month. A failed freshness run is the
+# retry, and the four probes and the topics passes a week or a month, or a day for
+# the turns pass. A failed freshness run is the
 # alert itself: a source the dbt build reads has stopped arriving, or the
 # build has stopped writing it. A probe whose trigger stops firing fails no
 # run, and analytics_probe_not_succeeding below catches it.
@@ -736,14 +737,16 @@ resource "google_monitoring_alert_policy" "analytics_grade_not_succeeding" {
 
 # The probes' version of the grade policy: no succeeded execution in a
 # week plus a day for the three weekly probes, and in a month plus four days
-# for the monthly citation probe. It catches a paused trigger or a deleted Job,
+# for the monthly citation probe, and the topics passes use the same shape: a week
+# plus a day for variables and specs, 26 hours for the daily turns pass. It catches a paused trigger or a deleted Job,
 # which fail no run, whether or not the freshness Job exists. It exists only
 # for a probe switched on in var.analytics_probes_enabled, whose canary
 # execution has already succeeded, so it opens only if the probe then stops
 # succeeding. Cloud Monitoring lets a PromQL condition that looks back 8 to 16
 # days evaluate hourly at most, and one that looks back 32 to 93 days every 6
-# hours, so the weekly probes evaluate every 3600 s and the citation probe
-# every 21600 s (local.analytics_probes).
+# hours, so the weekly probes and the topics variables and specs passes evaluate every 3600 s,
+# the citation probe every 21600 s, and the turns pass, whose 26-hour window is
+# shorter than that range, every 300 s as the grade policy does (local.analytics_probes).
 resource "google_monitoring_alert_policy" "analytics_probe_not_succeeding" {
   for_each = { for name in local.analytics_probes_active : name => local.analytics_probes[name] if contains(keys(local.analytics_jobs_created), name) }
 

@@ -24,8 +24,9 @@ locals {
     }
   }
 
-  # The datasets the analytics repository's Python jobs write, each with the
-  # one job account (analytics_job_accounts below) that holds WRITER on it.
+  # The datasets the analytics repository's Python jobs write. Each account in
+  # analytics_job_accounts below holds WRITER on the one dataset it names, so
+  # the three topics accounts share topics.
   # The grader creates its own tables. Every other job's tables are declared
   # below. Every dataset exists whatever var.analytics_jobs_enabled says
   # (analytics_jobs.tf), since the analytics changes that write them need
@@ -33,33 +34,24 @@ locals {
   analytics_job_datasets = {
     edge_export = {
       description = "Dataset reads Cloudflare's edge answered, loaded hourly from the edge logs bucket by the ${var.namespace}-analytics-edge Job as ${var.namespace}-analytics-edge."
-      account     = "edge"
     }
     studio_grades = {
       description = "Grades of finished Studio turns, written daily by the ${var.namespace}-analytics-grade Job as ${var.namespace}-analytics-grader."
-      account     = "grader"
     }
     repo_search = {
       description = "Public GitHub repositories that declare a DFO SDK or name the MCP endpoint, written weekly by the ${var.namespace}-analytics-repos Job as ${var.namespace}-analytics-repos."
-      account     = "repos"
     }
     lighthouse = {
       description = "Throttled mobile Lighthouse measurements of the site's key pages from the PageSpeed Insights API, written weekly by the ${var.namespace}-analytics-lighthouse Job as ${var.namespace}-analytics-lighthouse."
-      account     = "lighthouse"
     }
     replay_probe = {
       description = "Whether dfo-apis recomputes the frames behind a sample of share links to the same bytes, written weekly by the ${var.namespace}-analytics-replay Job as ${var.namespace}-analytics-replay."
-      account     = "replay"
     }
     citation_probe = {
       description = "Answers of AI assistants to a fixed question set and whether they cite DFO, written monthly by the ${var.namespace}-analytics-citations Job as ${var.namespace}-analytics-citations."
-      account     = "citations"
     }
-    # Three accounts write it (topic-vars, topic-turns and topic-specs), one
-    # per pass of the topics Jobs, so account names them all.
     topics = {
       description = "Topic labels for the DFO variables, Studio turns and API specs, written by the three ${var.namespace}-analytics-topics Jobs. The Jobs create their own tables."
-      account     = "topic-vars, topic-turns, topic-specs"
     }
   }
 
@@ -560,7 +552,7 @@ locals {
       display_name = "${var.namespace} analytics topics specs pass"
       description  = "Runs the analytics repository's topics specs pass: reads dfo_logs and analytics, calls the apis service, writes topics."
       dataset      = "topics"
-      readers      = [google_logging_linked_dataset.telemetry.link_id, "analytics"]
+      readers      = [google_logging_linked_dataset.telemetry.link_id, google_bigquery_dataset.analytics["analytics"].dataset_id]
     }
   }
 
@@ -608,6 +600,8 @@ resource "google_bigquery_dataset_access" "analytics_job_reader" {
 # declares each secret and holds no version: a project owner adds the selected
 # backend's key by hand before var.analytics_jobs_enabled is switched on, since
 # the grade Job reads its latest version (README "Analytics jobs").
+# The TypeSafe key also serves the topics variables and turns passes, so it
+# needs a live version whatever backend analytics_grade_decision_backend selects.
 resource "google_secret_manager_secret" "analytics_grader_typesafe" {
   secret_id = "${var.namespace}-analytics-grader-typesafe-api-key"
 
