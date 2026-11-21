@@ -55,6 +55,12 @@ locals {
       description = "Answers of AI assistants to a fixed question set and whether they cite DFO, written monthly by the ${var.namespace}-analytics-citations Job as ${var.namespace}-analytics-citations."
       account     = "citations"
     }
+    # Three accounts write it (topic-vars, topic-turns and topic-specs), one
+    # per pass of the topics Jobs, so account names them all.
+    topics = {
+      description = "Topic labels for the DFO variables, Studio turns and API specs, written by the three ${var.namespace}-analytics-topics Jobs. The Jobs create their own tables."
+      account     = "topic-vars, topic-turns, topic-specs"
+    }
   }
 
   # The datasets dbt/models/sources.yml in the analytics repository declares.
@@ -73,6 +79,7 @@ locals {
     google_bigquery_dataset.analytics_job["lighthouse"].dataset_id,
     google_bigquery_dataset.analytics_job["replay_probe"].dataset_id,
     google_bigquery_dataset.analytics_job["citation_probe"].dataset_id,
+    google_bigquery_dataset.analytics_job["topics"].dataset_id,
   ]
 
   # The service accounts, each with the one dataset it writes. The
@@ -533,6 +540,27 @@ locals {
       description  = "Runs the analytics repository's AI assistant citation probe: calls the OpenAI and Gemini APIs, writes citation_probe."
       dataset      = "citation_probe"
       readers      = []
+    }
+    # The three passes of python -m dfo_analytics.topics, one account each so
+    # a pass holds only its own reads. Account ids allow 30 characters, so the
+    # keys are short.
+    topic-vars = {
+      display_name = "${var.namespace} analytics topics variables pass"
+      description  = "Runs the analytics repository's topics variables pass: reads the origin catalogue bucket, calls the TypeSafe API, writes topics."
+      dataset      = "topics"
+      readers      = []
+    }
+    topic-turns = {
+      display_name = "${var.namespace} analytics topics turns pass"
+      description  = "Runs the analytics repository's topics turns pass: reads langfuse_export, calls the TypeSafe API, writes topics."
+      dataset      = "topics"
+      readers      = ["langfuse_export"]
+    }
+    topic-specs = {
+      display_name = "${var.namespace} analytics topics specs pass"
+      description  = "Runs the analytics repository's topics specs pass: reads dfo_logs and analytics, calls the apis service, writes topics."
+      dataset      = "topics"
+      readers      = [google_logging_linked_dataset.telemetry.link_id, "analytics"]
     }
   }
 
