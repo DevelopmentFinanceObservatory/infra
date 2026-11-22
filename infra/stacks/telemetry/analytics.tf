@@ -24,36 +24,34 @@ locals {
     }
   }
 
-  # The datasets the analytics repository's Python jobs write, each with the
-  # one job account (analytics_job_accounts below) that holds WRITER on it.
-  # The grader creates its own tables. Every other job's tables are declared
-  # below. Every dataset exists whatever var.analytics_jobs_enabled says
+  # The datasets the analytics repository's Python jobs write. Each account in
+  # analytics_job_accounts below holds WRITER on the one dataset it names, so
+  # the three topics accounts share topics.
+  # The grader and the topics Jobs create their own tables. Every other job's
+  # tables are declared below. Every dataset exists whatever var.analytics_jobs_enabled says
   # (analytics_jobs.tf), since the analytics changes that write them need
   # them before the jobs run.
   analytics_job_datasets = {
     edge_export = {
       description = "Dataset reads Cloudflare's edge answered, loaded hourly from the edge logs bucket by the ${var.namespace}-analytics-edge Job as ${var.namespace}-analytics-edge."
-      account     = "edge"
     }
     studio_grades = {
       description = "Grades of finished Studio turns, written daily by the ${var.namespace}-analytics-grade Job as ${var.namespace}-analytics-grader."
-      account     = "grader"
     }
     repo_search = {
       description = "Public GitHub repositories that declare a DFO SDK or name the MCP endpoint, written weekly by the ${var.namespace}-analytics-repos Job as ${var.namespace}-analytics-repos."
-      account     = "repos"
     }
     lighthouse = {
       description = "Throttled mobile Lighthouse measurements of the site's key pages from the PageSpeed Insights API, written weekly by the ${var.namespace}-analytics-lighthouse Job as ${var.namespace}-analytics-lighthouse."
-      account     = "lighthouse"
     }
     replay_probe = {
       description = "Whether dfo-apis recomputes the frames behind a sample of share links to the same bytes, written weekly by the ${var.namespace}-analytics-replay Job as ${var.namespace}-analytics-replay."
-      account     = "replay"
     }
     citation_probe = {
       description = "Answers of AI assistants to a fixed question set and whether they cite DFO, written monthly by the ${var.namespace}-analytics-citations Job as ${var.namespace}-analytics-citations."
-      account     = "citations"
+    }
+    topics = {
+      description = "Topic labels for the DFO variables, Studio turns and API specs, written by the three ${var.namespace}-analytics-topics Jobs. The Jobs create their own tables."
     }
   }
 
@@ -73,6 +71,7 @@ locals {
     google_bigquery_dataset.analytics_job["lighthouse"].dataset_id,
     google_bigquery_dataset.analytics_job["replay_probe"].dataset_id,
     google_bigquery_dataset.analytics_job["citation_probe"].dataset_id,
+    google_bigquery_dataset.analytics_job["topics"].dataset_id,
   ]
 
   # The service accounts, each with the one dataset it writes. The
@@ -493,9 +492,14 @@ resource "google_bigquery_table" "analytics_probe" {
 # One account per Python job, each writing its own dataset and nothing else.
 # They exist whatever var.analytics_jobs_enabled says, so the dataset grants
 # are in place before a job first runs. What only a running job needs (the
-# edge logs bucket, the secrets) is granted in analytics_jobs.tf behind the
-# flag. The grader also reads langfuse_export, the turns it grades. The four
-# probe accounts read no other dataset.
+# edge logs and origin catalogue buckets, the secrets, the replay and topics
+# specs invoker grants on the apis service) is granted in analytics_jobs.tf
+# behind the flag. The grader and the topic-turns account also read
+# langfuse_export, the turns they label, and topic-specs reads the whole analytics
+# dataset, the only job account that does, for its request paths in
+# stg_log_lines. That table keeps the delivery lines' json_payload, which
+# carries user agents and hashed IP caller ids (ip:<hash>). The four probe
+# accounts and topic-vars read no other dataset.
 locals {
   analytics_job_accounts = {
     edge = {
@@ -533,6 +537,27 @@ locals {
       description  = "Runs the analytics repository's AI assistant citation probe: calls the OpenAI and Gemini APIs, writes citation_probe."
       dataset      = "citation_probe"
       readers      = []
+    }
+    # The three passes of python -m dfo_analytics.topics, one account each so
+    # a pass holds only its own reads. Account ids allow 30 characters, so the
+    # keys are short.
+    topic-vars = {
+      display_name = "${var.namespace} analytics topics variables pass"
+      description  = "Runs the analytics repository's topics variables pass: reads the origin catalogue bucket, calls the TypeSafe API, writes topics."
+      dataset      = "topics"
+      readers      = []
+    }
+    topic-turns = {
+      display_name = "${var.namespace} analytics topics turns pass"
+      description  = "Runs the analytics repository's topics turns pass: reads langfuse_export, calls the TypeSafe API, writes topics."
+      dataset      = "topics"
+      readers      = ["langfuse_export"]
+    }
+    topic-specs = {
+      display_name = "${var.namespace} analytics topics specs pass"
+      description  = "Runs the analytics repository's topics specs pass: reads analytics, whose stg_log_lines holds its request paths, calls the apis service, writes topics."
+      dataset      = "topics"
+      readers      = [google_bigquery_dataset.analytics["analytics"].dataset_id]
     }
   }
 
@@ -580,6 +605,8 @@ resource "google_bigquery_dataset_access" "analytics_job_reader" {
 # declares each secret and holds no version: a project owner adds the selected
 # backend's key by hand before var.analytics_jobs_enabled is switched on, since
 # the grade Job reads its latest version (README "Analytics jobs").
+# The TypeSafe key also serves the topics variables and turns passes, so it
+# needs a live version whatever backend analytics_grade_decision_backend selects.
 resource "google_secret_manager_secret" "analytics_grader_typesafe" {
   secret_id = "${var.namespace}-analytics-grader-typesafe-api-key"
 

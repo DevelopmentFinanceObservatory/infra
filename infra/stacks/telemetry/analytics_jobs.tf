@@ -1,5 +1,5 @@
-# The analytics repository's eight scheduled Cloud Run Jobs, their Cloud
-# Scheduler triggers and their alerts. All eight run the one image the
+# The analytics repository's eleven scheduled Cloud Run Jobs, their Cloud
+# Scheduler triggers and their alerts. All eleven run the one image the
 # repository's Deploy workflow pushes to the analytics Artifact Registry
 # repository (analytics.tf), and each Job's args pick the command, since the
 # image has no entrypoint:
@@ -12,17 +12,20 @@
 #   dfo-prod-analytics-lighthouse python -m dfo_analytics.lighthouse, Mondays at 05:00 UTC
 #   dfo-prod-analytics-replay     python -m dfo_analytics.replay, Mondays at 06:00 UTC
 #   dfo-prod-analytics-citations  python -m dfo_analytics.citations, the 1st of each month at 06:00 UTC
+#   dfo-prod-analytics-topics-variables  python -m dfo_analytics.topics variables, Mondays at 07:00 UTC
+#   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:45 UTC
+#   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 08:00 UTC
 #
 # var.analytics_jobs_enabled creates everything in this file, the
 # freshness Job also waits for var.analytics_dbt_schedule_enabled, and each
-# probe's Scheduler trigger and absence alert wait for its entry in
-# var.analytics_probes_enabled. The
+# probe's (and each topics pass's) Scheduler trigger and absence alert wait
+# for its entry in var.analytics_probes_enabled. The
 # datasets the Jobs write, their accounts and those accounts' dataset grants
 # live in analytics.tf and exist whatever the flag says. README "Analytics jobs" gives
 # the order to switch it on.
 
 variable "analytics_jobs_enabled" {
-  description = "Creates the analytics Jobs, their Scheduler triggers and alerts, and the grants only a running Job needs (the edge logs bucket, the secrets, the replay Job's invoker grant on the apis service, the deployer's). Needs analytics_jobs_image."
+  description = "Creates the analytics Jobs, their Scheduler triggers and alerts, and the grants only a running Job needs (the edge logs bucket, the origin catalogue bucket, the secrets, the replay and topics specs Jobs' invoker grants on the apis service, the deployer's). Needs analytics_jobs_image."
   type        = bool
   default     = false
 }
@@ -66,18 +69,22 @@ variable "analytics_dbt_schedule_enabled" {
 # account, secrets and tables exist whatever it says, so a canary execution
 # can run before the trigger does (README "Analytics jobs").
 variable "analytics_probes_enabled" {
-  description = "Creates a probe's Cloud Scheduler trigger and its not-succeeding alert, by probe name (repos, lighthouse, replay, citations). A probe missing from the map, or false, keeps its Job and has no trigger and no absence alert. Needs analytics_jobs_enabled. Switch a probe on after its canary execution has written valid rows."
+  description = "Creates a probe's Cloud Scheduler trigger and its not-succeeding alert, by probe name (repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs). A probe missing from the map, or false, keeps its Job and has no trigger and no absence alert. Needs analytics_jobs_enabled. Switch a probe on after its canary execution has written valid rows."
   type        = map(bool)
   default = {
     repos      = false
     lighthouse = false
     replay     = false
     citations  = false
+
+    "topics-variables" = false
+    "topics-turns"     = false
+    "topics-specs"     = false
   }
 
   validation {
-    condition     = length(setsubtract(keys(var.analytics_probes_enabled), ["repos", "lighthouse", "replay", "citations"])) == 0
-    error_message = "analytics_probes_enabled keys must be probe names: repos, lighthouse, replay, citations."
+    condition     = length(setsubtract(keys(var.analytics_probes_enabled), ["repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs"])) == 0
+    error_message = "analytics_probes_enabled keys must be probe names: repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs."
   }
 
   validation {
@@ -87,7 +94,7 @@ variable "analytics_probes_enabled" {
 }
 
 variable "analytics_grade_decision_backend" {
-  description = "The decision model the grade Job asks, set as GRADE_DECISION_BACKEND: jev (TypeSafe) or gemini. The Job mounts only that backend's key, from analytics_grade_backend_keys, so a backend's secret needs a version only while it is selected."
+  description = "The decision model the grade Job asks, set as GRADE_DECISION_BACKEND: jev (TypeSafe) or gemini. The Job mounts only that backend's key, from analytics_grade_backend_keys, so a backend's secret needs a version only while it is selected. The exception is the TypeSafe key: the topics Jobs read it too, so it needs a live version whatever backend is selected."
   type        = string
   default     = "jev"
 
@@ -111,7 +118,9 @@ locals {
   analytics_jobs_count = var.analytics_jobs_enabled ? 1 : 0
 
   # The probes, each with the hours its absence alert looks back (the weekly
-  # period plus a day, or the monthly period plus four days) and the least
+  # period plus a day, the monthly period plus four days, or 26 hours for the
+  # daily topics turns pass, which evaluates every 300 s as the grade alert
+  # does) and the least
   # evaluation interval Cloud Monitoring allows for a PromQL condition that
   # looks that far back: 1 hour from 8 to 16 days, 6 hours from 32 to 93 days
   # (docs.cloud.google.com/monitoring/alerts/using-promql).
@@ -120,6 +129,12 @@ locals {
     lighthouse = { lookback_hours = 192, evaluation_interval = "3600s" }
     replay     = { lookback_hours = 192, evaluation_interval = "3600s" }
     citations  = { lookback_hours = 840, evaluation_interval = "21600s" }
+
+    # The topics passes: weekly like the probes, and the daily turns pass
+    # with the grader's 26-hour window.
+    "topics-variables" = { lookback_hours = 192, evaluation_interval = "3600s" }
+    "topics-turns"     = { lookback_hours = 26, evaluation_interval = "300s" }
+    "topics-specs"     = { lookback_hours = 192, evaluation_interval = "3600s" }
   }
 
   analytics_probes_active = [for name in keys(local.analytics_probes) : name if lookup(var.analytics_probes_enabled, name, false)]
@@ -128,6 +143,10 @@ locals {
   # edge_logs.tf creates, named here because that file lands on its own
   # branch. The bucket must exist before the flag is switched on.
   analytics_edge_logs_bucket = "${var.namespace}-edge-logs-${var.project_id}"
+
+  # The apis stack's origin catalogue bucket (origin_catalogue.tf there),
+  # which the topics variables pass reads.
+  analytics_origin_catalogue_bucket = "${var.namespace}-origin-catalogue-${var.project_id}"
 
   # Copied from the ai stack's langfuse_base_url and
   # langfuse_tracing_environment (infra/stacks/ai/main.tf). The grader reads
@@ -147,6 +166,16 @@ locals {
   # "${var.namespace}-apis".
   analytics_apis_service_name = "${var.namespace}-apis"
   analytics_apis_url          = "https://${local.analytics_apis_service_name}-${data.google_project.this.number}.${var.region}.run.app"
+
+  # The topics passes carry the same project, dataset and cap settings.
+  analytics_topics_env = {
+    TOPICS_BQ_PROJECT  = var.project_id
+    TOPICS_DATASET     = google_bigquery_dataset.analytics_job["topics"].dataset_id
+    TOPICS_CONCURRENCY = "10"
+    TOPICS_MAX_ITEMS   = "50000"
+
+    TOPICS_RUN_DEADLINE_MINUTES = "50"
+  }
 
   # Every Job has max_retries = 0, so a failed run is one failed execution and
   # the next scheduled run is the retry. Each Job's timeout keeps one execution
@@ -290,8 +319,71 @@ locals {
     }
   }
 
+  analytics_jobs_topics = {
+    # One Job per pass, since each pass has its own account, env, secrets and
+    # schedule, and one Job's absence and failure alerts then name the pass.
+    # The Jobs read the dbt seed dbt/seeds/topic_taxonomy.csv from the image's
+    # /app, so TOPICS_TAXONOMY_PATH is left unset. Each run stops starting
+    # chunks 50 minutes in (TOPICS_RUN_DEADLINE_MINUTES) and exits 0, inside
+    # the 3600 s task timeout. The variables and turns passes and the grader
+    # share the TypeSafe key (specs calls no model), so they do not overlap:
+    # the grader starts at 04:30 with a 60-minute timeout, turns at 05:45
+    # daily, and variables on Mondays at 07:00, after turns' timeout. Specs
+    # runs an hour later. Each variables request carries about 2,000 input
+    # tokens, so its items are capped at 20,000.
+    "topics-variables" = {
+      account  = google_service_account.analytics_job["topic-vars"]
+      args     = ["python", "-m", "dfo_analytics.topics", "variables"]
+      timeout  = "3600s"
+      memory   = "2Gi"
+      schedule = "0 7 * * 1"
+      env = merge(local.analytics_topics_env, {
+        TOPICS_CATALOGUE_BUCKET = local.analytics_origin_catalogue_bucket
+        TOPICS_MAX_ITEMS        = "20000"
+      })
+      secrets = {
+        TYPESAFE_API_KEY = google_secret_manager_secret.analytics_grader_typesafe.secret_id
+      }
+    }
+    # After the grader at 04:30, over the turns it has read.
+    "topics-turns" = {
+      account  = google_service_account.analytics_job["topic-turns"]
+      args     = ["python", "-m", "dfo_analytics.topics", "turns"]
+      timeout  = "3600s"
+      memory   = "2Gi"
+      schedule = "45 5 * * *"
+      env = merge(local.analytics_topics_env, {
+        TOPICS_SOURCE_DATASET       = "langfuse_export"
+        TOPICS_TURN_LOOKBACK_DAYS   = "365"
+        LANGFUSE_BASE_URL           = local.analytics_langfuse_base_url
+        LANGFUSE_EXPORT_ENVIRONMENT = local.analytics_langfuse_environment
+      })
+      secrets = {
+        TYPESAFE_API_KEY    = google_secret_manager_secret.analytics_grader_typesafe.secret_id
+        LANGFUSE_PUBLIC_KEY = "${var.namespace}-langfuse-public-key"
+        LANGFUSE_SECRET_KEY = "${var.namespace}-langfuse-secret-key"
+      }
+    }
+    # The apis service, called as the replay Job calls it, and the analytics
+    # dataset the pass reads request paths from (stg_log_lines).
+    "topics-specs" = {
+      account  = google_service_account.analytics_job["topic-specs"]
+      args     = ["python", "-m", "dfo_analytics.topics", "specs"]
+      timeout  = "3600s"
+      memory   = "2Gi"
+      schedule = "0 8 * * 1"
+      env = merge(local.analytics_topics_env, {
+        TOPICS_SPEC_SERVICES     = "${local.analytics_apis_service_name},${var.namespace}-website"
+        TOPICS_APIS_URL          = local.analytics_apis_url
+        TOPICS_APIS_AUDIENCE     = local.analytics_apis_url
+        TOPICS_ANALYTICS_DATASET = google_bigquery_dataset.analytics["analytics"].dataset_id
+      })
+      secrets = {}
+    }
+  }
+
   analytics_jobs_created = {
-    for name, job in local.analytics_jobs : name => job
+    for name, job in merge(local.analytics_jobs, local.analytics_jobs_topics) : name => job
     if var.analytics_jobs_enabled && (name != "freshness" || var.analytics_dbt_schedule_enabled)
   }
 
@@ -334,6 +426,15 @@ resource "google_storage_bucket_iam_member" "analytics_edge_logs_reader" {
   member = google_service_account.analytics_job["edge"].member
 }
 
+# The variables pass reads the origin catalogue the apis stack's job writes.
+resource "google_storage_bucket_iam_member" "analytics_origin_catalogue_reader" {
+  count = contains(keys(local.analytics_jobs_created), "topics-variables") ? 1 : 0
+
+  bucket = local.analytics_origin_catalogue_bucket
+  role   = "roles/storage.objectViewer"
+  member = google_service_account.analytics_job["topic-vars"].member
+}
+
 # The caller HMAC key and the verify principal are owned by the apis stack
 # (caller_hmac_key.tf, verify_principal.tf), the export ID key by the website
 # stack (event_export.tf), and the Langfuse keys are made by hand and read by
@@ -362,6 +463,17 @@ resource "google_cloud_run_v2_service_iam_member" "analytics_replay_apis_invoker
   name     = local.analytics_apis_service_name
   role     = "roles/run.invoker"
   member   = google_service_account.analytics_job["replay"].member
+}
+
+# The topics specs pass calls the apis service as the replay Job does.
+resource "google_cloud_run_v2_service_iam_member" "analytics_topics_apis_invoker" {
+  count = contains(keys(local.analytics_jobs_created), "topics-specs") ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  name     = local.analytics_apis_service_name
+  role     = "roles/run.invoker"
+  member   = google_service_account.analytics_job["topic-specs"].member
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -441,11 +553,13 @@ resource "google_cloud_run_v2_job" "analytics" {
     google_bigquery_dataset_access.analytics_job_writer,
     google_secret_manager_secret_iam_member.analytics_job_secret_accessor,
     google_cloud_run_v2_service_iam_member.analytics_replay_apis_invoker,
+    google_cloud_run_v2_service_iam_member.analytics_topics_apis_invoker,
+    google_storage_bucket_iam_member.analytics_origin_catalogue_reader,
   ]
 }
 
 output "analytics_job_names" {
-  description = "Names of the analytics Jobs by command (dbt, edge, grade, freshness, repos, lighthouse, replay, citations), empty while analytics_jobs_enabled is false."
+  description = "Names of the analytics Jobs by command (dbt, edge, grade, freshness, repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs), empty while analytics_jobs_enabled is false."
   value       = { for name, job in google_cloud_run_v2_job.analytics : name => job.name }
 }
 
@@ -567,12 +681,13 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
 
 # A failed run of these Jobs alerts at once, as export_job_failed (alerts.tf)
 # does. The grader runs once a day, so a failed run waits a day for its
-# retry, and the four probes a week or a month. A failed freshness run is the
+# retry, and the four probes and the topics passes a week or a month, or a day for
+# the turns pass. A failed freshness run is the
 # alert itself: a source the dbt build reads has stopped arriving, or the
 # build has stopped writing it. A probe whose trigger stops firing fails no
 # run, and analytics_probe_not_succeeding below catches it.
 resource "google_monitoring_alert_policy" "analytics_job_failed" {
-  for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness", "repos", "lighthouse", "replay", "citations"], name) }
+  for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness", "repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs"], name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job execution failed"
@@ -633,14 +748,16 @@ resource "google_monitoring_alert_policy" "analytics_grade_not_succeeding" {
 
 # The probes' version of the grade policy: no succeeded execution in a
 # week plus a day for the three weekly probes, and in a month plus four days
-# for the monthly citation probe. It catches a paused trigger or a deleted Job,
+# for the monthly citation probe, and the topics passes use the same shape: a week
+# plus a day for variables and specs, 26 hours for the daily turns pass. It catches a paused trigger or a deleted Job,
 # which fail no run, whether or not the freshness Job exists. It exists only
 # for a probe switched on in var.analytics_probes_enabled, whose canary
 # execution has already succeeded, so it opens only if the probe then stops
 # succeeding. Cloud Monitoring lets a PromQL condition that looks back 8 to 16
 # days evaluate hourly at most, and one that looks back 32 to 93 days every 6
-# hours, so the weekly probes evaluate every 3600 s and the citation probe
-# every 21600 s (local.analytics_probes).
+# hours, so the weekly probes and the topics variables and specs passes evaluate every 3600 s,
+# the citation probe every 21600 s, and the turns pass, whose 26-hour window is
+# shorter than that range, every 300 s as the grade policy does (local.analytics_probes).
 resource "google_monitoring_alert_policy" "analytics_probe_not_succeeding" {
   for_each = { for name in local.analytics_probes_active : name => local.analytics_probes[name] if contains(keys(local.analytics_jobs_created), name) }
 
