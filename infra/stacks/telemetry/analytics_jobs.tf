@@ -15,15 +15,15 @@
 #   dfo-prod-analytics-topics-variables  python -m dfo_analytics.topics variables, Mondays at 07:00 UTC
 #   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:45 UTC
 #   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 08:00 UTC
-#   dfo-prod-analytics-call-specs python -m dfo_analytics.extract.observation_specs, hourly at minute 35
+#   dfo-prod-analytics-call-specs python -m dfo_analytics.extract.observation_specs, hourly at minute 35, except 04:35 and 05:35
 #
 # var.analytics_jobs_enabled creates everything in this file, the
 # freshness Job also waits for var.analytics_dbt_schedule_enabled, and each
-# probe's (each topics pass's, and the call-specs Job's) Scheduler trigger and absence alert wait
-# for its entry in var.analytics_probes_enabled. The
+# probe's (each topics pass's, and the call-specs Job's) Scheduler trigger and
+# absence alert wait for its entry in var.analytics_probes_enabled. The
 # datasets the Jobs write, their accounts and those accounts' dataset grants
-# live in analytics.tf and exist whatever the flag says. README "Analytics jobs" gives
-# the order to switch it on.
+# live in analytics.tf and exist whatever the flag says. README "Analytics
+# jobs" gives the order to switch it on.
 
 variable "analytics_jobs_enabled" {
   description = "Creates the analytics Jobs, their Scheduler triggers and alerts, and the grants only a running Job needs (the edge logs bucket, the origin catalogue bucket, the secrets, the replay and topics specs Jobs' invoker grants on the apis service, the deployer's). Needs analytics_jobs_image."
@@ -138,13 +138,14 @@ locals {
     "topics-variables" = { lookback_hours = 192, evaluation_interval = "3600s" }
     "topics-turns"     = { lookback_hours = 26, evaluation_interval = "300s" }
     "topics-specs"     = { lookback_hours = 192, evaluation_interval = "3600s" }
-
-    # The hourly call-specs Job: the three hours the dbt and edge alerts allow,
-    # evaluated every 300 s.
-    "call-specs" = { lookback_hours = 3, evaluation_interval = "300s" }
   }
 
-  analytics_probes_active = [for name in keys(local.analytics_probes) : name if lookup(var.analytics_probes_enabled, name, false)]
+  # Every key of var.analytics_probes_enabled. The hourly call-specs Job has a
+  # switch like a probe but alerts through analytics_job_not_succeeding, as
+  # the dbt and edge Jobs do, so it has no entry in local.analytics_probes.
+  analytics_probe_switches = concat(keys(local.analytics_probes), ["call-specs"])
+
+  analytics_probes_active = [for name in local.analytics_probe_switches : name if lookup(var.analytics_probes_enabled, name, false)]
 
   # Written by the edge-logs Logpush job into the bucket this stack's
   # edge_logs.tf creates, named here because that file lands on its own
@@ -393,15 +394,19 @@ locals {
   # environment as the grader and writes their specs to langfuse_specs, which
   # the Job creates. Hourly at minute 35, after the export (minute 0, 1,800 s
   # timeout) has finished, so the dbt build at minute 25 reads the next hour's
-  # run. Observations loaded later are registered on the next run. The timeout
-  # is 40 minutes, inside the hour.
+  # run. Observations loaded later are registered on the next run. The Job
+  # shares the Langfuse key with the export and the grader, and its times keep
+  # them apart: a run's 20-minute deadline ends it by minute 55, clear of the
+  # export at minute 0, and the hours 04:00 to 06:59 are skipped, clear of the
+  # grader (04:30, 60-minute timeout) and the topics turns pass (05:45,
+  # 60-minute timeout). The task timeout is 30 minutes.
   analytics_jobs_call_specs = {
     "call-specs" = {
       account  = google_service_account.analytics_job["call-specs"]
       args     = ["python", "-m", "dfo_analytics.extract.observation_specs"]
-      timeout  = "2400s"
+      timeout  = "1800s"
       memory   = "1Gi"
-      schedule = "35 * * * *"
+      schedule = "35 0-3,7-23 * * *"
       env = {
         SPECS_BQ_PROJECT            = var.project_id
         SPECS_SOURCE_DATASET        = "langfuse_export"
@@ -428,11 +433,11 @@ locals {
     }
   ]...)
 
-  # The dbt trigger waits for analytics_dbt_schedule_enabled, and a probe's for
-  # its analytics_probes_enabled entry.
+  # The dbt trigger waits for analytics_dbt_schedule_enabled, and a probe's or
+  # the call-specs Job's for its analytics_probes_enabled entry.
   analytics_job_triggers = {
     for name, job in local.analytics_jobs_created : name => job
-    if(name != "dbt" || var.analytics_dbt_schedule_enabled) && (!contains(keys(local.analytics_probes), name) || contains(local.analytics_probes_active, name))
+    if(name != "dbt" || var.analytics_dbt_schedule_enabled) && (!contains(local.analytics_probe_switches, name) || contains(local.analytics_probes_active, name))
   }
 }
 
@@ -682,11 +687,15 @@ resource "google_cloud_scheduler_job" "analytics" {
 # hourly run raises nothing, since the next one retries it: the dbt build
 # replaces the last three days, and the edge extract reads objects for three
 # days after they land. The dbt alert waits for the dbt trigger, so the
-# cutover's one-off executions start no absence clock. The freshness Job is
+# cutover's one-off executions start no absence clock, and the call-specs
+# alert waits for its switch in var.analytics_probes_enabled, so a canary run
+# long before the switch-on starts none either. The freshness Job is
 # hourly too, so the same three hours catch a paused trigger or a deleted
-# Job, and analytics_job_failed below also alerts on each failed run.
+# Job, and analytics_job_failed below also alerts on each failed run. The
+# call-specs Job skips two hours a day, 04:35 and 05:35, which fits inside the
+# three.
 resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
-  for_each = { for name, job in local.analytics_job_triggers : name => job if contains(["dbt", "edge", "freshness"], name) }
+  for_each = { for name, job in local.analytics_job_triggers : name => job if contains(["dbt", "edge", "freshness", "call-specs"], name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job not succeeding"
@@ -720,8 +729,9 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
 # alert itself: a source the dbt build reads has stopped arriving, or the
 # build has stopped writing it. A probe whose trigger stops firing fails no
 # run, and analytics_probe_not_succeeding below catches it. The hourly
-# call-specs Job has no failure alert: its next run is the retry, and the
-# absence alert catches a run of failures, as for the dbt and edge Jobs.
+# call-specs Job has no failure alert: its next run is the retry, and
+# analytics_job_not_succeeding catches a run of failures, as for the dbt and
+# edge Jobs. The rows it loses alert through analytics_call_specs_lost below.
 resource "google_monitoring_alert_policy" "analytics_job_failed" {
   for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness", "repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs"], name) }
 
@@ -784,18 +794,21 @@ resource "google_monitoring_alert_policy" "analytics_grade_not_succeeding" {
 
 # The probes' version of the grade policy: no succeeded execution in a
 # week plus a day for the three weekly probes, and in a month plus four days
-# for the monthly citation probe, and the topics passes use the same shape: a week
-# plus a day for variables and specs, 26 hours for the daily turns pass. It catches a paused trigger or a deleted Job,
-# which fail no run, whether or not the freshness Job exists. It exists only
-# for a probe switched on in var.analytics_probes_enabled, whose canary
-# execution has already succeeded, so it opens only if the probe then stops
-# succeeding. Cloud Monitoring lets a PromQL condition that looks back 8 to 16
-# days evaluate hourly at most, and one that looks back 32 to 93 days every 6
-# hours, so the weekly probes and the topics variables and specs passes evaluate every 3600 s,
-# the citation probe every 21600 s, and the turns pass, whose 26-hour window is
-# shorter than that range, every 300 s as the grade policy does (local.analytics_probes).
+# for the monthly citation probe, and the topics passes use the same shape: a
+# week plus a day for variables and specs, 26 hours for the daily turns pass.
+# It catches a paused trigger or a deleted Job, which fail no run, whether or
+# not the freshness Job exists. It exists only for a probe switched on in
+# var.analytics_probes_enabled, whose canary execution has already succeeded,
+# so it opens only if the probe then stops succeeding. Cloud Monitoring lets a
+# PromQL condition that looks back 8 to 16 days evaluate hourly at most, and
+# one that looks back 32 to 93 days every 6 hours, so the weekly probes and
+# the topics variables and specs passes evaluate every 3600 s, the citation
+# probe every 21600 s, and the turns pass, whose 26-hour window is shorter
+# than that range, every 300 s as the grade policy does
+# (local.analytics_probes). The hourly call-specs Job is not among them: its
+# absence alert is analytics_job_not_succeeding.
 resource "google_monitoring_alert_policy" "analytics_probe_not_succeeding" {
-  for_each = { for name in local.analytics_probes_active : name => local.analytics_probes[name] if contains(keys(local.analytics_jobs_created), name) }
+  for_each = { for name in local.analytics_probes_active : name => local.analytics_probes[name] if contains(keys(local.analytics_probes), name) && contains(keys(local.analytics_jobs_created), name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job not succeeding"
@@ -876,6 +889,70 @@ resource "google_monitoring_alert_policy" "analytics_edge_objects_lost" {
 
       # ALIGN_SUM, since Cloud Logging writes a zero sample in the interval
       # beside each non-zero one, which ALIGN_COUNT would count as a run.
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "3600s"
+  }
+}
+
+# The call-specs Job logs one structured line, jsonPayload event
+# "observation_spec_lost" with the fields observation_id and last_status, for
+# each observation row that fails its last attempt. The run itself succeeds, so
+# no Job policy sees it. The metric counts those lines, as
+# analytics_edge_objects_lost does for the edge extract.
+resource "google_logging_metric" "analytics_call_specs_lost" {
+  count = local.analytics_jobs_count
+
+  name    = "${var.namespace}-analytics-call-specs-lost"
+  project = var.project_id
+  filter  = <<-EOT
+    resource.type="cloud_run_job"
+    resource.labels.job_name="${google_cloud_run_v2_job.analytics["call-specs"].name}"
+    resource.labels.location="${var.region}"
+    jsonPayload.event="observation_spec_lost"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+resource "time_sleep" "analytics_call_specs_lost_metric_propagation" {
+  count = local.analytics_jobs_count
+
+  depends_on      = [google_logging_metric.analytics_call_specs_lost]
+  create_duration = "120s"
+}
+
+resource "google_monitoring_alert_policy" "analytics_call_specs_lost" {
+  count = local.analytics_jobs_count
+
+  project      = var.project_id
+  display_name = "${google_cloud_run_v2_job.analytics["call-specs"].name} lost observation rows"
+  combiner     = "OR"
+
+  depends_on = [time_sleep.analytics_call_specs_lost_metric_propagation]
+
+  conditions {
+    display_name = "observation_spec_lost line logged"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.analytics_call_specs_lost[0].name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      # ALIGN_SUM, as for the edge metric.
       aggregations {
         alignment_period   = "300s"
         per_series_aligner = "ALIGN_SUM"
