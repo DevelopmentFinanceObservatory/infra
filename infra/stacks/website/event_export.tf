@@ -288,6 +288,11 @@ resource "google_cloud_run_v2_job" "website_export" {
           value = google_bigquery_dataset.website_export[0].dataset_id
         }
 
+        env {
+          name  = "EXPORT_BQ_LOCATION"
+          value = google_bigquery_dataset.website_export[0].location
+        }
+
         # Pinned, so a rotation reaches the Job in the same apply that
         # creates the new version.
         env {
