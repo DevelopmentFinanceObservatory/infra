@@ -399,13 +399,13 @@ locals {
   # them apart: a run's 20-minute deadline ends it by minute 55, clear of the
   # export at minute 0, and the hours 04:00 to 06:59 are skipped, clear of the
   # grader (04:30, 60-minute timeout) and the topics turns pass (05:45,
-  # 60-minute timeout). The task timeout of 24 minutes ends any run by minute
-  # 59, before the export starts.
+  # 60-minute timeout). The task timeout of 20 minutes ends any run by minute
+  # 55, before the export starts.
   analytics_jobs_call_specs = {
     "call-specs" = {
       account  = google_service_account.analytics_job["call-specs"]
       args     = ["python", "-m", "dfo_analytics.extract.observation_specs"]
-      timeout  = "1440s"
+      timeout  = "1200s"
       memory   = "1Gi"
       schedule = "35 0-3,7-23 * * *"
       env = {
