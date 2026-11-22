@@ -27,7 +27,7 @@ locals {
   # The datasets the analytics repository's Python jobs write. Each account in
   # analytics_job_accounts below holds WRITER on the one dataset it names, so
   # the three topics accounts share topics.
-  # The grader, the topics Jobs and the specs Job create their own tables. Every other job's
+  # The grader, the topics Jobs and the call-specs Job create their own tables. Every other job's
   # tables are declared below. Every dataset exists whatever var.analytics_jobs_enabled says
   # (analytics_jobs.tf), since the analytics changes that write them need
   # them before the jobs run.
@@ -54,7 +54,7 @@ locals {
       description = "Topic labels for the DFO variables, Studio turns and API specs, written by the three ${var.namespace}-analytics-topics Jobs. The Jobs create their own tables."
     }
     langfuse_specs = {
-      description = "Observation specs read from Langfuse observations, written hourly by the ${var.namespace}-analytics-specs Job as ${var.namespace}-analytics-specs. The Job creates its own table."
+      description = "Observation specs read from Langfuse observations, written hourly by the ${var.namespace}-analytics-call-specs Job as ${var.namespace}-analytics-call-specs. The Job creates its own table."
     }
   }
 
@@ -498,7 +498,7 @@ resource "google_bigquery_table" "analytics_probe" {
 # are in place before a job first runs. What only a running job needs (the
 # edge logs and origin catalogue buckets, the secrets, the replay and topics
 # specs invoker grants on the apis service) is granted in analytics_jobs.tf
-# behind the flag. The grader, the specs account and the topic-turns account also read
+# behind the flag. The grader, the call-specs account and the topic-turns account also read
 # langfuse_export, the turns and observations they read, and topic-specs reads the whole analytics
 # dataset, the only job account that does, for its request paths in
 # stg_log_lines. That table keeps the delivery lines' json_payload, which
@@ -563,9 +563,9 @@ locals {
       dataset      = "topics"
       readers      = [google_bigquery_dataset.analytics["analytics"].dataset_id]
     }
-    specs = {
-      display_name = "${var.namespace} analytics observation specs"
-      description  = "Runs the analytics repository's observation specs extract: reads langfuse_export, writes langfuse_specs."
+    call-specs = {
+      display_name = "${var.namespace} analytics call specs"
+      description  = "Runs the analytics repository's call specs extract: reads langfuse_export, writes langfuse_specs."
       dataset      = "langfuse_specs"
       readers      = ["langfuse_export"]
     }

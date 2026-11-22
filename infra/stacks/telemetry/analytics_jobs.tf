@@ -15,11 +15,11 @@
 #   dfo-prod-analytics-topics-variables  python -m dfo_analytics.topics variables, Mondays at 07:00 UTC
 #   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:45 UTC
 #   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 08:00 UTC
-#   dfo-prod-analytics-specs      python -m dfo_analytics.extract.observation_specs, hourly at minute 15
+#   dfo-prod-analytics-call-specs python -m dfo_analytics.extract.observation_specs, hourly at minute 35
 #
 # var.analytics_jobs_enabled creates everything in this file, the
 # freshness Job also waits for var.analytics_dbt_schedule_enabled, and each
-# probe's (each topics pass's, and the specs Job's) Scheduler trigger and absence alert wait
+# probe's (each topics pass's, and the call-specs Job's) Scheduler trigger and absence alert wait
 # for its entry in var.analytics_probes_enabled. The
 # datasets the Jobs write, their accounts and those accounts' dataset grants
 # live in analytics.tf and exist whatever the flag says. README "Analytics jobs" gives
@@ -70,7 +70,7 @@ variable "analytics_dbt_schedule_enabled" {
 # account, secrets and tables exist whatever it says, so a canary execution
 # can run before the trigger does (README "Analytics jobs").
 variable "analytics_probes_enabled" {
-  description = "Creates a probe's Cloud Scheduler trigger and its not-succeeding alert, by probe name (repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, specs). A probe missing from the map, or false, keeps its Job and has no trigger and no absence alert. Needs analytics_jobs_enabled. Switch a probe on after its canary execution has written valid rows."
+  description = "Creates a probe's Cloud Scheduler trigger and its not-succeeding alert, by probe name (repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, call-specs). A probe missing from the map, or false, keeps its Job and has no trigger and no absence alert. Needs analytics_jobs_enabled. Switch a probe on after its canary execution has written valid rows."
   type        = map(bool)
   default = {
     repos      = false
@@ -82,12 +82,12 @@ variable "analytics_probes_enabled" {
     "topics-turns"     = false
     "topics-specs"     = false
 
-    specs = false
+    "call-specs" = false
   }
 
   validation {
-    condition     = length(setsubtract(keys(var.analytics_probes_enabled), ["repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs", "specs"])) == 0
-    error_message = "analytics_probes_enabled keys must be probe names: repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, specs."
+    condition     = length(setsubtract(keys(var.analytics_probes_enabled), ["repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs", "call-specs"])) == 0
+    error_message = "analytics_probes_enabled keys must be probe names: repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, call-specs."
   }
 
   validation {
@@ -139,9 +139,9 @@ locals {
     "topics-turns"     = { lookback_hours = 26, evaluation_interval = "300s" }
     "topics-specs"     = { lookback_hours = 192, evaluation_interval = "3600s" }
 
-    # The hourly specs Job: the three hours the dbt and edge alerts allow,
+    # The hourly call-specs Job: the three hours the dbt and edge alerts allow,
     # evaluated every 300 s.
-    specs = { lookback_hours = 3, evaluation_interval = "300s" }
+    "call-specs" = { lookback_hours = 3, evaluation_interval = "300s" }
   }
 
   analytics_probes_active = [for name in keys(local.analytics_probes) : name if lookup(var.analytics_probes_enabled, name, false)]
@@ -391,15 +391,17 @@ locals {
 
   # Reads the Langfuse observations langfuse_export holds for the same
   # environment as the grader and writes their specs to langfuse_specs, which
-  # the Job creates. Hourly at minute 15, after the export's load and before
-  # the dbt build at minute 25. The timeout is 40 minutes, inside the hour.
-  analytics_jobs_specs = {
-    specs = {
-      account  = google_service_account.analytics_job["specs"]
+  # the Job creates. Hourly at minute 35, after the export (minute 0, 1,800 s
+  # timeout) has finished, so the dbt build at minute 25 reads the next hour's
+  # run. Observations loaded later are registered on the next run. The timeout
+  # is 40 minutes, inside the hour.
+  analytics_jobs_call_specs = {
+    "call-specs" = {
+      account  = google_service_account.analytics_job["call-specs"]
       args     = ["python", "-m", "dfo_analytics.extract.observation_specs"]
       timeout  = "2400s"
       memory   = "1Gi"
-      schedule = "15 * * * *"
+      schedule = "35 * * * *"
       env = {
         SPECS_BQ_PROJECT            = var.project_id
         SPECS_SOURCE_DATASET        = "langfuse_export"
@@ -415,7 +417,7 @@ locals {
   }
 
   analytics_jobs_created = {
-    for name, job in merge(local.analytics_jobs, local.analytics_jobs_topics, local.analytics_jobs_specs) : name => job
+    for name, job in merge(local.analytics_jobs, local.analytics_jobs_topics, local.analytics_jobs_call_specs) : name => job
     if var.analytics_jobs_enabled && (name != "freshness" || var.analytics_dbt_schedule_enabled)
   }
 
@@ -591,7 +593,7 @@ resource "google_cloud_run_v2_job" "analytics" {
 }
 
 output "analytics_job_names" {
-  description = "Names of the analytics Jobs by command (dbt, edge, grade, freshness, repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, specs), empty while analytics_jobs_enabled is false."
+  description = "Names of the analytics Jobs by command (dbt, edge, grade, freshness, repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, call-specs), empty while analytics_jobs_enabled is false."
   value       = { for name, job in google_cloud_run_v2_job.analytics : name => job.name }
 }
 
@@ -717,9 +719,11 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
 # the turns pass. A failed freshness run is the
 # alert itself: a source the dbt build reads has stopped arriving, or the
 # build has stopped writing it. A probe whose trigger stops firing fails no
-# run, and analytics_probe_not_succeeding below catches it.
+# run, and analytics_probe_not_succeeding below catches it. The hourly
+# call-specs Job has no failure alert: its next run is the retry, and the
+# absence alert catches a run of failures, as for the dbt and edge Jobs.
 resource "google_monitoring_alert_policy" "analytics_job_failed" {
-  for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness", "repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs", "specs"], name) }
+  for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness", "repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs"], name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job execution failed"
