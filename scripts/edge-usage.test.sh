@@ -57,12 +57,14 @@ respond() { # <group json...>
 respond "$(group 2026-11-01 /api/datasets/spec_a/cv_1/files/sha256:aa hit 5 "" 100 1)" \
     "$(group 2026-11-01 /api/datasets/spec_a/cv_1/files/sha256:bb hit 7 "" 250 10)" \
     "$(group 2026-11-01 /api/v1/datasets/spec_a/cv_1 miss 2)" \
-    "$(group 2026-11-01 /api/datasets/spec_a/cv_1/file dynamic 1)"
+    "$(group 2026-11-01 /api/datasets/spec_a/cv_1/file dynamic 1)" \
+    "$(group 2026-11-01 /api/v1/datasets/derived/ops_a/ocv_1/files/sha256:cc hit 3 "" 30 1)"
 run 2026-11-01 2026-11-02
 check "success exits 0" "$(is "$status" 0)"
 check "files fold across digests" "$(says $'2026-11-01\t/api/datasets\tfile\thit\t12\t350\t6.25')"
 check "v1 manifest is its own row" "$(says $'2026-11-01\t/api/v1/datasets\tmanifest\tmiss\t2\t0\t1.00')"
 check "the header names requests, bytes and sampled" "$(says $'cache_status\trequests\tbytes\tsampled')"
+check "a derived file is its own kind" "$(says $'2026-11-01\t/api/v1/datasets\tderived_file\thit\t3\t30\t1.00')"
 check "the selector is its own kind" "$(says $'2026-11-01\t/api/datasets\tselector\tdynamic\t1\t0\t1.00')"
 check "the query carries the token and range" "$(is "$([[ "$calls" == *"Bearer test-token"* && "$calls" == *2026-11-02* ]] && echo y)" y)"
 
