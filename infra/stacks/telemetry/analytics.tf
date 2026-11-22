@@ -27,10 +27,10 @@ locals {
   # The datasets the analytics repository's Python jobs write. Each account in
   # analytics_job_accounts below holds WRITER on the one dataset it names, so
   # the three topics accounts share topics.
-  # The grader and the topics Jobs create their own tables. Every other job's
-  # tables are declared below. Every dataset exists whatever var.analytics_jobs_enabled says
-  # (analytics_jobs.tf), since the analytics changes that write them need
-  # them before the jobs run.
+  # The grader, the topics Jobs and the call-specs Job create their own
+  # tables. Every other job's tables are declared below. Every dataset exists
+  # whatever var.analytics_jobs_enabled says (analytics_jobs.tf), since the
+  # analytics changes that write them need them before the jobs run.
   analytics_job_datasets = {
     edge_export = {
       description = "Dataset reads Cloudflare's edge answered, loaded hourly from the edge logs bucket by the ${var.namespace}-analytics-edge Job as ${var.namespace}-analytics-edge."
@@ -53,6 +53,9 @@ locals {
     topics = {
       description = "Topic labels for the DFO variables, Studio turns and API specs, written by the three ${var.namespace}-analytics-topics Jobs. The Jobs create their own tables."
     }
+    langfuse_specs = {
+      description = "Observation specs read from Langfuse observations, written hourly by the ${var.namespace}-analytics-call-specs Job as ${var.namespace}-analytics-call-specs. The Job creates its own table."
+    }
   }
 
   # The datasets dbt/models/sources.yml in the analytics repository declares.
@@ -72,6 +75,7 @@ locals {
     google_bigquery_dataset.analytics_job["replay_probe"].dataset_id,
     google_bigquery_dataset.analytics_job["citation_probe"].dataset_id,
     google_bigquery_dataset.analytics_job["topics"].dataset_id,
+    google_bigquery_dataset.analytics_job["langfuse_specs"].dataset_id,
   ]
 
   # The service accounts, each with the one dataset it writes. The
@@ -494,12 +498,12 @@ resource "google_bigquery_table" "analytics_probe" {
 # are in place before a job first runs. What only a running job needs (the
 # edge logs and origin catalogue buckets, the secrets, the replay and topics
 # specs invoker grants on the apis service) is granted in analytics_jobs.tf
-# behind the flag. The grader and the topic-turns account also read
-# langfuse_export, the turns they label, and topic-specs reads the whole analytics
-# dataset, the only job account that does, for its request paths in
-# stg_log_lines. That table keeps the delivery lines' json_payload, which
-# carries user agents and hashed IP caller ids (ip:<hash>). The four probe
-# accounts and topic-vars read no other dataset.
+# behind the flag. The grader, the call-specs account and the topic-turns
+# account also read langfuse_export, the turns and observations they read, and
+# topic-specs reads the whole analytics dataset, the only job account that
+# does, for its request paths in stg_log_lines. That table keeps the delivery
+# lines' json_payload, which carries user agents and hashed IP caller ids
+# (ip:<hash>). The four probe accounts and topic-vars read no other dataset.
 locals {
   analytics_job_accounts = {
     edge = {
@@ -558,6 +562,12 @@ locals {
       description  = "Runs the analytics repository's topics specs pass: reads analytics, whose stg_log_lines holds its request paths, calls the apis service, writes topics."
       dataset      = "topics"
       readers      = [google_bigquery_dataset.analytics["analytics"].dataset_id]
+    }
+    call-specs = {
+      display_name = "${var.namespace} analytics call specs"
+      description  = "Runs the analytics repository's call specs extract: reads langfuse_export, writes langfuse_specs."
+      dataset      = "langfuse_specs"
+      readers      = ["langfuse_export"]
     }
   }
 
