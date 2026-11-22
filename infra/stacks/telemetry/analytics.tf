@@ -501,9 +501,9 @@ resource "google_bigquery_table" "analytics_probe" {
 # behind the flag. The grader, the call-specs account and the topic-turns
 # account also read langfuse_export, the turns and observations they read, and
 # topic-specs reads the whole analytics dataset, the only job account that
-# does, for its request paths in stg_log_lines. That table keeps the delivery lines' json_payload, which
-# carries user agents and hashed IP caller ids (ip:<hash>). The four probe
-# accounts and topic-vars read no other dataset.
+# does, for its request paths in stg_log_lines. That table keeps the delivery
+# lines' json_payload, which carries user agents and hashed IP caller ids
+# (ip:<hash>). The four probe accounts and topic-vars read no other dataset.
 locals {
   analytics_job_accounts = {
     edge = {

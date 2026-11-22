@@ -15,7 +15,7 @@
 #   dfo-prod-analytics-topics-variables  python -m dfo_analytics.topics variables, Mondays at 07:00 UTC
 #   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:45 UTC
 #   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 08:00 UTC
-#   dfo-prod-analytics-call-specs python -m dfo_analytics.extract.observation_specs, hourly at minute 35, except 04:35 and 05:35
+#   dfo-prod-analytics-call-specs        python -m dfo_analytics.extract.observation_specs, hourly at minute 35, except 04:35 to 06:35
 #
 # var.analytics_jobs_enabled creates everything in this file, the
 # freshness Job also waits for var.analytics_dbt_schedule_enabled, and each
@@ -399,12 +399,13 @@ locals {
   # them apart: a run's 20-minute deadline ends it by minute 55, clear of the
   # export at minute 0, and the hours 04:00 to 06:59 are skipped, clear of the
   # grader (04:30, 60-minute timeout) and the topics turns pass (05:45,
-  # 60-minute timeout). The task timeout is 30 minutes.
+  # 60-minute timeout). The task timeout of 24 minutes ends any run by minute
+  # 59, before the export starts.
   analytics_jobs_call_specs = {
     "call-specs" = {
       account  = google_service_account.analytics_job["call-specs"]
       args     = ["python", "-m", "dfo_analytics.extract.observation_specs"]
-      timeout  = "1800s"
+      timeout  = "1440s"
       memory   = "1Gi"
       schedule = "35 0-3,7-23 * * *"
       env = {
@@ -692,8 +693,9 @@ resource "google_cloud_scheduler_job" "analytics" {
 # long before the switch-on starts none either. The freshness Job is
 # hourly too, so the same three hours catch a paused trigger or a deleted
 # Job, and analytics_job_failed below also alerts on each failed run. The
-# call-specs Job skips two hours a day, 04:35 and 05:35, which fits inside the
-# three.
+# call-specs Job skips three runs a night, 04:35 to 06:35, so its last
+# success and the next can be four hours apart; its window is five hours,
+# which also covers one failed run beside the gap.
 resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
   for_each = { for name, job in local.analytics_job_triggers : name => job if contains(["dbt", "edge", "freshness", "call-specs"], name) }
 
@@ -702,11 +704,11 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
   combiner     = "OR"
 
   conditions {
-    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution for 10800s"
+    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution for ${each.key == "call-specs" ? 18000 : 10800}s"
 
     condition_absent {
       filter   = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\" AND resource.labels.location=\"${var.region}\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"succeeded\""
-      duration = "10800s"
+      duration = each.key == "call-specs" ? "18000s" : "10800s"
 
       aggregations {
         alignment_period   = "900s"
