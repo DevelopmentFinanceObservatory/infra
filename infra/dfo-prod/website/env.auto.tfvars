@@ -62,5 +62,3 @@ event_export_enabled = true
 
 # Organisations whose verified accounts may open the Graph Explorer.
 graph_explorer_email_domains = ["one.org", "ods.coop", "ode.partners"]
-
-# TODO(jorge): decide who else should be an admin on prod; the list lives in the secret dfo-prod-website-admin-emails, not here.
