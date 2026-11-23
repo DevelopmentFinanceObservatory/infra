@@ -34,6 +34,8 @@ locals {
     cloudflare       = [google_bigquery_dataset.web_history.dataset_id]
     cloudflare_pages = [google_bigquery_dataset.web_history.dataset_id]
     billing          = [var.billing_export_dataset]
+    # The metrics views read the marts the analytics dbt build writes.
+    metrics = [google_bigquery_dataset.analytics["analytics"].dataset_id]
   }
 
   reporting_log_ref = "${var.project_id}.${local.reporting_log_dataset}"
@@ -44,7 +46,69 @@ locals {
   # repeat the day's events.
   ga4_events_ref = "${var.project_id}.${var.ga4_export_dataset}.events_2*"
 
-  reporting_views = {
+  # The views of the DFO Metrics dashboard, one per analytics mart. Each
+  # template names its tables as ${table} placeholders, filled from
+  # metrics_table_refs.
+  metrics_ref = "${var.project_id}.${google_bigquery_dataset.analytics["analytics"].dataset_id}"
+  metrics_table_refs = {
+    for table in [
+      "assistant_fetches_weekly",
+      "catalogue_daily",
+      "chat_host_weekly",
+      "consistency_weekly",
+      "consumer_cohorts_weekly",
+      "crawler_reads_weekly",
+      "delivery_topics_daily",
+      "dependence_weekly",
+      "embedding_sites_weekly",
+      "indicator_uses_weekly",
+      "int_surface_weeks_observed",
+      "int_variable_topics",
+      "public_repos_weekly",
+      "reach_weekly",
+      "regular_consumers_weekly",
+      "regular_organisations_weekly",
+      "requests_daily",
+      "spec_uses_weekly",
+      "standing_pulls_weekly",
+      "supply_coverage_daily",
+      "topic_demand_weekly",
+      "topic_taxonomy",
+      "trust_weekly",
+    ] : table => "${local.metrics_ref}.${table}"
+  }
+  metrics_view_descriptions = {
+    metrics_regular_consumers_weekly     = "Grain: surface x iso_week x consumer_kind x consumer_class. consumer_kind: account (signed in), ip (network address), visitor. A consumer has one mart row per client, so every count is distinct on the consumer. A key kind appears on a surface from the first week it holds any row there, and observed weeks after that with no regular read 0."
+    metrics_dependence_weekly            = "Grain: surface x iso_week x consumer_class. The mart is already aggregated; the view keeps observed, complete weeks and names both regular rules."
+    metrics_consumer_cohorts_weekly      = "Grain: surface x cohort_week x consumer_class. A cohort is the keys first active on a surface in that week. The mart leaves a return null until the surface has observed the week it falls in."
+    metrics_standing_pulls_weekly        = "Grain: surface x iso_week x consumer_class. A standing pull is the same request made in 4 of the last 8 weeks."
+    metrics_regular_organisations_weekly = "Grain: surface x iso_week x audience x organisation_group. Groups only; the mart suppresses small groups as null."
+    metrics_spec_uses_weekly             = "Grain: surface x iso_week x kind (use, or fetched in Studio). A dataset use is one consumer using one spec in one week, so dataset_uses counts distinct (consumer, spec) pairs."
+    metrics_indicator_uses_weekly        = "Grain: surface x iso_week x kind x client_family. client_family 'all' is the surface total; the other rows split it by client (Claude Code, Codex, dfo-ts, curl and so on, 'unknown' where the client is not recognised). Distinct counts are computed at both grains, so the family rows do not add up to the 'all' row when one key uses two clients."
+    metrics_delivery_topics_daily        = "Grain: surface x iso_week x axis x topic_id. Dataset reads split across their spec's topics by weight, summed from days to complete weeks. Reads on surfaces with no observation mark (unknown, direct) are left out."
+    metrics_chat_host_weekly             = "Grain: iso_week x host (ChatGPT, Claude.ai, Gemini). Chat-host calls reach DFO through the api and mcp surfaces, so a week counts only when both observed it. The mart has no row for a host-week with no calls."
+    metrics_assistant_fetches_weekly     = "Grain: iso_week x agent_name x kind (page, api). Requests from agents that fetch for a person and name themselves. Read from website request logs, so a week counts when the website surface observed it."
+    metrics_crawler_reads_weekly         = "Grain: iso_week x agent_name x kind (page, api, rsc). Requests from self-declared search and training crawlers, observed as the website."
+    metrics_reach_weekly                 = "Grain: iso_week x kind (share, embed). Opens of shared or embedded artefacts by someone other than their creator. The host where an artefact was opened is aggregated away; hosts counts the distinct ones."
+    metrics_embedding_sites_weekly       = "Grain: iso_week. Sites that embed DFO, counted, never named."
+    metrics_public_repos_weekly          = "Grain: iso_week. Public repositories that declare the SDK or name the MCP endpoint, from the weekly repository search."
+    metrics_trust_weekly                 = "Grain: iso_week x slot_source x share_era. Replay-probe readings from complete runs only. Derived cards are compared with their stored frame; dataset cards are reported as still current or moved."
+    metrics_consistency_weekly           = "Grain: iso_week. Derived frames recomputed in a week, and how many of those seen the week before recompute to the same digest."
+    metrics_requests_daily               = "Grain: iso_week x service. Requests and server errors per Cloud Run service, summed from days to complete weeks. availability is the share of requests without a 5xx response; 4xx responses count as answered."
+    metrics_supply_coverage_daily        = "Grain: day x coverage (curated, data_commons, missing). Target sources on the seeded list by how the day's catalogue holds them. Complete days only."
+    metrics_catalogue_daily              = "Grain: day. The search catalogue live at each complete day's end. Indicators are variables."
+    metrics_topic_demand_weekly          = "Grain: iso_week x axis x topic_id. Studio questions split across subjects by weight; unmet is the grader's judgement. The mart suppresses topic-weeks under 5 weighted turns. Weeks follow the studio surface's observation mark."
+    metrics_variable_topics              = "Grain: axis x topic_id. Today's catalogue variables by main subject and by finance kind, from int_variable_topics (labels that are not stale)."
+  }
+  metrics_views = {
+    for name, description in local.metrics_view_descriptions : name => {
+      source      = "metrics"
+      description = description
+      query       = templatefile("${path.module}/sql/reporting/${name}.sql", local.metrics_table_refs)
+    }
+  }
+
+  reporting_views = merge(local.metrics_views, {
     service_requests_daily = {
       source      = "logs"
       description = "Cloud Run requests per UTC day and service, with status counts and approximate latency quantiles."
@@ -168,7 +232,7 @@ locals {
         callers = join(", ", [for id, caller in var.spend_callers : "('${id}', '${caller}')"])
       })
     }
-  }
+  })
 
   reporting_views_enabled = {
     for name, view in local.reporting_views : name => view if contains(var.reporting_sources, view.source)

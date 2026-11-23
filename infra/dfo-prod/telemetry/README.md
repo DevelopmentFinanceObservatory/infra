@@ -318,6 +318,36 @@ The Search Console views keep web search only. `search_console_pages` strips the
 
 `model_spend_daily` reads the standard usage cost export, `billing_export.gcp_billing_export_v1_*`, and keeps only the projects in `spend_callers` (`reporting.auto.tfvars`), labelled with their caller, since the billing account also bills projects outside DFO. Add each Gemini caller's AI Studio key project there. Cloud Billing keeps adding cost to a day for about a day after it ends, so the view keeps only days before yesterday (UTC), and every day it holds is whole. `credits` is negative and `net_cost` is `cost` plus `credits`.
 
+The `metrics_*` views feed the DFO Metrics dashboard, one per analytics mart (or, for `metrics_variable_topics`, per catalogue label), each reading the dbt build's tables in `analytics` and each authorised on that dataset:
+
+| View                                   | Grain                                            |
+| -------------------------------------- | ------------------------------------------------ |
+| `metrics_regular_consumers_weekly`     | surface, ISO week, consumer kind, consumer class |
+| `metrics_dependence_weekly`            | surface, ISO week, consumer class                |
+| `metrics_consumer_cohorts_weekly`      | surface, cohort week, consumer class             |
+| `metrics_standing_pulls_weekly`        | surface, ISO week, consumer class                |
+| `metrics_regular_organisations_weekly` | surface, ISO week, audience, organisation group  |
+| `metrics_spec_uses_weekly`             | surface, ISO week, kind                          |
+| `metrics_indicator_uses_weekly`        | surface, ISO week, kind, client family           |
+| `metrics_delivery_topics_daily`        | surface, ISO week, axis, topic                   |
+| `metrics_chat_host_weekly`             | ISO week, chat host                              |
+| `metrics_assistant_fetches_weekly`     | ISO week, agent, kind                            |
+| `metrics_crawler_reads_weekly`         | ISO week, agent, kind                            |
+| `metrics_reach_weekly`                 | ISO week, kind                                   |
+| `metrics_embedding_sites_weekly`       | ISO week                                         |
+| `metrics_public_repos_weekly`          | ISO week                                         |
+| `metrics_trust_weekly`                 | ISO week, slot source, share era                 |
+| `metrics_consistency_weekly`           | ISO week                                         |
+| `metrics_requests_daily`               | ISO week, service                                |
+| `metrics_supply_coverage_daily`        | UTC day, coverage                                |
+| `metrics_catalogue_daily`              | UTC day                                          |
+| `metrics_topic_demand_weekly`          | ISO week, axis, topic                            |
+| `metrics_variable_topics`              | axis, topic                                      |
+
+Each view holds counts and rates, and no consumer key, hashed address, account id, organisation name, host name, question text or one-row-per-consumer rows. Distinct counts are computed in the view at the grain it exposes, so no reader sums them across rows; `metrics_indicator_uses_weekly` carries a `client_family` of `all` for the surface total, which its other rows do not add up to when one key uses two clients. `metrics_regular_organisations_weekly` holds only the organisation groups the mart names (`Named organisations`, `Personal email`, `Other organisations`).
+
+Every view cuts the ISO week holding today, so it returns complete weeks (Monday 00:00 UTC) and, for the daily marts, complete days. A surface-keyed view keeps only the surface-weeks `int_surface_weeks_observed` marks observed, and `metrics_regular_consumers_weekly` returns a zero row for a key kind a surface has shown, in each observed week after the first in which it held a row. Both regular-consumer rules are columns: `regular_2_of_4` (2 of the last 4 weeks, interim) and `regular_3_of_8` (3 of the last 8). `tests/reporting_metrics.test.sh` runs all of them.
+
 `tests/reporting_*.test.sh` in `infra/stacks/telemetry` run each view over literal source rows and fail on any row that differs from the ones they pin. Run them by hand after changing a view.
 
 ### Switching a source on
@@ -338,6 +368,7 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 | `cloudflare`       | `cloudflare_daily`                                | `web_history.cloudflare_daily`, from `scripts/load-cloudflare-history.sh`                                                                                                                         |
 | `cloudflare_pages` | `cloudflare_pages_daily`                          | `web_history.cloudflare_pages_daily`, from `scripts/load-cloudflare-pages-history.sh`                                                                                                             |
 | `billing`          | `model_spend_daily`                               | a `billing_export.gcp_billing_export_v1_*` table                                                                                                                                                  |
+| `metrics`          | the `metrics_*` views                             | the marts the `metrics_*` views read in `analytics`, from the analytics dbt build                                                                                                                 |
 
 `bq ls prod-fin-observatory:<dataset>` lists a dataset's tables.
 
