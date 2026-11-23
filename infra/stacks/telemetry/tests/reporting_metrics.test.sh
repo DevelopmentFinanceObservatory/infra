@@ -8,9 +8,11 @@
 # of CURRENT_DATE() that no view may return. A surface-keyed view also keeps
 # only the surface-weeks int_surface_weeks_observed marks observed: the
 # website is unobserved in 2026-10-19 and the unknown surface in 2026-10-05.
-# The website is observed with no reads in 2026-10-26, which gives each key
-# kind it holds a zero row. A key view returns counts, so no consumer key or
-# host reaches a row.
+# The website is observed with no reads in 2026-10-26, which gives each
+# class and audience it holds a zero row. The retention marts leave pooled
+# addresses out, so their rows hold none, while the headline and indicator
+# marts hold the pooled caller and their views return it as addresses. A key
+# view returns counts, so no consumer key or host reaches a row.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,32 +37,36 @@ SOURCES="WITH
     ('unknown', '2026-10-05', false, false, 0, 0)])
   ),
   regular_consumers_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, consumer STRING, consumer_kind STRING, consumer_class STRING, active_this_week BOOL, is_regular BOOL, is_regular_interim BOOL>>[
-    ('2026-10-05', 'website', 'a1', 'visitor', 'external', true, false, false),
-    ('2026-10-12', 'website', 'a1', 'visitor', 'external', true, true, true),
-    ('2026-10-12', 'website', 'a2', 'visitor', 'external', true, false, true),
-    ('2026-10-12', 'website', 'a3', 'visitor', 'external', false, false, false),
-    ('2026-10-12', 'website', 'k1', 'account', 'one_campaign', true, true, true),
-    ('2026-10-12', 'api', 'i1', 'ip', 'external', true, false, false),
-    ($CUR, 'website', 'a1', 'visitor', 'external', true, true, true)])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, consumer STRING, consumer_kind STRING, caller_class STRING, audience STRING, active_this_week BOOL, is_regular BOOL, is_regular_interim BOOL>>[
+    ('2026-10-05', 'website', 'a1', 'visitor', 'address', 'unknown', true, false, false),
+    ('2026-10-12', 'website', 'a1', 'visitor', 'address', 'unknown', true, true, true),
+    ('2026-10-12', 'website', 'a2', 'visitor', 'address', 'unknown', true, false, true),
+    ('2026-10-12', 'website', 'a3', 'visitor', 'address', 'unknown', false, false, false),
+    ('2026-10-12', 'website', 'k1', 'account', 'identified', 'one_campaign', true, true, true),
+    ('2026-10-12', 'api', 'i1', 'ip', 'address', 'unknown', true, false, false),
+    ($CUR, 'website', 'a1', 'visitor', 'address', 'unknown', true, true, true)])
   ),
   dependence_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, consumer_class STRING, consumers INT64, regular_consumers INT64, regular_consumers_interim INT64, indicator_uses INT64, regular_uses_share FLOAT64, regular_interim_uses_share FLOAT64, top_ten_uses_share FLOAT64, askers_partly_unnamed BOOL>>[
-    ('2026-10-12', 'website', 'external', 40, 5, 9, 200, 0.5, 0.75, 0.25, true),
-    ('2026-10-19', 'website', 'external', 41, 6, 10, 210, 0.5, 0.75, 0.25, false),
-    ($CUR, 'website', 'external', 42, 7, 11, 220, 0.5, 0.75, 0.25, false)])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, caller_class STRING, audience STRING, consumers INT64, regular_consumers INT64, regular_consumers_interim INT64, indicator_uses INT64, regular_uses_share FLOAT64, regular_interim_uses_share FLOAT64, top_ten_uses_share FLOAT64, askers_partly_unnamed BOOL>>[
+    ('2026-10-12', 'website', 'identified', 'external', 40, 5, 9, 200, 0.5, 0.75, 0.25, true),
+    ('2026-10-12', 'website', 'identified', 'one_campaign', 4, 2, 3, 30, 0.6, 0.8, 0.5, true),
+    ('2026-10-19', 'website', 'identified', 'external', 41, 6, 10, 210, 0.5, 0.75, 0.25, false),
+    ($CUR, 'website', 'identified', 'external', 42, 7, 11, 220, 0.5, 0.75, 0.25, false)])
   ),
   consumer_cohorts_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<cohort_week DATE, surface STRING, consumer_class STRING, cohort_size INT64, askers_partly_unnamed BOOL, retained_week_4 INT64, retention_week_4 FLOAT64, retained_week_8 INT64, retention_week_8 FLOAT64, retained_week_12 INT64, retention_week_12 FLOAT64>>[
-    ('2026-10-05', 'website', 'external', 10, false, 4, 0.4, 2, 0.2, NULL, NULL),
-    ('2026-10-19', 'website', 'external', 12, false, NULL, NULL, NULL, NULL, NULL, NULL),
-    ($CUR, 'website', 'external', 3, false, NULL, NULL, NULL, NULL, NULL, NULL)])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<cohort_week DATE, surface STRING, caller_class STRING, audience STRING, cohort_size INT64, askers_partly_unnamed BOOL, retained_week_4 INT64, retention_week_4 FLOAT64, retained_week_8 INT64, retention_week_8 FLOAT64, retained_week_12 INT64, retention_week_12 FLOAT64>>[
+    ('2026-10-05', 'website', 'identified', 'external', 10, false, 4, 0.4, 2, 0.2, NULL, NULL),
+    ('2026-10-05', 'website', 'address', 'unknown', 30, false, 9, NULL, 6, NULL, NULL, NULL),
+    ('2026-10-19', 'website', 'identified', 'external', 12, false, NULL, NULL, NULL, NULL, NULL, NULL),
+    ($CUR, 'website', 'identified', 'external', 3, false, NULL, NULL, NULL, NULL, NULL, NULL)])
   ),
   standing_pulls_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, consumer_class STRING, standing_pull_consumers INT64, standing_pulls INT64, weeks_observed_of_last_8 INT64>>[
-    ('2026-10-12', 'api', 'external', 3, 8, 2),
-    ('2026-10-05', 'unknown', 'external', 1, 1, 0),
-    ($CUR, 'api', 'external', 3, 8, 3)])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, caller_class STRING, audience STRING, standing_pull_consumers INT64, standing_pulls INT64, weeks_observed_of_last_8 INT64>>[
+    ('2026-10-12', 'api', 'identified', 'external', 3, 8, 2),
+    ('2026-10-12', 'api', 'address', 'unknown', 5, 9, 2),
+    ('2026-10-12', 'mcp', 'identified', 'one_campaign', 1, 2, 2),
+    ('2026-10-05', 'unknown', 'address', 'unknown', 1, 1, 0),
+    ($CUR, 'api', 'identified', 'external', 3, 8, 3)])
   ),
   regular_organisations_weekly AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, audience STRING, organisation_group STRING, organisations INT64, organisations_interim INT64, accounts INT64, regular_accounts INT64, regular_accounts_interim INT64, label_as_of_first_snapshot BOOL>>[
@@ -69,23 +75,24 @@ SOURCES="WITH
     ('2026-10-19', 'studio', 'external', 'Named organisations', 5, 7, 21, 8, 10, false),
     ($CUR, 'studio', 'external', 'Named organisations', 5, 7, 21, 8, 10, false)])
   ),
-  spec_uses_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, kind STRING, consumer STRING, spec_id STRING>>[
-    ('2026-10-12', 'studio', 'use', 'k1', 's1'),
-    ('2026-10-12', 'studio', 'use', 'k1', 's2'),
-    ('2026-10-12', 'studio', 'use', 'k2', 's1'),
-    ('2026-10-12', 'studio', 'fetch', 'k2', 's1'),
-    ('2026-10-12', 'studio', 'use', 'k1', 's1'),
-    ($CUR, 'studio', 'use', 'k1', 's1')])
+  headline_weekly AS (
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, caller_class STRING, audience STRING, consumers INT64, addresses INT64, deliveries INT64, spec_uses INT64, specs INT64, indicators INT64, observed BOOL, events ARRAY<STRING>>>[
+    ('2026-10-12', 'studio', 'identified', 'external', 5, NULL, NULL, 12, 4, 30, true, ARRAY<STRING>[]),
+    ('2026-10-12', 'studio', 'identified', 'one_campaign', 2, NULL, NULL, 3, 2, 6, true, ARRAY<STRING>[]),
+    ('2026-10-12', 'mcp', 'pooled', 'unknown', NULL, 7, 20, 9, 5, 18, true, ['hackathon']),
+    ('2026-10-19', 'website', 'address', 'unknown', 50, NULL, 80, 10, 3, 9, false, ARRAY<STRING>[]),
+    ($CUR, 'studio', 'identified', 'external', 6, NULL, NULL, 13, 4, 31, true, ARRAY<STRING>[])])
   ),
   indicator_uses_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, kind STRING, consumer STRING, client_family STRING, indicator STRING>>[
-    ('2026-10-12', 'mcp', 'use', 'k1', 'Claude Code', 'i1'),
-    ('2026-10-12', 'mcp', 'use', 'k1', 'Claude Code', 'i2'),
-    ('2026-10-12', 'mcp', 'use', 'k1', 'curl', 'i1'),
-    ('2026-10-12', 'mcp', 'use', 'k2', NULL, 'i1'),
-    ('2026-10-05', 'unknown', 'use', 'k3', 'curl', 'i1'),
-    ($CUR, 'mcp', 'use', 'k1', 'curl', 'i1')])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, kind STRING, consumer STRING, caller_class STRING, audience STRING, client_family STRING, indicator STRING>>[
+    ('2026-10-12', 'mcp', 'use', 'k1', 'identified', 'external', 'Claude Code', 'i1'),
+    ('2026-10-12', 'mcp', 'use', 'k1', 'identified', 'external', 'Claude Code', 'i2'),
+    ('2026-10-12', 'mcp', 'use', 'k1', 'identified', 'external', 'curl', 'i1'),
+    ('2026-10-12', 'mcp', 'use', 'k2', 'identified', 'one_campaign', NULL, 'i1'),
+    ('2026-10-12', 'mcp', 'use', 'p1', 'pooled', 'unknown', 'Claude.ai', 'i1'),
+    ('2026-10-12', 'mcp', 'use', 'p2', 'pooled', 'unknown', 'Claude.ai', 'i1'),
+    ('2026-10-05', 'unknown', 'use', 'k3', 'identified', 'external', 'curl', 'i1'),
+    ($CUR, 'mcp', 'use', 'k1', 'identified', 'external', 'curl', 'i1')])
   ),
   delivery_topics_daily AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<day DATE, surface STRING, axis STRING, topic_id STRING, deliveries FLOAT64>>[
@@ -194,52 +201,61 @@ metrics_rows() {
         chat_host_weekly=chat_host_weekly consistency_weekly=consistency_weekly \
         consumer_cohorts_weekly=consumer_cohorts_weekly crawler_reads_weekly=crawler_reads_weekly \
         delivery_topics_daily=delivery_topics_daily dependence_weekly=dependence_weekly \
-        embedding_sites_weekly=embedding_sites_weekly indicator_uses_weekly=indicator_uses_weekly \
+        embedding_sites_weekly=embedding_sites_weekly headline_weekly=headline_weekly \
+        indicator_uses_weekly=indicator_uses_weekly \
         int_surface_weeks_observed=int_surface_weeks_observed int_variable_topics=int_variable_topics \
         public_repos_weekly=public_repos_weekly reach_weekly=reach_weekly \
         regular_consumers_weekly=regular_consumers_weekly regular_organisations_weekly=regular_organisations_weekly \
-        requests_daily=requests_daily spec_uses_weekly=spec_uses_weekly \
-        standing_pulls_weekly=standing_pulls_weekly supply_coverage_daily=supply_coverage_daily \
+        requests_daily=requests_daily standing_pulls_weekly=standing_pulls_weekly supply_coverage_daily=supply_coverage_daily \
         topic_demand_weekly=topic_demand_weekly topic_taxonomy=topic_taxonomy trust_weekly=trust_weekly
 }
 
+check metrics_headline_weekly \
+    '{"surface":"mcp","iso_week":"2026-10-12","caller_class":"pooled","audience":"unknown","consumers":null,"addresses":7,"deliveries":20,"spec_uses":9,"specs":5,"indicators":18,"events":["hackathon"]}
+{"surface":"studio","iso_week":"2026-10-12","caller_class":"identified","audience":"external","consumers":5,"addresses":null,"deliveries":null,"spec_uses":12,"specs":4,"indicators":30,"events":[]}
+{"surface":"studio","iso_week":"2026-10-12","caller_class":"identified","audience":"one_campaign","consumers":2,"addresses":null,"deliveries":null,"spec_uses":3,"specs":2,"indicators":6,"events":[]}' \
+    "$(metrics_rows metrics_headline_weekly 't.surface, t.iso_week, t.caller_class, t.audience')"
+
 check metrics_regular_consumers_weekly \
-    '{"surface":"api","iso_week":"2026-10-12","consumer_kind":"ip","consumer_class":"external","active_consumers":1,"regular_2_of_4":0,"regular_3_of_8":0,"weeks_observed_of_last_4":2,"weeks_observed_of_last_8":2,"askers_partly_unnamed":false}
-{"surface":"website","iso_week":"2026-10-05","consumer_kind":"visitor","consumer_class":"external","active_consumers":1,"regular_2_of_4":0,"regular_3_of_8":0,"weeks_observed_of_last_4":1,"weeks_observed_of_last_8":1,"askers_partly_unnamed":false}
-{"surface":"website","iso_week":"2026-10-12","consumer_kind":"account","consumer_class":"one_campaign","active_consumers":1,"regular_2_of_4":1,"regular_3_of_8":1,"weeks_observed_of_last_4":2,"weeks_observed_of_last_8":2,"askers_partly_unnamed":true}
-{"surface":"website","iso_week":"2026-10-12","consumer_kind":"visitor","consumer_class":"external","active_consumers":2,"regular_2_of_4":2,"regular_3_of_8":1,"weeks_observed_of_last_4":2,"weeks_observed_of_last_8":2,"askers_partly_unnamed":true}
-{"surface":"website","iso_week":"2026-10-26","consumer_kind":"account","consumer_class":"one_campaign","active_consumers":0,"regular_2_of_4":0,"regular_3_of_8":0,"weeks_observed_of_last_4":3,"weeks_observed_of_last_8":3,"askers_partly_unnamed":false}
-{"surface":"website","iso_week":"2026-10-26","consumer_kind":"visitor","consumer_class":"external","active_consumers":0,"regular_2_of_4":0,"regular_3_of_8":0,"weeks_observed_of_last_4":3,"weeks_observed_of_last_8":3,"askers_partly_unnamed":false}' \
-    "$(metrics_rows metrics_regular_consumers_weekly 't.surface, t.iso_week, t.consumer_kind, t.consumer_class')"
+    '{"surface":"api","iso_week":"2026-10-12","caller_class":"address","audience":"unknown","active_consumers":1,"regular_2_of_4":0,"regular_3_of_8":0,"weeks_observed_of_last_4":2,"weeks_observed_of_last_8":2,"askers_partly_unnamed":false}
+{"surface":"website","iso_week":"2026-10-05","caller_class":"address","audience":"unknown","active_consumers":1,"regular_2_of_4":0,"regular_3_of_8":0,"weeks_observed_of_last_4":1,"weeks_observed_of_last_8":1,"askers_partly_unnamed":false}
+{"surface":"website","iso_week":"2026-10-12","caller_class":"address","audience":"unknown","active_consumers":2,"regular_2_of_4":2,"regular_3_of_8":1,"weeks_observed_of_last_4":2,"weeks_observed_of_last_8":2,"askers_partly_unnamed":true}
+{"surface":"website","iso_week":"2026-10-12","caller_class":"identified","audience":"one_campaign","active_consumers":1,"regular_2_of_4":1,"regular_3_of_8":1,"weeks_observed_of_last_4":2,"weeks_observed_of_last_8":2,"askers_partly_unnamed":true}
+{"surface":"website","iso_week":"2026-10-26","caller_class":"address","audience":"unknown","active_consumers":0,"regular_2_of_4":0,"regular_3_of_8":0,"weeks_observed_of_last_4":3,"weeks_observed_of_last_8":3,"askers_partly_unnamed":false}
+{"surface":"website","iso_week":"2026-10-26","caller_class":"identified","audience":"one_campaign","active_consumers":0,"regular_2_of_4":0,"regular_3_of_8":0,"weeks_observed_of_last_4":3,"weeks_observed_of_last_8":3,"askers_partly_unnamed":false}' \
+    "$(metrics_rows metrics_regular_consumers_weekly 't.surface, t.iso_week, t.caller_class, t.audience')"
+
 
 check metrics_dependence_weekly \
-    '{"surface":"website","iso_week":"2026-10-12","consumer_class":"external","consumers":40,"regular_2_of_4":9,"regular_3_of_8":5,"indicator_uses":200,"top_ten_uses_share":0.25,"regular_2_of_4_uses_share":0.75,"regular_3_of_8_uses_share":0.5,"askers_partly_unnamed":true}' \
-    "$(metrics_rows metrics_dependence_weekly 't.surface, t.iso_week, t.consumer_class')"
+    '{"surface":"website","iso_week":"2026-10-12","caller_class":"identified","audience":"external","consumers":40,"regular_2_of_4":9,"regular_3_of_8":5,"indicator_uses":200,"top_ten_uses_share":0.25,"regular_2_of_4_uses_share":0.75,"regular_3_of_8_uses_share":0.5,"askers_partly_unnamed":true}
+{"surface":"website","iso_week":"2026-10-12","caller_class":"identified","audience":"one_campaign","consumers":4,"regular_2_of_4":3,"regular_3_of_8":2,"indicator_uses":30,"top_ten_uses_share":0.5,"regular_2_of_4_uses_share":0.8,"regular_3_of_8_uses_share":0.6,"askers_partly_unnamed":true}' \
+    "$(metrics_rows metrics_dependence_weekly 't.surface, t.iso_week, t.caller_class, t.audience')"
+
 
 check metrics_consumer_cohorts_weekly \
-    '{"surface":"website","cohort_week":"2026-10-05","consumer_class":"external","cohort_size":10,"retained_week_4":4,"retention_week_4":0.4,"retained_week_8":2,"retention_week_8":0.2,"retained_week_12":null,"retention_week_12":null,"askers_partly_unnamed":false}' \
-    "$(metrics_rows metrics_consumer_cohorts_weekly 't.surface, t.cohort_week')"
+    '{"surface":"website","cohort_week":"2026-10-05","caller_class":"address","audience":"unknown","cohort_size":30,"retained_week_4":9,"retention_week_4":null,"retained_week_8":6,"retention_week_8":null,"retained_week_12":null,"retention_week_12":null,"askers_partly_unnamed":false}
+{"surface":"website","cohort_week":"2026-10-05","caller_class":"identified","audience":"external","cohort_size":10,"retained_week_4":4,"retention_week_4":0.4,"retained_week_8":2,"retention_week_8":0.2,"retained_week_12":null,"retention_week_12":null,"askers_partly_unnamed":false}' \
+    "$(metrics_rows metrics_consumer_cohorts_weekly 't.surface, t.cohort_week, t.caller_class, t.audience')"
+
 
 check metrics_standing_pulls_weekly \
-    '{"surface":"api","iso_week":"2026-10-12","consumer_class":"external","standing_pull_consumers":3,"standing_pulls":8,"weeks_observed_of_last_8":2}' \
-    "$(metrics_rows metrics_standing_pulls_weekly 't.surface, t.iso_week')"
+    '{"surface":"api","iso_week":"2026-10-12","caller_class":"address","audience":"unknown","standing_pull_consumers":5,"standing_pulls":9,"weeks_observed_of_last_8":2}
+{"surface":"api","iso_week":"2026-10-12","caller_class":"identified","audience":"external","standing_pull_consumers":3,"standing_pulls":8,"weeks_observed_of_last_8":2}
+{"surface":"mcp","iso_week":"2026-10-12","caller_class":"identified","audience":"one_campaign","standing_pull_consumers":1,"standing_pulls":2,"weeks_observed_of_last_8":2}' \
+    "$(metrics_rows metrics_standing_pulls_weekly 't.surface, t.iso_week, t.caller_class, t.audience')"
+
 
 check metrics_regular_organisations_weekly \
     '{"surface":"studio","iso_week":"2026-10-12","audience":"external","organisation_group":"Named organisations","organisations_2_of_4":6,"organisations_3_of_8":4,"accounts":20,"regular_accounts_2_of_4":9,"regular_accounts_3_of_8":7,"label_as_of_first_snapshot":false}
 {"surface":"studio","iso_week":"2026-10-12","audience":"external","organisation_group":"Other organisations","organisations_2_of_4":null,"organisations_3_of_8":null,"accounts":8,"regular_accounts_2_of_4":2,"regular_accounts_3_of_8":1,"label_as_of_first_snapshot":false}' \
     "$(metrics_rows metrics_regular_organisations_weekly 't.surface, t.iso_week, t.organisation_group')"
 
-check metrics_spec_uses_weekly \
-    '{"surface":"studio","iso_week":"2026-10-12","kind":"fetch","consumers":1,"dataset_uses":1,"specs":1}
-{"surface":"studio","iso_week":"2026-10-12","kind":"use","consumers":2,"dataset_uses":3,"specs":2}' \
-    "$(metrics_rows metrics_spec_uses_weekly 't.iso_week, t.kind')"
-
 check metrics_indicator_uses_weekly \
-    '{"surface":"mcp","iso_week":"2026-10-12","kind":"use","client_family":"Claude Code","consumers":1,"indicator_uses":2,"indicators":2}
-{"surface":"mcp","iso_week":"2026-10-12","kind":"use","client_family":"all","consumers":2,"indicator_uses":3,"indicators":2}
-{"surface":"mcp","iso_week":"2026-10-12","kind":"use","client_family":"curl","consumers":1,"indicator_uses":1,"indicators":1}
-{"surface":"mcp","iso_week":"2026-10-12","kind":"use","client_family":"unknown","consumers":1,"indicator_uses":1,"indicators":1}' \
-    "$(metrics_rows metrics_indicator_uses_weekly 't.kind, t.client_family')"
+    '{"surface":"mcp","iso_week":"2026-10-12","kind":"use","caller_class":"identified","audience":"external","consumers":1,"indicator_uses":2,"indicators":2}
+{"surface":"mcp","iso_week":"2026-10-12","kind":"use","caller_class":"identified","audience":"one_campaign","consumers":1,"indicator_uses":1,"indicators":1}
+{"surface":"mcp","iso_week":"2026-10-12","kind":"use","caller_class":"pooled","audience":"unknown","consumers":2,"indicator_uses":2,"indicators":1}' \
+    "$(metrics_rows metrics_indicator_uses_weekly 't.kind, t.caller_class, t.audience')"
+
 
 check metrics_delivery_topics_weekly \
     '{"surface":"api","iso_week":"2026-10-12","axis":"subject","topic_id":"health","topic_name":"Health","deliveries":3.5}

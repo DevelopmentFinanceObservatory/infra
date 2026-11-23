@@ -322,13 +322,13 @@ The `metrics_*` views feed the DFO Metrics dashboard, one per analytics mart (or
 
 | View                                   | Grain                                            |
 | -------------------------------------- | ------------------------------------------------ |
-| `metrics_regular_consumers_weekly`     | surface, ISO week, consumer kind, consumer class |
-| `metrics_dependence_weekly`            | surface, ISO week, consumer class                |
-| `metrics_consumer_cohorts_weekly`      | surface, cohort week, consumer class             |
-| `metrics_standing_pulls_weekly`        | surface, ISO week, consumer class                |
+| `metrics_headline_weekly`              | surface, ISO week, caller class, audience        |
+| `metrics_regular_consumers_weekly`     | surface, ISO week, caller class, audience        |
+| `metrics_dependence_weekly`            | surface, ISO week, caller class, audience        |
+| `metrics_consumer_cohorts_weekly`      | surface, cohort week, caller class, audience     |
+| `metrics_standing_pulls_weekly`        | surface, ISO week, caller class, audience        |
 | `metrics_regular_organisations_weekly` | surface, ISO week, audience, organisation group  |
-| `metrics_spec_uses_weekly`             | surface, ISO week, kind                          |
-| `metrics_indicator_uses_weekly`        | surface, ISO week, kind, client family           |
+| `metrics_indicator_uses_weekly`        | surface, ISO week, kind, caller class, audience  |
 | `metrics_delivery_topics_weekly`       | surface, ISO week, axis, topic                   |
 | `metrics_chat_host_weekly`             | ISO week, chat host                              |
 | `metrics_assistant_fetches_weekly`     | ISO week, agent, kind                            |
@@ -344,9 +344,9 @@ The `metrics_*` views feed the DFO Metrics dashboard, one per analytics mart (or
 | `metrics_topic_demand_weekly`          | ISO week, axis, topic                            |
 | `metrics_variable_topics`              | axis, topic                                      |
 
-Each view holds counts and rates, and no consumer key, hashed address, account id, organisation name, host name, question text or one-row-per-consumer rows. Distinct counts are computed in the view at the grain it exposes, so no reader sums them across rows; `metrics_indicator_uses_weekly` carries a `client_family` of `all` for the surface total, which its other rows do not add up to when one key uses two clients. `metrics_regular_organisations_weekly` holds only the organisation groups the mart names (`Named organisations`, `Personal email`, `Other organisations`).
+Each view holds counts and rates, and no consumer key, hashed address, account id, organisation name, host name, question text or one-row-per-consumer rows. Distinct counts are computed in the view at the grain it exposes, so no reader sums them across rows; Callers are read by class (`identified`, `address`, `pooled`, `site`) and never added into one figure of people: a pooled row counts addresses, and the retention views (`metrics_regular_consumers_weekly`, `metrics_dependence_weekly`, `metrics_consumer_cohorts_weekly`, `metrics_standing_pulls_weekly`) leave pooled addresses out. `audience` splits ONE Campaign staff (`one_campaign`) from other identified callers (`external`); addresses, pools and sites are `unknown`. `metrics_regular_organisations_weekly` holds only the organisation groups the mart names (`Named organisations`, `Personal email`, `Other organisations`).
 
-Every view cuts the ISO week holding today, so it returns complete weeks (Monday 00:00 UTC) and, for the daily marts, complete days. A surface-keyed view keeps only the surface-weeks `int_surface_weeks_observed` marks observed, and `metrics_regular_consumers_weekly` returns a zero row for a key kind a surface has shown, in each observed week after the first in which it held a row. Both regular-consumer rules are columns: `regular_2_of_4` (2 of the last 4 weeks, interim) and `regular_3_of_8` (3 of the last 8). `tests/reporting_metrics.test.sh` runs all of them.
+Every view cuts the ISO week holding today, so it returns complete weeks (Monday 00:00 UTC) and, for the daily marts, complete days. A surface-keyed view keeps only the surface-weeks `int_surface_weeks_observed` marks observed, and `metrics_regular_consumers_weekly` returns a zero row for a caller class and audience a surface has shown, in each observed week after the first in which it held a row. Both regular-consumer rules are columns: `regular_2_of_4` (2 of the last 4 weeks, interim) and `regular_3_of_8` (3 of the last 8). `tests/reporting_metrics.test.sh` runs all of them.
 
 `tests/reporting_*.test.sh` in `infra/stacks/telemetry` run each view over literal source rows and fail on any row that differs from the ones they pin. Run them by hand after changing a view.
 

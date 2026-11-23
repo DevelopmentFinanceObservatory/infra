@@ -1,11 +1,12 @@
 -- The view dfo_reporting.metrics_dependence_weekly, a Terraform template
 -- (reporting_views.tf) over the analytics dbt marts. Grain: surface x iso_week
--- x consumer_class. The mart is already aggregated; the view keeps observed,
--- complete weeks and names both regular rules.
+-- x caller_class x audience. The mart is already aggregated and leaves pooled
+-- addresses out; shares do not combine across rows.
 SELECT
   d.surface,
   d.iso_week,
-  d.consumer_class,
+  d.caller_class,
+  d.audience,
   d.consumers,
   d.regular_consumers_interim AS regular_2_of_4,
   d.regular_consumers AS regular_3_of_8,

@@ -61,6 +61,7 @@ locals {
       "delivery_topics_daily",
       "dependence_weekly",
       "embedding_sites_weekly",
+      "headline_weekly",
       "indicator_uses_weekly",
       "int_surface_weeks_observed",
       "int_variable_topics",
@@ -69,7 +70,6 @@ locals {
       "regular_consumers_weekly",
       "regular_organisations_weekly",
       "requests_daily",
-      "spec_uses_weekly",
       "standing_pulls_weekly",
       "supply_coverage_daily",
       "topic_demand_weekly",
@@ -78,13 +78,13 @@ locals {
     ] : table => "${local.metrics_ref}.${table}"
   }
   metrics_view_descriptions = {
-    metrics_regular_consumers_weekly     = "Grain: surface x iso_week x consumer_kind x consumer_class. consumer_kind: account (signed in), ip (network address), visitor. A consumer has one mart row per client, so every count is distinct on the consumer. A key kind appears on a surface from the first week it holds any row there, and observed weeks after that with no regular read 0."
-    metrics_dependence_weekly            = "Grain: surface x iso_week x consumer_class. The mart is already aggregated; the view keeps observed, complete weeks and names both regular rules."
-    metrics_consumer_cohorts_weekly      = "Grain: surface x cohort_week x consumer_class. A cohort is the keys first active on a surface in that week. The mart leaves a return null until the surface has observed the week it falls in."
-    metrics_standing_pulls_weekly        = "Grain: surface x iso_week x consumer_class. A standing pull is the same request made in 4 of the last 8 weeks."
+    metrics_headline_weekly              = "Grain: surface x iso_week x caller_class x audience. The headline counts in consumer-weeks and spec uses. consumers is null on pooled rows, whose distinct count is addresses; deliveries is null on studio and page. events names the dated_events in the week, such as hackathon."
+    metrics_regular_consumers_weekly     = "Grain: surface x iso_week x caller_class x audience. The mart holds one row per consumer and leaves pooled addresses out; counts are distinct on the consumer. A class and audience appear on a surface from the first week they hold any row there, and observed weeks after that with no regular read 0."
+    metrics_dependence_weekly            = "Grain: surface x iso_week x caller_class x audience. The mart is already aggregated and leaves pooled addresses out; shares do not combine across rows."
+    metrics_consumer_cohorts_weekly      = "Grain: surface x cohort_week x caller_class x audience. A cohort is the keys first active on a surface in that week; pooled addresses join none. The mart leaves a return null until the surface has observed the week it falls in, and leaves every rate null for the address class, whose counts are floors."
+    metrics_standing_pulls_weekly        = "Grain: surface x iso_week x caller_class x audience. A standing pull is the same request made in 4 of the last 8 weeks; pooled addresses are left out."
     metrics_regular_organisations_weekly = "Grain: surface x iso_week x audience x organisation_group. Groups only; the mart suppresses small groups as null."
-    metrics_spec_uses_weekly             = "Grain: surface x iso_week x kind (use, or fetched in Studio). A dataset use is one consumer using one spec in one week, so dataset_uses counts distinct (consumer, spec) pairs."
-    metrics_indicator_uses_weekly        = "Grain: surface x iso_week x kind x client_family. client_family 'all' is the surface total; the other rows split it by client (Claude Code, Codex, dfo-ts, curl and so on, 'unknown' where the client is not recognised). Distinct counts are computed at both grains, so the family rows do not add up to the 'all' row when one key uses two clients."
+    metrics_indicator_uses_weekly        = "Grain: surface x iso_week x kind x caller_class x audience. An indicator use is one consumer using one indicator in one week, whatever the client, so indicator_uses counts distinct (consumer, indicator) pairs. On pooled rows consumers counts pool addresses."
     metrics_delivery_topics_weekly       = "Grain: surface x iso_week x axis x topic_id. Dataset reads split across their spec's topics by weight, summed from days to complete weeks. Reads on surfaces with no observation mark (unknown, direct) are left out."
     metrics_chat_host_weekly             = "Grain: iso_week x host (ChatGPT, Claude.ai, Gemini). Chat-host calls reach DFO through the api and mcp surfaces, so a week counts only when both observed it. The mart has no row for a host-week with no calls."
     metrics_assistant_fetches_weekly     = "Grain: iso_week x agent_name x kind (page, api). Requests from agents that fetch for a person and name themselves. Read from website request logs, so a week counts when the website surface observed it."
