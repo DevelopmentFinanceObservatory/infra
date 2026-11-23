@@ -1,10 +1,12 @@
 -- The view dfo_reporting.metrics_trust_weekly, a Terraform template
 -- (reporting_views.tf) over the analytics dbt marts. Grain: iso_week x
--- slot_source x share_era. Replay-probe readings from complete runs only.
+-- slot_source x share_era. Replay-probe readings from complete runs only;
+-- run_date is the UTC date the week's replay run started.
 -- Derived cards are compared with their stored frame; dataset cards are
 -- reported as still current or moved.
 SELECT
   t.iso_week,
+  t.run_date,
   t.slot_source,
   t.share_era,
   t.shares,

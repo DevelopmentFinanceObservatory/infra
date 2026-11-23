@@ -77,12 +77,12 @@ SOURCES="WITH
     ($CUR, 'studio', 'external', 'Named organisations', 5, 7, 21, 8, 10, false)])
   ),
   headline_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, caller_class STRING, audience STRING, consumers INT64, addresses INT64, deliveries INT64, spec_uses INT64, specs INT64, indicators INT64, observed BOOL, events ARRAY<STRING>>>[
-    ('2026-10-12', 'studio', 'identified', 'external', 5, NULL, NULL, 12, 4, 30, true, ARRAY<STRING>[]),
-    ('2026-10-12', 'studio', 'identified', 'one_campaign', 2, NULL, NULL, 3, 2, 6, true, ARRAY<STRING>[]),
-    ('2026-10-12', 'mcp', 'pooled', 'unknown', NULL, 7, 20, 9, 5, 18, true, ['hackathon']),
-    ('2026-10-19', 'website', 'address', 'unknown', 50, NULL, 80, 10, 3, 9, false, ARRAY<STRING>[]),
-    ($CUR, 'studio', 'identified', 'external', 6, NULL, NULL, 13, 4, 31, true, ARRAY<STRING>[])])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, caller_class STRING, audience STRING, consumers INT64, addresses INT64, deliveries INT64, spec_uses INT64, specs INT64, indicators INT64, top_caller_uses INT64, top_caller_share FLOAT64, observed BOOL, events ARRAY<STRING>>>[
+    ('2026-10-12', 'studio', 'identified', 'external', 5, NULL, NULL, 12, 4, 30, 6, 0.5, true, ARRAY<STRING>[]),
+    ('2026-10-12', 'studio', 'identified', 'one_campaign', 2, NULL, NULL, 3, 2, 6, 2, 0.6667, true, ARRAY<STRING>[]),
+    ('2026-10-12', 'mcp', 'pooled', 'unknown', NULL, 7, 20, 9, 5, 18, 4, 0.4444, true, ['hackathon']),
+    ('2026-10-19', 'website', 'address', 'unknown', 50, NULL, 80, 10, 3, 9, 5, 0.5, false, ARRAY<STRING>[]),
+    ($CUR, 'studio', 'identified', 'external', 6, NULL, NULL, 13, 4, 31, 7, 0.5385, true, ARRAY<STRING>[])])
   ),
   headline_families_weekly AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, caller_class STRING, audience STRING, client_family STRING, consumers INT64, addresses INT64, deliveries INT64, spec_uses INT64, specs INT64, indicators INT64, observed BOOL, events ARRAY<STRING>>>[
@@ -163,10 +163,10 @@ SOURCES="WITH
     ($CUR, 11, 1, 4, 0, false, false, false)])
   ),
   trust_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, slot_source STRING, share_era STRING, run_status STRING, shares INT64, derived_cards INT64, comparable INT64, same INT64, different INT64, comparable_match_rate FLOAT64, comparable_coverage FLOAT64, dataset_cards INT64, confirmed INT64, still_current INT64, moved INT64, confirmed_still_current_rate FLOAT64>>[
-    ('2026-10-12', 'recent', 'v2', 'complete', 20, 15, 10, 9, 1, 0.9, 0.5, 8, 6, 5, 1, 0.8333),
-    ('2026-10-12', 'recent', 'v2', 'partial', 5, 3, 2, 2, 0, 1.0, 0.5, 2, 1, 1, 0, 1.0),
-    ($CUR, 'recent', 'v2', 'complete', 1, 1, 1, 1, 0, 1.0, 1.0, 1, 1, 1, 0, 1.0)])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, run_date DATE, slot_source STRING, share_era STRING, run_status STRING, shares INT64, derived_cards INT64, comparable INT64, same INT64, different INT64, comparable_match_rate FLOAT64, comparable_coverage FLOAT64, dataset_cards INT64, confirmed INT64, still_current INT64, moved INT64, confirmed_still_current_rate FLOAT64>>[
+    ('2026-10-12', '2026-10-13', 'recent', 'v2', 'complete', 20, 15, 10, 9, 1, 0.9, 0.5, 8, 6, 5, 1, 0.8333),
+    ('2026-10-12', '2026-10-14', 'recent', 'v2', 'partial', 5, 3, 2, 2, 0, 1.0, 0.5, 2, 1, 1, 0, 1.0),
+    ($CUR, CURRENT_DATE(), 'recent', 'v2', 'complete', 1, 1, 1, 1, 0, 1.0, 1.0, 1, 1, 1, 0, 1.0)])
   ),
   consistency_weekly AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, frames_recomputed INT64, frames_seen_before INT64, frames_consistent INT64, consistent_share FLOAT64, content_version_moved INT64, engine_changed INT64>>[
@@ -193,11 +193,11 @@ SOURCES="WITH
     (CURRENT_DATE(), 'v8', 11, 21, 301, 5, 9, 101, 6, 12, 200)])
   ),
   topic_demand_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, axis STRING, topic_id STRING, suppressed BOOL, turns FLOAT64, unmet_turns FLOAT64, unmet_rate FLOAT64>>[
-    ('2026-10-12', 'subject', 'health', false, 12.0, 3.0, 0.25),
-    ('2026-10-12', 'subject', 'other', true, NULL, NULL, NULL),
-    ('2026-10-19', 'subject', 'health', false, 8.0, 2.0, 0.25),
-    ($CUR, 'subject', 'health', false, 9.0, 1.0, 0.11)])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, axis STRING, topic_id STRING, suppressed BOOL, turns FLOAT64, unmet_turns FLOAT64, unmet_rate FLOAT64, no_data_turns FLOAT64, missing_feature_turns FLOAT64, staff_share FLOAT64, unknown_caller_share FLOAT64>>[
+    ('2026-10-12', 'subject', 'health', false, 12.0, 3.0, 0.25, 2.0, 1.0, 0.1, 0.2),
+    ('2026-10-12', 'subject', 'other', true, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+    ('2026-10-19', 'subject', 'health', false, 8.0, 2.0, 0.25, 1.0, 1.0, 0.0, 0.0),
+    ($CUR, 'subject', 'health', false, 9.0, 1.0, 0.11, 1.0, 0.0, 0.3, 0.4)])
   ),
   website_returning_weekly AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, active_accounts INT64, active_browsers INT64, active_staff INT64, returning_accounts_2_of_4 INT64, returning_browsers_2_of_4 INT64, returning_staff_2_of_4 INT64, returning_accounts_3_of_8 INT64, returning_browsers_3_of_8 INT64, returning_staff_3_of_8 INT64, weeks_observed_of_last_8 INT64, weeks_observed_of_last_4 INT64>>[
@@ -211,6 +211,12 @@ SOURCES="WITH
     ('2026-10-12', 'mcp', 'subject', 'health', 'Health', 3, 0, 2, 4.0, 9, true),
     ('2026-10-19', 'api', 'finance_kind', 'grant', 'Grants', 4, 1, 0, 6.0, 18, false),
     ($CUR, 'api', 'subject', 'health', 'Health', 6, 2, 0, 8.0, 21, true)])
+  ),
+  mcp_tool_calls_weekly AS (
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, tool STRING, calls INT64, callers INT64, shared_server_calls INT64, failed_calls INT64>>[
+    ('2026-10-12', 'search', 40, 6, 5, 2),
+    ('2026-10-12', 'get_data', 25, 4, 0, 1),
+    ($CUR, 'search', 9, 3, 0, 0)])
   ),
   int_variable_topics AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<variable_dcid STRING, main_subject STRING, finance_kind STRING, stale BOOL>>[
@@ -234,14 +240,14 @@ metrics_rows() {
         public_repos_weekly=public_repos_weekly reach_weekly=reach_weekly \
         regular_consumers_weekly=regular_consumers_weekly regular_organisations_weekly=regular_organisations_weekly \
         requests_daily=requests_daily standing_pulls_weekly=standing_pulls_weekly supply_coverage_daily=supply_coverage_daily \
-        topic_callers_weekly=topic_callers_weekly topic_demand_weekly=topic_demand_weekly topic_taxonomy=topic_taxonomy trust_weekly=trust_weekly \
+        mcp_tool_calls_weekly=mcp_tool_calls_weekly topic_callers_weekly=topic_callers_weekly topic_demand_weekly=topic_demand_weekly topic_taxonomy=topic_taxonomy trust_weekly=trust_weekly \
         website_returning_weekly=website_returning_weekly
 }
 
 check metrics_headline_weekly \
-    '{"surface":"mcp","iso_week":"2026-10-12","caller_class":"pooled","audience":"unknown","consumers":null,"addresses":7,"deliveries":20,"spec_uses":9,"specs":5,"indicators":18,"events":["hackathon"]}
-{"surface":"studio","iso_week":"2026-10-12","caller_class":"identified","audience":"external","consumers":5,"addresses":null,"deliveries":null,"spec_uses":12,"specs":4,"indicators":30,"events":[]}
-{"surface":"studio","iso_week":"2026-10-12","caller_class":"identified","audience":"one_campaign","consumers":2,"addresses":null,"deliveries":null,"spec_uses":3,"specs":2,"indicators":6,"events":[]}' \
+    '{"surface":"mcp","iso_week":"2026-10-12","caller_class":"pooled","audience":"unknown","consumers":null,"addresses":7,"deliveries":20,"spec_uses":9,"specs":5,"indicators":18,"top_caller_uses":4,"top_caller_share":0.4444,"events":["hackathon"]}
+{"surface":"studio","iso_week":"2026-10-12","caller_class":"identified","audience":"external","consumers":5,"addresses":null,"deliveries":null,"spec_uses":12,"specs":4,"indicators":30,"top_caller_uses":6,"top_caller_share":0.5,"events":[]}
+{"surface":"studio","iso_week":"2026-10-12","caller_class":"identified","audience":"one_campaign","consumers":2,"addresses":null,"deliveries":null,"spec_uses":3,"specs":2,"indicators":6,"top_caller_uses":2,"top_caller_share":0.6667,"events":[]}' \
     "$(metrics_rows metrics_headline_weekly 't.surface, t.iso_week, t.caller_class, t.audience')"
 
 check metrics_headline_families_weekly \
@@ -330,7 +336,7 @@ check metrics_public_repos_weekly \
     "$(metrics_rows metrics_public_repos_weekly 't.iso_week')"
 
 check metrics_trust_weekly \
-    '{"iso_week":"2026-10-12","slot_source":"recent","share_era":"v2","shares":20,"derived_cards":15,"comparable":10,"same":9,"different":1,"comparable_match_rate":0.9,"comparable_coverage":0.5,"dataset_cards":8,"confirmed":6,"still_current":5,"moved":1,"confirmed_still_current_rate":0.8333}' \
+    '{"iso_week":"2026-10-12","run_date":"2026-10-13","slot_source":"recent","share_era":"v2","shares":20,"derived_cards":15,"comparable":10,"same":9,"different":1,"comparable_match_rate":0.9,"comparable_coverage":0.5,"dataset_cards":8,"confirmed":6,"still_current":5,"moved":1,"confirmed_still_current_rate":0.8333}' \
     "$(metrics_rows metrics_trust_weekly 't.iso_week')"
 
 check metrics_consistency_weekly \
@@ -352,8 +358,8 @@ check metrics_catalogue_daily \
     "$(metrics_rows metrics_catalogue_daily 't.day')"
 
 check metrics_topic_demand_weekly \
-    '{"iso_week":"2026-10-12","axis":"subject","topic_id":"health","topic_name":"Health","suppressed":false,"turns":12,"unmet_turns":3,"unmet_rate":0.25}
-{"iso_week":"2026-10-12","axis":"subject","topic_id":"other","topic_name":"other","suppressed":true,"turns":null,"unmet_turns":null,"unmet_rate":null}' \
+    '{"iso_week":"2026-10-12","axis":"subject","topic_id":"health","topic_name":"Health","suppressed":false,"turns":12,"unmet_turns":3,"unmet_rate":0.25,"no_data_turns":2,"missing_feature_turns":1,"staff_share":0.1,"unknown_caller_share":0.2}
+{"iso_week":"2026-10-12","axis":"subject","topic_id":"other","topic_name":"other","suppressed":true,"turns":null,"unmet_turns":null,"unmet_rate":null,"no_data_turns":null,"missing_feature_turns":null,"staff_share":null,"unknown_caller_share":null}' \
     "$(metrics_rows metrics_topic_demand_weekly 't.iso_week, t.topic_id')"
 
 check metrics_variable_topics \
@@ -373,5 +379,10 @@ check metrics_topic_callers_weekly \
 {"iso_week":"2026-10-12","surface":"mcp","axis":"subject","topic_id":"health","topic_name":"Health","callers":3,"staff_callers":0,"shared_servers":2,"datasets_pulled":4,"total_callers":9,"observed":true}
 {"iso_week":"2026-10-19","surface":"api","axis":"finance_kind","topic_id":"grant","topic_name":"Grants","callers":4,"staff_callers":1,"shared_servers":0,"datasets_pulled":6,"total_callers":18,"observed":false}' \
     "$(metrics_rows metrics_topic_callers_weekly 't.iso_week, t.surface, t.axis, t.topic_id')"
+
+check metrics_mcp_tool_calls_weekly \
+    '{"iso_week":"2026-10-12","tool":"get_data","calls":25,"callers":4,"shared_server_calls":0,"failed_calls":1}
+{"iso_week":"2026-10-12","tool":"search","calls":40,"callers":6,"shared_server_calls":5,"failed_calls":2}' \
+    "$(metrics_rows metrics_mcp_tool_calls_weekly 't.iso_week, t.tool')"
 
 finish reporting_metrics.test.sh
