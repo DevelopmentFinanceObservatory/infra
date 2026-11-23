@@ -241,10 +241,10 @@ check metrics_indicator_uses_weekly \
 {"surface":"mcp","iso_week":"2026-10-12","kind":"use","client_family":"unknown","consumers":1,"indicator_uses":1,"indicators":1}' \
     "$(metrics_rows metrics_indicator_uses_weekly 't.kind, t.client_family')"
 
-check metrics_delivery_topics_daily \
+check metrics_delivery_topics_weekly \
     '{"surface":"api","iso_week":"2026-10-12","axis":"subject","topic_id":"health","topic_name":"Health","deliveries":3.5}
 {"surface":"api","iso_week":"2026-10-12","axis":"subject","topic_id":"trade","topic_name":"trade","deliveries":1}' \
-    "$(metrics_rows metrics_delivery_topics_daily 't.surface, t.iso_week, t.topic_id')"
+    "$(metrics_rows metrics_delivery_topics_weekly 't.surface, t.iso_week, t.topic_id')"
 
 check metrics_chat_host_weekly \
     '{"iso_week":"2026-10-12","host":"ChatGPT","data_calls":7,"indicators":4}
@@ -283,10 +283,10 @@ check metrics_consistency_weekly \
     '{"iso_week":"2026-10-12","frames_recomputed":30,"frames_seen_before":20,"frames_consistent":19,"consistent_share":0.95,"content_version_moved":1,"engine_changed":0}' \
     "$(metrics_rows metrics_consistency_weekly 't.iso_week')"
 
-check metrics_requests_daily \
+check metrics_requests_weekly \
     '{"service":"api","iso_week":"2026-10-12","days":1,"requests":0,"status_4xx":0,"status_5xx":0,"availability":null}
 {"service":"website","iso_week":"2026-10-12","days":2,"requests":400,"status_4xx":30,"status_5xx":4,"availability":0.99}' \
-    "$(metrics_rows metrics_requests_daily 't.service')"
+    "$(metrics_rows metrics_requests_weekly 't.service')"
 
 check metrics_supply_coverage_daily \
     '{"day":"2026-10-12","coverage":"curated","sources":2}

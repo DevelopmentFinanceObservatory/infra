@@ -1,4 +1,4 @@
--- The view dfo_reporting.metrics_requests_daily, a Terraform template
+-- The view dfo_reporting.metrics_requests_weekly, a Terraform template
 -- (reporting_views.tf) over the analytics dbt marts. Grain: iso_week x
 -- service. Requests and server errors per Cloud Run service, summed from days
 -- to complete weeks. availability is the share of requests without a 5xx

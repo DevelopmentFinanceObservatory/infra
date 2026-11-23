@@ -1,4 +1,4 @@
--- The view dfo_reporting.metrics_delivery_topics_daily, a Terraform template
+-- The view dfo_reporting.metrics_delivery_topics_weekly, a Terraform template
 -- (reporting_views.tf) over the analytics dbt marts. Grain: surface x iso_week
 -- x axis x topic_id. Dataset reads split across their spec's topics by weight,
 -- summed from days to complete weeks. Reads on surfaces with no observation

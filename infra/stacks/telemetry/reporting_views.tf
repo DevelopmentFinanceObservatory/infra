@@ -85,7 +85,7 @@ locals {
     metrics_regular_organisations_weekly = "Grain: surface x iso_week x audience x organisation_group. Groups only; the mart suppresses small groups as null."
     metrics_spec_uses_weekly             = "Grain: surface x iso_week x kind (use, or fetched in Studio). A dataset use is one consumer using one spec in one week, so dataset_uses counts distinct (consumer, spec) pairs."
     metrics_indicator_uses_weekly        = "Grain: surface x iso_week x kind x client_family. client_family 'all' is the surface total; the other rows split it by client (Claude Code, Codex, dfo-ts, curl and so on, 'unknown' where the client is not recognised). Distinct counts are computed at both grains, so the family rows do not add up to the 'all' row when one key uses two clients."
-    metrics_delivery_topics_daily        = "Grain: surface x iso_week x axis x topic_id. Dataset reads split across their spec's topics by weight, summed from days to complete weeks. Reads on surfaces with no observation mark (unknown, direct) are left out."
+    metrics_delivery_topics_weekly       = "Grain: surface x iso_week x axis x topic_id. Dataset reads split across their spec's topics by weight, summed from days to complete weeks. Reads on surfaces with no observation mark (unknown, direct) are left out."
     metrics_chat_host_weekly             = "Grain: iso_week x host (ChatGPT, Claude.ai, Gemini). Chat-host calls reach DFO through the api and mcp surfaces, so a week counts only when both observed it. The mart has no row for a host-week with no calls."
     metrics_assistant_fetches_weekly     = "Grain: iso_week x agent_name x kind (page, api). Requests from agents that fetch for a person and name themselves. Read from website request logs, so a week counts when the website surface observed it."
     metrics_crawler_reads_weekly         = "Grain: iso_week x agent_name x kind (page, api, rsc). Requests from self-declared search and training crawlers, observed as the website."
@@ -94,7 +94,7 @@ locals {
     metrics_public_repos_weekly          = "Grain: iso_week. Public repositories that declare the SDK or name the MCP endpoint, from the weekly repository search."
     metrics_trust_weekly                 = "Grain: iso_week x slot_source x share_era. Replay-probe readings from complete runs only. Derived cards are compared with their stored frame; dataset cards are reported as still current or moved."
     metrics_consistency_weekly           = "Grain: iso_week. Derived frames recomputed in a week, and how many of those seen the week before recompute to the same digest."
-    metrics_requests_daily               = "Grain: iso_week x service. Requests and server errors per Cloud Run service, summed from days to complete weeks. availability is the share of requests without a 5xx response; 4xx responses count as answered."
+    metrics_requests_weekly              = "Grain: iso_week x service. Requests and server errors per Cloud Run service, summed from days to complete weeks. availability is the share of requests without a 5xx response; 4xx responses count as answered."
     metrics_supply_coverage_daily        = "Grain: day x coverage (curated, data_commons, missing). Target sources on the seeded list by how the day's catalogue holds them. Complete days only."
     metrics_catalogue_daily              = "Grain: day. The search catalogue live at each complete day's end. Indicators are variables."
     metrics_topic_demand_weekly          = "Grain: iso_week x axis x topic_id. Studio questions split across subjects by weight; unmet is the grader's judgement. The mart suppresses topic-weeks under 5 weighted turns. Weeks follow the studio surface's observation mark."
@@ -295,5 +295,29 @@ resource "google_bigquery_dataset_access" "reporting_views" {
     project_id = var.project_id
     dataset_id = google_bigquery_dataset.reporting.dataset_id
     table_id   = google_bigquery_table.reporting[each.value.view].table_id
+  }
+}
+
+# The metrics views read analytics.int_surface_weeks_observed and
+# analytics.int_variable_topics, dbt views whose stg_ views read these four
+# datasets. A nested view reads with its own dataset's access, so the analytics
+# dataset is authorised on each for its views. Readers still reach analytics
+# only through the dfo_reporting views.
+resource "google_bigquery_dataset_access" "metrics_nested_views" {
+  for_each = contains(var.reporting_sources, "metrics") ? toset([
+    "website_export",
+    "langfuse_export",
+    google_bigquery_dataset.analytics_job["edge_export"].dataset_id,
+    google_bigquery_dataset.analytics_job["topics"].dataset_id,
+  ]) : toset([])
+
+  dataset_id = each.value
+
+  dataset {
+    dataset {
+      project_id = var.project_id
+      dataset_id = google_bigquery_dataset.analytics["analytics"].dataset_id
+    }
+    target_types = ["VIEWS"]
   }
 }

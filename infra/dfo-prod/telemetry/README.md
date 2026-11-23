@@ -318,7 +318,7 @@ The Search Console views keep web search only. `search_console_pages` strips the
 
 `model_spend_daily` reads the standard usage cost export, `billing_export.gcp_billing_export_v1_*`, and keeps only the projects in `spend_callers` (`reporting.auto.tfvars`), labelled with their caller, since the billing account also bills projects outside DFO. Add each Gemini caller's AI Studio key project there. Cloud Billing keeps adding cost to a day for about a day after it ends, so the view keeps only days before yesterday (UTC), and every day it holds is whole. `credits` is negative and `net_cost` is `cost` plus `credits`.
 
-The `metrics_*` views feed the DFO Metrics dashboard, one per analytics mart (or, for `metrics_variable_topics`, per catalogue label), each reading the dbt build's tables in `analytics` and each authorised on that dataset:
+The `metrics_*` views feed the DFO Metrics dashboard, one per analytics mart (or, for `metrics_variable_topics`, per catalogue label), each reading the dbt build's tables in `analytics` and each authorised on that dataset. Two of those tables, `int_surface_weeks_observed` and `int_variable_topics`, are views over `website_export`, `langfuse_export`, `edge_export` and `topics`, so `analytics` is an authorised dataset (views only) on those four. After switching `metrics` on, query one view as a principal that holds only READER on `dfo_reporting`; an Access Denied names a source dataset that still needs the entry:
 
 | View                                   | Grain                                            |
 | -------------------------------------- | ------------------------------------------------ |
@@ -329,7 +329,7 @@ The `metrics_*` views feed the DFO Metrics dashboard, one per analytics mart (or
 | `metrics_regular_organisations_weekly` | surface, ISO week, audience, organisation group  |
 | `metrics_spec_uses_weekly`             | surface, ISO week, kind                          |
 | `metrics_indicator_uses_weekly`        | surface, ISO week, kind, client family           |
-| `metrics_delivery_topics_daily`        | surface, ISO week, axis, topic                   |
+| `metrics_delivery_topics_weekly`       | surface, ISO week, axis, topic                   |
 | `metrics_chat_host_weekly`             | ISO week, chat host                              |
 | `metrics_assistant_fetches_weekly`     | ISO week, agent, kind                            |
 | `metrics_crawler_reads_weekly`         | ISO week, agent, kind                            |
@@ -338,7 +338,7 @@ The `metrics_*` views feed the DFO Metrics dashboard, one per analytics mart (or
 | `metrics_public_repos_weekly`          | ISO week                                         |
 | `metrics_trust_weekly`                 | ISO week, slot source, share era                 |
 | `metrics_consistency_weekly`           | ISO week                                         |
-| `metrics_requests_daily`               | ISO week, service                                |
+| `metrics_requests_weekly`              | ISO week, service                                |
 | `metrics_supply_coverage_daily`        | UTC day, coverage                                |
 | `metrics_catalogue_daily`              | UTC day                                          |
 | `metrics_topic_demand_weekly`          | ISO week, axis, topic                            |
