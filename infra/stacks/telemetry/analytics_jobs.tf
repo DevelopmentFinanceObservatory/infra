@@ -1,5 +1,5 @@
-# The analytics repository's eleven scheduled Cloud Run Jobs, their Cloud
-# Scheduler triggers and their alerts. All eleven run the one image the
+# The analytics repository's twelve scheduled Cloud Run Jobs, their Cloud
+# Scheduler triggers and their alerts. All twelve run the one image the
 # repository's Deploy workflow pushes to the analytics Artifact Registry
 # repository (analytics.tf), and each Job's args pick the command, since the
 # image has no entrypoint:
@@ -15,14 +15,15 @@
 #   dfo-prod-analytics-topics-variables  python -m dfo_analytics.topics variables, Mondays at 07:00 UTC
 #   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:45 UTC
 #   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 08:00 UTC
+#   dfo-prod-analytics-call-specs        python -m dfo_analytics.extract.observation_specs, hourly at minute 35, except 04:35 to 06:35
 #
 # var.analytics_jobs_enabled creates everything in this file, the
 # freshness Job also waits for var.analytics_dbt_schedule_enabled, and each
-# probe's (and each topics pass's) Scheduler trigger and absence alert wait
-# for its entry in var.analytics_probes_enabled. The
+# probe's (each topics pass's, and the call-specs Job's) Scheduler trigger and
+# absence alert wait for its entry in var.analytics_probes_enabled. The
 # datasets the Jobs write, their accounts and those accounts' dataset grants
-# live in analytics.tf and exist whatever the flag says. README "Analytics jobs" gives
-# the order to switch it on.
+# live in analytics.tf and exist whatever the flag says. README "Analytics
+# jobs" gives the order to switch it on.
 
 variable "analytics_jobs_enabled" {
   description = "Creates the analytics Jobs, their Scheduler triggers and alerts, and the grants only a running Job needs (the edge logs bucket, the origin catalogue bucket, the secrets, the replay and topics specs Jobs' invoker grants on the apis service, the deployer's). Needs analytics_jobs_image."
@@ -69,7 +70,7 @@ variable "analytics_dbt_schedule_enabled" {
 # account, secrets and tables exist whatever it says, so a canary execution
 # can run before the trigger does (README "Analytics jobs").
 variable "analytics_probes_enabled" {
-  description = "Creates a probe's Cloud Scheduler trigger and its not-succeeding alert, by probe name (repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs). A probe missing from the map, or false, keeps its Job and has no trigger and no absence alert. Needs analytics_jobs_enabled. Switch a probe on after its canary execution has written valid rows."
+  description = "Creates a probe's Cloud Scheduler trigger and its not-succeeding alert, by probe name (repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, call-specs). A probe missing from the map, or false, keeps its Job and has no trigger and no absence alert. Needs analytics_jobs_enabled. Switch a probe on after its canary execution has written valid rows."
   type        = map(bool)
   default = {
     repos      = false
@@ -80,11 +81,13 @@ variable "analytics_probes_enabled" {
     "topics-variables" = false
     "topics-turns"     = false
     "topics-specs"     = false
+
+    "call-specs" = false
   }
 
   validation {
-    condition     = length(setsubtract(keys(var.analytics_probes_enabled), ["repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs"])) == 0
-    error_message = "analytics_probes_enabled keys must be probe names: repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs."
+    condition     = length(setsubtract(keys(var.analytics_probes_enabled), ["repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs", "call-specs"])) == 0
+    error_message = "analytics_probes_enabled keys must be probe names: repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, call-specs."
   }
 
   validation {
@@ -137,7 +140,12 @@ locals {
     "topics-specs"     = { lookback_hours = 192, evaluation_interval = "3600s" }
   }
 
-  analytics_probes_active = [for name in keys(local.analytics_probes) : name if lookup(var.analytics_probes_enabled, name, false)]
+  # Every key of var.analytics_probes_enabled. The hourly call-specs Job has a
+  # switch like a probe but alerts through analytics_job_not_succeeding, as
+  # the dbt and edge Jobs do, so it has no entry in local.analytics_probes.
+  analytics_probe_switches = concat(keys(local.analytics_probes), ["call-specs"])
+
+  analytics_probes_active = [for name in local.analytics_probe_switches : name if lookup(var.analytics_probes_enabled, name, false)]
 
   # Written by the edge-logs Logpush job into the bucket this stack's
   # edge_logs.tf creates, named here because that file lands on its own
@@ -382,8 +390,40 @@ locals {
     }
   }
 
+  # Reads the Langfuse observations langfuse_export holds for the same
+  # environment as the grader and writes their specs to langfuse_specs, which
+  # the Job creates. Hourly at minute 35, after the export (minute 0, 1,800 s
+  # timeout) has finished, so the dbt build at minute 25 reads the next hour's
+  # run. Observations loaded later are registered on the next run. The Job
+  # shares the Langfuse key with the export and the grader, and its times keep
+  # them apart: a run's 20-minute deadline ends it by minute 55, clear of the
+  # export at minute 0, and the hours 04:00 to 06:59 are skipped, clear of the
+  # grader (04:30, 60-minute timeout) and the topics turns pass (05:45,
+  # 60-minute timeout). The task timeout of 20 minutes ends any run by minute
+  # 55, before the export starts.
+  analytics_jobs_call_specs = {
+    "call-specs" = {
+      account  = google_service_account.analytics_job["call-specs"]
+      args     = ["python", "-m", "dfo_analytics.extract.observation_specs"]
+      timeout  = "1200s"
+      memory   = "1Gi"
+      schedule = "35 0-3,7-23 * * *"
+      env = {
+        SPECS_BQ_PROJECT            = var.project_id
+        SPECS_SOURCE_DATASET        = "langfuse_export"
+        SPECS_DATASET               = google_bigquery_dataset.analytics_job["langfuse_specs"].dataset_id
+        LANGFUSE_BASE_URL           = local.analytics_langfuse_base_url
+        LANGFUSE_EXPORT_ENVIRONMENT = local.analytics_langfuse_environment
+      }
+      secrets = {
+        LANGFUSE_PUBLIC_KEY = "${var.namespace}-langfuse-public-key"
+        LANGFUSE_SECRET_KEY = "${var.namespace}-langfuse-secret-key"
+      }
+    }
+  }
+
   analytics_jobs_created = {
-    for name, job in merge(local.analytics_jobs, local.analytics_jobs_topics) : name => job
+    for name, job in merge(local.analytics_jobs, local.analytics_jobs_topics, local.analytics_jobs_call_specs) : name => job
     if var.analytics_jobs_enabled && (name != "freshness" || var.analytics_dbt_schedule_enabled)
   }
 
@@ -394,11 +434,11 @@ locals {
     }
   ]...)
 
-  # The dbt trigger waits for analytics_dbt_schedule_enabled, and a probe's for
-  # its analytics_probes_enabled entry.
+  # The dbt trigger waits for analytics_dbt_schedule_enabled, and a probe's or
+  # the call-specs Job's for its analytics_probes_enabled entry.
   analytics_job_triggers = {
     for name, job in local.analytics_jobs_created : name => job
-    if(name != "dbt" || var.analytics_dbt_schedule_enabled) && (!contains(keys(local.analytics_probes), name) || contains(local.analytics_probes_active, name))
+    if(name != "dbt" || var.analytics_dbt_schedule_enabled) && (!contains(local.analytics_probe_switches, name) || contains(local.analytics_probes_active, name))
   }
 }
 
@@ -559,7 +599,7 @@ resource "google_cloud_run_v2_job" "analytics" {
 }
 
 output "analytics_job_names" {
-  description = "Names of the analytics Jobs by command (dbt, edge, grade, freshness, repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs), empty while analytics_jobs_enabled is false."
+  description = "Names of the analytics Jobs by command (dbt, edge, grade, freshness, repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, call-specs), empty while analytics_jobs_enabled is false."
   value       = { for name, job in google_cloud_run_v2_job.analytics : name => job.name }
 }
 
@@ -647,28 +687,33 @@ resource "google_cloud_scheduler_job" "analytics" {
 # a failing run, a paused trigger and a deleted Job alike. A single failed
 # hourly run raises nothing, since the next one retries it: the dbt build
 # replaces the last three days, and the edge extract reads objects for three
-# days after they land. The dbt alert waits for the dbt trigger, so the
-# cutover's one-off executions start no absence clock. The freshness Job is
-# hourly too, so the same three hours catch a paused trigger or a deleted
-# Job, and analytics_job_failed below also alerts on each failed run.
+# days after they land. The freshness Job is hourly too, and
+# analytics_job_failed below also alerts on each failed freshness run. The
+# call-specs Job skips three runs a night, 04:35 to 06:35, so its last
+# success and the next can be four hours apart; its window is five hours,
+# which also covers one failed run beside the gap. The condition is PromQL,
+# as the grade policy's is: it returns 1 when the window's succeeded
+# executions sum to less than one, and when the series is absent, so it also
+# fires for a Job that has never succeeded, which a condition_absent misses
+# because it needs a data point written after the policy is created. It is
+# evaluated every 5 minutes over stored data, so a policy created with no
+# success in the window before it opens within minutes and closes after the
+# Job's first success. The dbt policy exists once the dbt trigger does, and
+# the call-specs policy once its switch in var.analytics_probes_enabled is on.
 resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
-  for_each = { for name, job in local.analytics_job_triggers : name => job if contains(["dbt", "edge", "freshness"], name) }
+  for_each = { for name, job in local.analytics_job_triggers : name => job if contains(["dbt", "edge", "freshness", "call-specs"], name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job not succeeding"
   combiner     = "OR"
 
   conditions {
-    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution for 10800s"
+    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution in ${each.key == "call-specs" ? 5 : 3} hours"
 
-    condition_absent {
-      filter   = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\" AND resource.labels.location=\"${var.region}\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"succeeded\""
-      duration = "10800s"
-
-      aggregations {
-        alignment_period   = "900s"
-        per_series_aligner = "ALIGN_SUM"
-      }
+    condition_prometheus_query_language {
+      query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.key == "call-specs" ? 5 : 3}h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.key == "call-specs" ? 5 : 3}h])"
+      duration            = "0s"
+      evaluation_interval = "300s"
     }
   }
 
@@ -685,7 +730,10 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
 # the turns pass. A failed freshness run is the
 # alert itself: a source the dbt build reads has stopped arriving, or the
 # build has stopped writing it. A probe whose trigger stops firing fails no
-# run, and analytics_probe_not_succeeding below catches it.
+# run, and analytics_probe_not_succeeding below catches it. The hourly
+# call-specs Job has no failure alert: its next run is the retry, and
+# analytics_job_not_succeeding catches a run of failures, as for the dbt and
+# edge Jobs. The rows it loses alert through analytics_call_specs_lost below.
 resource "google_monitoring_alert_policy" "analytics_job_failed" {
   for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness", "repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs"], name) }
 
@@ -748,18 +796,21 @@ resource "google_monitoring_alert_policy" "analytics_grade_not_succeeding" {
 
 # The probes' version of the grade policy: no succeeded execution in a
 # week plus a day for the three weekly probes, and in a month plus four days
-# for the monthly citation probe, and the topics passes use the same shape: a week
-# plus a day for variables and specs, 26 hours for the daily turns pass. It catches a paused trigger or a deleted Job,
-# which fail no run, whether or not the freshness Job exists. It exists only
-# for a probe switched on in var.analytics_probes_enabled, whose canary
-# execution has already succeeded, so it opens only if the probe then stops
-# succeeding. Cloud Monitoring lets a PromQL condition that looks back 8 to 16
-# days evaluate hourly at most, and one that looks back 32 to 93 days every 6
-# hours, so the weekly probes and the topics variables and specs passes evaluate every 3600 s,
-# the citation probe every 21600 s, and the turns pass, whose 26-hour window is
-# shorter than that range, every 300 s as the grade policy does (local.analytics_probes).
+# for the monthly citation probe, and the topics passes use the same shape: a
+# week plus a day for variables and specs, 26 hours for the daily turns pass.
+# It catches a paused trigger or a deleted Job, which fail no run, whether or
+# not the freshness Job exists. It exists only for a probe switched on in
+# var.analytics_probes_enabled, whose canary execution has already succeeded,
+# so it opens only if the probe then stops succeeding. Cloud Monitoring lets a
+# PromQL condition that looks back 8 to 16 days evaluate hourly at most, and
+# one that looks back 32 to 93 days every 6 hours, so the weekly probes and
+# the topics variables and specs passes evaluate every 3600 s, the citation
+# probe every 21600 s, and the turns pass, whose 26-hour window is shorter
+# than that range, every 300 s as the grade policy does
+# (local.analytics_probes). The hourly call-specs Job is not among them: its
+# absence alert is analytics_job_not_succeeding.
 resource "google_monitoring_alert_policy" "analytics_probe_not_succeeding" {
-  for_each = { for name in local.analytics_probes_active : name => local.analytics_probes[name] if contains(keys(local.analytics_jobs_created), name) }
+  for_each = { for name in local.analytics_probes_active : name => local.analytics_probes[name] if contains(keys(local.analytics_probes), name) && contains(keys(local.analytics_jobs_created), name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job not succeeding"
@@ -840,6 +891,70 @@ resource "google_monitoring_alert_policy" "analytics_edge_objects_lost" {
 
       # ALIGN_SUM, since Cloud Logging writes a zero sample in the interval
       # beside each non-zero one, which ALIGN_COUNT would count as a run.
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "3600s"
+  }
+}
+
+# The call-specs Job logs one structured line, jsonPayload event
+# "observation_spec_lost" with the fields observation_id and last_status, for
+# each observation row that fails its last attempt. The run itself succeeds, so
+# no Job policy sees it. The metric counts those lines, as
+# analytics_edge_objects_lost does for the edge extract.
+resource "google_logging_metric" "analytics_call_specs_lost" {
+  count = local.analytics_jobs_count
+
+  name    = "${var.namespace}-analytics-call-specs-lost"
+  project = var.project_id
+  filter  = <<-EOT
+    resource.type="cloud_run_job"
+    resource.labels.job_name="${google_cloud_run_v2_job.analytics["call-specs"].name}"
+    resource.labels.location="${var.region}"
+    jsonPayload.event="observation_spec_lost"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+resource "time_sleep" "analytics_call_specs_lost_metric_propagation" {
+  count = local.analytics_jobs_count
+
+  depends_on      = [google_logging_metric.analytics_call_specs_lost]
+  create_duration = "120s"
+}
+
+resource "google_monitoring_alert_policy" "analytics_call_specs_lost" {
+  count = local.analytics_jobs_count
+
+  project      = var.project_id
+  display_name = "${google_cloud_run_v2_job.analytics["call-specs"].name} lost observation rows"
+  combiner     = "OR"
+
+  depends_on = [time_sleep.analytics_call_specs_lost_metric_propagation]
+
+  conditions {
+    display_name = "observation_spec_lost line logged"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.analytics_call_specs_lost[0].name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      # ALIGN_SUM, as for the edge metric.
       aggregations {
         alignment_period   = "300s"
         per_series_aligner = "ALIGN_SUM"

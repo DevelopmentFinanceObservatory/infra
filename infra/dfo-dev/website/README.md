@@ -145,7 +145,7 @@ Only `infra/dfo-prod/website/env.auto.tfvars` sets `event_export_enabled = true`
 - `roles/bigquery.jobUser` on the project for the exporter;
 - the secret `dfo-prod-website-export-hmac-key`, generated like the auth secret and mounted pinned to its version;
 - the website service mounting the same secret as `EXPORT_ID_HMAC_KEY`, pinned to the same version, which the app uses to HMAC the signed-in user id into the `x-dfo-account` header it sends the Studio harness;
-- the Job `dfo-prod-website-export`, on the service's PSC network with the service's `WEBSITE_DB_*` settings and the exporter as `WEBSITE_DB_USER`, plus `EXPORT_BQ_PROJECT`, `EXPORT_BQ_DATASET` and `EXPORT_ID_HMAC_KEY`;
+- the Job `dfo-prod-website-export`, on the service's PSC network with the service's `WEBSITE_DB_*` settings and the exporter as `WEBSITE_DB_USER`, plus `EXPORT_BQ_PROJECT`, `EXPORT_BQ_DATASET`, `EXPORT_BQ_LOCATION` (the dataset's location) and `EXPORT_ID_HMAC_KEY`;
 - an hourly Cloud Scheduler trigger whose own service account holds `roles/run.invoker` on the Job alone;
 - `roles/run.developer` on the Job and `roles/iam.serviceAccountUser` on the exporter for the website deployer.
 
