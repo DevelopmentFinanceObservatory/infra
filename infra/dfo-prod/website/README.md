@@ -18,6 +18,17 @@ The six sign-in secrets, each with at least one version, since a secret with no 
 
 Each OAuth client's callback must name the origin set in `website_url`.
 
+## Rolling onto a new revision
+
+A secret mounted at `latest` resolves when an instance starts, and `min_instances = 1` keeps one instance running on the value it started with. Roll every instance onto a new secret version in seconds by changing a label:
+
+```
+gcloud run services update dfo-prod-website --project prod-fin-observatory \
+  --region europe-west1 --update-labels=rolled-at=$(date +%Y%m%d%H%M%S)
+```
+
+A production deploy (`deploy-prod.yml`) also rolls a revision, but it builds the image, runs the migration job and waits for reviewer approval. `infra/dfo-dev/website/README.md` ("Rolling onto a new revision") explains the label and why Terraform leaves it alone.
+
 ## Feedback Slack webhook
 
 The stack creates `dfo-prod-website-feedback-slack-webhook` with a first version holding the literal `disabled`, which the app reads as "notifications off". Feedback submitted on the site then returns 200 and never reaches Slack, so after the first apply add the Slack incoming webhook URL as a new version. Prod posts to the same channel as staging, so the URL is the one in `dfo-dev-website-staging-feedback-slack-webhook`:
@@ -28,11 +39,7 @@ printf '%s' 'https://hooks.slack.com/services/…' | gcloud secrets versions add
   --project prod-fin-observatory --data-file=-
 ```
 
-The service mounts `latest`, but running instances keep the value they started with, and `min_instances = 1` keeps one running. Roll a new revision by dispatching the website's production deploy:
-
-```
-gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main
-```
+Then roll the service onto a new revision (see "Rolling onto a new revision").
 
 `infra/dfo-dev/website/README.md` explains the placeholder and rotation in full.
 
@@ -42,33 +49,24 @@ gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref m
 
 ## Admin emails
 
-The stack creates `dfo-prod-website-admin-emails` with a first version holding the literal `none`, which is not an email address, so nobody is an admin and `/admin/api-keys` answers 404. The list is private, so it never appears in this repository. After the first apply, add the list as a new version holding every admin, then roll a new revision, since running instances keep the value they started with. The runtime account's `secretAccessor` on the secret comes from the `cloud-run-service` module. The emails below are placeholders:
+The stack creates `dfo-prod-website-admin-emails` with a first version holding the literal `none`, which is not an email address, so nobody is an admin and `/admin/api-keys` answers 404. The list is private, so it lives only in Secret Manager. After the first apply, add a version holding every admin, then roll the service onto a new revision (see "Rolling onto a new revision"), so an admin removed from the list loses the page on the warm instance too. The prompt keeps the list off the screen and out of shell history. The runtime account's `secretAccessor` on the secret comes from the `cloud-run-service` module:
 
 ```
-printf '%s' 'a@example.org,b@example.org' | gcloud secrets versions add dfo-prod-website-admin-emails \
+read -rs ADMINS; printf '%s' "$ADMINS" | gcloud secrets versions add dfo-prod-website-admin-emails \
   --project prod-fin-observatory --data-file=-
-gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main
 ```
 
 `infra/dfo-dev/website/README.md` explains the mount in full.
 
 ## API key tag secrets
 
-The stack creates `dfo-prod-website-api-key-tag-secrets` and generates its first version (`api_key_tag_secrets.tf`), so API keys work from the first apply and the value never lands in Terraform state. A production revision refuses to start without it, so apply this before deploying a website that issues keys. Rotate by hand, never by bumping the counter: add a version holding `old,new`, roll a revision, then one holding `new,old`, and roll again. Drop the old secret only after every key it signed is replaced, since that voids them:
+The stack creates `dfo-prod-website-api-key-tag-secrets` and generates its first version (`api_key_tag_secrets.tf`), so API keys work from the first apply and the value never lands in Terraform state. A production revision refuses to start without it, so apply this before deploying a website that issues keys.
 
-```
-gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main
-```
-
-`infra/dfo-dev/website/README.md` gives the full commands.
+The mount is pinned to `api_key_tag_secrets_version` in `env.auto.tfvars`, so each version reaches prod through the apply of a release pull request. Rotate in three steps: add a version holding `old,new` and move the pin to it; once the step-1 revision serves all traffic, add one holding `new,old` and move the pin again; once every key the old secret signed is replaced, add one holding the new secret alone and move the pin. `infra/dfo-dev/website/README.md` ("API key tag secrets") gives the commands, with `SECRET=dfo-prod-website-api-key-tag-secrets` and `PROJECT=prod-fin-observatory`, and the traffic check with `dfo-prod-website` in `europe-west1`.
 
 ## Email sign-in
 
-The stack creates `dfo-prod-website-turnstile-secret-key` with a first version holding a single space, which the app reads as blank, so email sign-in stays off. The Turnstile widget is "DFO website production" in the ONE Campaign Cloudflare account, for `developmentfinance.org` and its subdomains. `env.auto.tfvars` holds its site key as `turnstile_site_key`. Add its secret key as a new version with `read -rs KEY; printf '%s' "$KEY" | gcloud secrets versions add dfo-prod-website-turnstile-secret-key --project prod-fin-observatory --data-file=-`. Mail goes through the role `development-finance-observatory-ses-sender-production` in ONE's SES account, which trusts only `dfo-prod-website-run@prod-fin-observatory.iam.gserviceaccount.com` with the token audience `development-finance-observatory-production`. `env.auto.tfvars` sets both in `ses`. The apply for any tfvars change creates a new revision. A new secret version needs a manual roll:
-
-```
-gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main
-```
+The stack creates `dfo-prod-website-turnstile-secret-key` with a first version holding a single space, which the app reads as blank, so email sign-in stays off. The Turnstile widget is "DFO website production" in the ONE Campaign Cloudflare account, for `developmentfinance.org` and its subdomains. `env.auto.tfvars` holds its site key as `turnstile_site_key`. Add its secret key as a new version with `read -rs KEY; printf '%s' "$KEY" | gcloud secrets versions add dfo-prod-website-turnstile-secret-key --project prod-fin-observatory --data-file=-`. Mail goes through the role `development-finance-observatory-ses-sender-production` in ONE's SES account, which trusts only `dfo-prod-website-run@prod-fin-observatory.iam.gserviceaccount.com` with the token audience `development-finance-observatory-production`. `env.auto.tfvars` sets both in `ses`. The apply for any tfvars change creates a new revision. A new secret version needs a roll (see "Rolling onto a new revision").
 
 `infra/dfo-dev/website/README.md` describes all four settings and the role's trust in full.
 
