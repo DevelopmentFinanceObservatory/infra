@@ -13,6 +13,11 @@
 #   backfill-frame1 converts pinned frame1 JSON to the canonical Parquet
 #                   frame; run by hand once per environment, never on a
 #                   schedule
+#   render-ahead    renders from each recently read dataset's head the
+#                   renderings its readers asked for that the head does not
+#                   yet record, as the datasets worker renders; run by hand
+#                   after a deploy or a graph release that moves the
+#                   rendering stamp
 #
 # The Job runs as the apis runtime identity: the tasks need exactly what the
 # service has (object create and view on the working and pinned buckets, the
@@ -48,10 +53,12 @@ resource "google_cloud_run_v2_job" "datasets_maintenance" {
         # No default args: a missing task name fails the argument parser, so
         # an execution that names no task fails instead of exiting 0.
 
+        # render-ahead renders as the datasets worker does, and the worker
+        # runs one operation per instance in 4 GiB (datasets_worker.tf).
         resources {
           limits = {
             cpu    = "1"
-            memory = "2Gi"
+            memory = "4Gi"
           }
         }
 
@@ -126,14 +133,28 @@ resource "google_cloud_run_v2_job" "datasets_maintenance" {
         }
 
         # The graph release main.tf mounts, under the same switch:
-        # backfill-descriptions opens it, as the service does at startup. The
-        # apis runtime identity reads the bucket through
+        # backfill-descriptions and render-ahead open it, as the service does
+        # at startup. The apis runtime identity reads the bucket through
         # graph_release_apis_runtime_viewer.
         dynamic "env" {
           for_each = var.graph_release_serving ? [1] : []
           content {
             name  = "GRAPH_RELEASE_URI"
             value = "gs://${google_storage_bucket.graph_release.name}/"
+          }
+        }
+
+        # The website origin and dataset-link flag the apis service and the
+        # datasets worker read (local.datasets_site_env in main.tf).
+        # render-ahead builds the worker's dependencies, which refuse to load
+        # without the origin, and both values enter every bundle's rendition
+        # token, so a render under other values would land under keys no
+        # reader asks for.
+        dynamic "env" {
+          for_each = local.datasets_site_env
+          content {
+            name  = env.key
+            value = env.value
           }
         }
       }
@@ -219,12 +240,16 @@ resource "google_cloud_run_v2_job_iam_member" "datasets_maintenance_scheduler_ex
 }
 
 locals {
-  # Daily, half an hour apart so the two daily tasks never share the database
+  # Daily, half an hour apart so the daily tasks never share the database
   # connection budget, plus the export claim sweep every five minutes. Each
-  # name is the task passed to `datasets-maintenance`.
+  # name is the task passed to `datasets-maintenance`. render-ahead renders
+  # the recently read renderings a dataset's head lacks, the ones the worker's
+  # own render-ahead after a refresh missed, and renders nothing when none
+  # is missing.
   datasets_maintenance_schedules = {
     sweep               = "0 3 * * *"
     age-operations      = "30 3 * * *"
+    render-ahead        = "0 4 * * *"
     sweep-export-claims = "*/5 * * * *"
   }
 }

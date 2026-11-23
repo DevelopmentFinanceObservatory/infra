@@ -401,18 +401,17 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
         }
       }
 
-      # The same website origin main.tf mounts: the worker builds a bundle's
-      # links on it and refuses to start without it.
-      env {
-        name  = "DFO_PUBLIC_SITE_URL"
-        value = var.dfo_public_site_url
-      }
-
-      # The same dataset-link flag main.tf mounts, so a bundle the worker
-      # renders matches one the apis service renders.
-      env {
-        name  = "DFO_SITE_DATASET_LINKS"
-        value = "true"
+      # The website origin and dataset-link flag main.tf mounts
+      # (local.datasets_site_env), so a bundle the worker renders matches one
+      # the apis service renders. The worker refuses to start without the
+      # origin. The map's keys iterate in lexical order, the order these two
+      # variables have always had on the worker.
+      dynamic "env" {
+        for_each = local.datasets_site_env
+        content {
+          name  = env.key
+          value = env.value
+        }
       }
 
       # The same two values main.tf mounts on the apis service so the mint
