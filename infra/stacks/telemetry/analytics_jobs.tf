@@ -373,7 +373,11 @@ locals {
       }
     }
     # The apis service, called as the replay Job calls it, and the analytics
-    # dataset the pass reads request paths from (stg_log_lines).
+    # dataset the pass reads request paths from (stg_log_lines). A members
+    # call can materialise the spec, which takes one of the apis instance's
+    # materialise permits (materialise_max_concurrency, 2), and the members
+    # door refuses 503 at once while they are all held. One call at a time
+    # leaves a warm instance a permit for Studio and API readers.
     "topics-specs" = {
       account  = google_service_account.analytics_job["topic-specs"]
       args     = ["python", "-m", "dfo_analytics.topics", "specs"]
@@ -385,6 +389,7 @@ locals {
         TOPICS_APIS_URL          = local.analytics_apis_url
         TOPICS_APIS_AUDIENCE     = local.analytics_apis_url
         TOPICS_ANALYTICS_DATASET = google_bigquery_dataset.analytics["analytics"].dataset_id
+        TOPICS_CONCURRENCY       = "1"
       })
       secrets = {}
     }
