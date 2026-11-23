@@ -20,13 +20,16 @@ analytics_jobs_enabled = true
 analytics_jobs_image   = "europe-west1-docker.pkg.dev/prod-fin-observatory/analytics/dfo-analytics:e7371e5adc6dab5df7fab3be90a4ce354639b74b"
 
 # The hourly dbt build and its freshness Job replace the logs_daily scheduled
-# query, and the dfo_reporting views read the analytics tables. The probes
-# and the observation specs Job whose canary execution wrote valid rows run
-# on their schedules; the citation probe stays off.
+# query, and the dfo_reporting views read the analytics tables. The probes,
+# the topics passes and the observation specs Job whose canary execution
+# wrote valid rows run on their schedules; the citation probe stays off.
 analytics_dbt_schedule_enabled = true
 analytics_probes_enabled = {
-  repos        = true
-  lighthouse   = true
-  replay       = true
-  "call-specs" = true
+  repos              = true
+  lighthouse         = true
+  replay             = true
+  "call-specs"       = true
+  "topics-variables" = true
+  "topics-turns"     = true
+  "topics-specs"     = true
 }
