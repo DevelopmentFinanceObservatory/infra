@@ -73,9 +73,11 @@ locals {
       "requests_daily",
       "standing_pulls_weekly",
       "supply_coverage_daily",
+      "topic_callers_weekly",
       "topic_demand_weekly",
       "topic_taxonomy",
       "trust_weekly",
+      "website_returning_weekly",
     ] : table => "${local.metrics_ref}.${table}"
   }
   metrics_view_descriptions = {
@@ -100,6 +102,8 @@ locals {
     metrics_supply_coverage_daily        = "Grain: day x coverage (curated, data_commons, missing, unknown). Target sources on the seeded list by how the day's catalogue holds them; unknown is a day whose build logged no provenance lists. Complete days only."
     metrics_catalogue_daily              = "Grain: day. The search catalogue live at each complete day's end. Indicators are variables."
     metrics_topic_demand_weekly          = "Grain: iso_week x axis x topic_id. Studio questions split across subjects by weight; unmet is the grader's judgement. The mart suppresses topic-weeks under 5 weighted turns. Weeks follow the studio surface's observation mark."
+    metrics_website_returning_weekly     = "Grain: iso_week. Website people active (a search or a share) and returning, by account, consented browser id and ONE Campaign staff; a browser ever seen signed in counts as its account. Returning is active in 2 of the last 4, or 3 of the last 8, weeks, whether or not active this week."
+    metrics_topic_callers_weekly         = "Grain: iso_week x surface x axis x topic_id. Distinct callers who pulled data on each topic, ONE Campaign staff and AI tools' shared servers apart; total_callers is the surface's distinct callers that week, so callers / total_callers is a share of callers. datasets_pulled splits caller-dataset pairs by topic weight."
     metrics_variable_topics              = "Grain: axis x topic_id. Today's catalogue variables by main subject and by finance kind, from int_variable_topics (labels that are not stale). Totals dip while a topics run re-asks changed variables."
   }
   metrics_views = {
