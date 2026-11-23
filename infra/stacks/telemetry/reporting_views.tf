@@ -98,6 +98,7 @@ locals {
     metrics_consistency_weekly           = "Grain: iso_week. Derived frames recomputed in a week, and how many of those seen the week before recompute to the same digest."
     metrics_requests_weekly              = "Grain: iso_week x service. Requests and server errors per Cloud Run service, summed from days to complete weeks. availability is the share of requests without a 5xx response; 4xx responses count as answered."
     metrics_supply_coverage_daily        = "Grain: day x coverage (curated, data_commons, missing, unknown). Target sources on the seeded list by how the day's catalogue holds them; unknown is a day whose build logged no provenance lists. Complete days only."
+    metrics_supply_sources_daily         = "Grain: day x source_name. Each target source on the seeded list with its owner and how the day's catalogue holds it (curated, data_commons, missing, unknown). Complete days only."
     metrics_catalogue_daily              = "Grain: day. The search catalogue live at each complete day's end. Indicators are variables."
     metrics_topic_demand_weekly          = "Grain: iso_week x axis x topic_id. Studio questions split across subjects by weight; unmet is the grader's judgement. The mart suppresses topic-weeks under 5 weighted turns. Weeks follow the studio surface's observation mark."
     metrics_variable_topics              = "Grain: axis x topic_id. Today's catalogue variables by main subject and by finance kind, from int_variable_topics (labels that are not stale). Totals dip while a topics run re-asks changed variables."

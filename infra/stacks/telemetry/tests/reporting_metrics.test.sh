@@ -181,11 +181,11 @@ SOURCES="WITH
     (CURRENT_DATE(), 'website', 50, 0, 0)])
   ),
   supply_coverage_daily AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<day DATE, source_key STRING, coverage STRING>>[
-    ('2026-10-12', 's1', 'curated'),
-    ('2026-10-12', 's2', 'curated'),
-    ('2026-10-12', 's3', 'missing'),
-    (CURRENT_DATE(), 's1', 'curated')])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<day DATE, source_key STRING, source_name STRING, owner_org STRING, catalogue_version STRING, coverage STRING>>[
+    ('2026-10-12', 's1', 'Source One', 'Org A', 'v7', 'curated'),
+    ('2026-10-12', 's2', 'Source Two', 'Org B', 'v7', 'curated'),
+    ('2026-10-12', 's3', 'Source Three', 'Org C', 'v7', 'missing'),
+    (CURRENT_DATE(), 's1', 'Source One', 'Org A', 'v8', 'curated')])
   ),
   catalogue_daily AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<day DATE, catalogue_version STRING, sources INT64, datasets INT64, indicators INT64, dfo_sources INT64, dfo_datasets INT64, dfo_indicators INT64, data_commons_sources INT64, data_commons_datasets INT64, data_commons_indicators INT64>>[
@@ -332,6 +332,12 @@ check metrics_supply_coverage_daily \
     '{"day":"2026-10-12","coverage":"curated","sources":2}
 {"day":"2026-10-12","coverage":"missing","sources":1}' \
     "$(metrics_rows metrics_supply_coverage_daily 't.day, t.coverage')"
+
+check metrics_supply_sources_daily \
+    '{"day":"2026-10-12","source_name":"Source One","owner":"Org A","coverage":"curated"}
+{"day":"2026-10-12","source_name":"Source Three","owner":"Org C","coverage":"missing"}
+{"day":"2026-10-12","source_name":"Source Two","owner":"Org B","coverage":"curated"}' \
+    "$(metrics_rows metrics_supply_sources_daily 't.day, t.source_name')"
 
 check metrics_catalogue_daily \
     '{"day":"2026-10-12","catalogue_version":"v7","sources":10,"datasets":20,"indicators":300,"dfo_sources":4,"dfo_datasets":8,"dfo_indicators":100,"data_commons_sources":6,"data_commons_datasets":12,"data_commons_indicators":200}' \

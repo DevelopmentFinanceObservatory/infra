@@ -341,6 +341,7 @@ The `metrics_*` views feed the DFO Metrics dashboard, one per analytics mart (or
 | `metrics_consistency_weekly`           | ISO week                                         |
 | `metrics_requests_weekly`              | ISO week, service                                |
 | `metrics_supply_coverage_daily`        | UTC day, coverage                                |
+| `metrics_supply_sources_daily`         | UTC day, source                                  |
 | `metrics_catalogue_daily`              | UTC day                                          |
 | `metrics_topic_demand_weekly`          | ISO week, axis, topic                            |
 | `metrics_variable_topics`              | axis, topic                                      |
