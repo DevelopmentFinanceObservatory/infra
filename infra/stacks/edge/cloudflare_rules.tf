@@ -180,10 +180,16 @@ locals {
   # and the manifest has no third segment, which also excludes the /file
   # selector. A derived frame's manifest and selector stay uncached. Share
   # slot data is left out, since a share that is withdrawn has no purge path.
+  # The heads route, exactly <prefix>heads, is a read-only lookup keyed by the
+  # query string (?spec_id=...). It is matched with eq, which is case-exact,
+  # and http.request.uri.path leaves out the query string, so each query is
+  # cached under its own full-URI cache key. The origin sets Cache-Control:
+  # public, max-age=300 on a 200 and no-store on a 400.
   edge_cache_path_match = join(" or ", concat(
     [for prefix in local.dataset_path_prefixes : "(http.request.uri.path wildcard \"${prefix}spec_*/cv_*/files/*\" and not http.request.uri.path wildcard \"${prefix}*/*/files/*/*\")"],
     [for prefix in local.dataset_path_prefixes : "(http.request.uri.path wildcard \"${prefix}spec_*/cv_*\" and not http.request.uri.path wildcard \"${prefix}*/*/*\")"],
     [for prefix in local.dataset_path_prefixes : "(http.request.uri.path wildcard \"${prefix}derived/ops_*/ocv_*/files/*\" and not http.request.uri.path wildcard \"${prefix}derived/*/*/files/*/*\")"],
+    [for prefix in local.dataset_path_prefixes : "http.request.uri.path eq \"${prefix}heads\""],
   ))
 
   # A request with an Origin header is cross-origin, and its response carries
@@ -216,11 +222,13 @@ locals {
   edge_cache_logged_path = join(" or ", [for prefix in local.dataset_path_prefixes : "starts_with(http.request.uri.path, \"${prefix}\")"])
 }
 
-# Makes the website's dataset files, dataset manifests and derived frames'
-# files cache-eligible for reads with no Authorization header, from any origin.
+# Makes the website's dataset files, dataset manifests, derived frames' files
+# and heads lookups cache-eligible for reads with no Authorization header,
+# from any origin.
 # Cloudflare then follows the Cache-Control the website sends: a pinned digest
 # file for a year, and a working file, a manifest and a derived frame's file
-# for 300 s. A response with no-store or with no Cache-Control is never
+# for 300 s, and a heads lookup for the 300 s the origin sets.
+# A response with no-store or with no Cache-Control is never
 # stored. The website sets Cache-Tag to the content version on dataset
 # responses, so a revoked version is purged by tag
 # (infra/dfo-prod/edge/README.md, "Revoking a dataset version"). A revocation
@@ -260,14 +268,14 @@ resource "cloudflare_ruleset" "cache" {
 
   zone_id     = var.cloudflare_zone_id
   name        = "Cache"
-  description = "Cache the website's dataset files, manifests and derived files for reads with no Authorization header."
+  description = "Cache the website's dataset files, manifests, derived files and heads lookups for reads with no Authorization header."
   kind        = "zone"
   phase       = "http_request_cache_settings"
 
   rules = [
     {
       ref         = "datasets_plain_reads"
-      description = "Cache dataset files, dataset manifests and derived frame files for requests with no Authorization header, as the origin's Cache-Control says."
+      description = "Cache dataset files, dataset manifests, derived frame files and heads lookups (/datasets/heads, under either prefix) for requests with no Authorization header, as the origin's Cache-Control says."
       expression  = "${local.edge_cache_get} and (${local.edge_cache_path_match}) and (${local.edge_cache_logged_path}) and ${local.edge_cache_plain_request}"
       action      = "set_cache_settings"
       action_parameters = {
