@@ -59,11 +59,16 @@ resource "google_monitoring_alert_policy" "export_job_failed" {
 }
 
 # A Job whose trigger stops runs no execution, so the failed-execution policy
-# above stays quiet. This one fires after three missed hourly successes,
-# whatever the cause: a paused or failing Scheduler trigger, a renamed or
-# deleted Job, or every run failing. It is its own policy, as the apis
-# stack's search_catalogue_heartbeat is, because an auto_close timer shorter
-# than the absence would close the incident while no execution succeeds.
+# above stays quiet. This one fires after three hours with no succeeded
+# execution, whatever the cause: a paused or failing Scheduler trigger, a
+# renamed or deleted Job, or every run failing. It is its own policy, as the
+# apis stack's search_catalogue_heartbeat is, because an auto_close timer
+# shorter than the absence would close the incident while no execution
+# succeeds. The condition is PromQL, as logs_daily_not_succeeding's is
+# below: it returns 1 when the window's succeeded executions sum to less
+# than one, and when the series is absent, so it also fires for a Job that
+# has never succeeded, which a condition_absent misses because it needs a
+# data point written after the policy is created.
 resource "google_monitoring_alert_policy" "export_job_not_succeeding" {
   for_each = local.export_jobs
 
@@ -72,16 +77,12 @@ resource "google_monitoring_alert_policy" "export_job_not_succeeding" {
   combiner     = "OR"
 
   conditions {
-    display_name = "no succeeded ${each.value} execution for 10800s"
+    display_name = "no succeeded ${each.value} execution in 3 hours"
 
-    condition_absent {
-      filter   = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${each.value}\" AND resource.labels.location=\"${var.region}\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"succeeded\""
-      duration = "10800s"
-
-      aggregations {
-        alignment_period   = "900s"
-        per_series_aligner = "ALIGN_SUM"
-      }
+    condition_prometheus_query_language {
+      query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${each.value}\",location=\"${var.region}\",result=\"succeeded\"}[3h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${each.value}\",location=\"${var.region}\",result=\"succeeded\"}[3h])"
+      duration            = "0s"
+      evaluation_interval = "300s"
     }
   }
 

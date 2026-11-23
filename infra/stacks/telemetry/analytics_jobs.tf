@@ -687,15 +687,19 @@ resource "google_cloud_scheduler_job" "analytics" {
 # a failing run, a paused trigger and a deleted Job alike. A single failed
 # hourly run raises nothing, since the next one retries it: the dbt build
 # replaces the last three days, and the edge extract reads objects for three
-# days after they land. The dbt alert waits for the dbt trigger, so the
-# cutover's one-off executions start no absence clock, and the call-specs
-# alert waits for its switch in var.analytics_probes_enabled, so a canary run
-# long before the switch-on starts none either. The freshness Job is
-# hourly too, so the same three hours catch a paused trigger or a deleted
-# Job, and analytics_job_failed below also alerts on each failed run. The
+# days after they land. The freshness Job is hourly too, and
+# analytics_job_failed below also alerts on each failed freshness run. The
 # call-specs Job skips three runs a night, 04:35 to 06:35, so its last
 # success and the next can be four hours apart; its window is five hours,
-# which also covers one failed run beside the gap.
+# which also covers one failed run beside the gap. The condition is PromQL,
+# as the grade policy's is: it returns 1 when the window's succeeded
+# executions sum to less than one, and when the series is absent, so it also
+# fires for a Job that has never succeeded, which a condition_absent misses
+# because it needs a data point written after the policy is created. It is
+# evaluated every 5 minutes over stored data, so a policy created with no
+# success in the window before it opens within minutes and closes after the
+# Job's first success. The dbt policy exists once the dbt trigger does, and
+# the call-specs policy once its switch in var.analytics_probes_enabled is on.
 resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
   for_each = { for name, job in local.analytics_job_triggers : name => job if contains(["dbt", "edge", "freshness", "call-specs"], name) }
 
@@ -704,16 +708,12 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
   combiner     = "OR"
 
   conditions {
-    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution for ${each.key == "call-specs" ? 18000 : 10800}s"
+    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution in ${each.key == "call-specs" ? 5 : 3} hours"
 
-    condition_absent {
-      filter   = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\" AND resource.labels.location=\"${var.region}\" AND metric.type=\"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result=\"succeeded\""
-      duration = each.key == "call-specs" ? "18000s" : "10800s"
-
-      aggregations {
-        alignment_period   = "900s"
-        per_series_aligner = "ALIGN_SUM"
-      }
+    condition_prometheus_query_language {
+      query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.key == "call-specs" ? 5 : 3}h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.key == "call-specs" ? 5 : 3}h])"
+      duration            = "0s"
+      evaluation_interval = "300s"
     }
   }
 
