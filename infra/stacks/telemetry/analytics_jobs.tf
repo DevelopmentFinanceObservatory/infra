@@ -810,10 +810,9 @@ resource "google_monitoring_alert_policy" "analytics_grade_not_succeeding" {
 # so it opens only if the probe then stops succeeding. Cloud Monitoring lets a
 # PromQL condition that looks back 8 to 16 days evaluate hourly at most, and
 # one that looks back 32 to 93 days every 6 hours, so the weekly probes and
-# the topics variables pass evaluates every 3600 s, the citation
-# probe every 21600 s, and the turns and specs passes, whose 26-hour window is shorter
-# than that range, every 300 s as the grade policy does
-# (local.analytics_probes). The hourly call-specs Job is not among them: its
+# the topics variables pass evaluate every 3600 s, the citation probe every
+# 21600 s, and the turns and specs passes, whose 26-hour window is shorter than
+# that range, every 300 s as the grade policy does (local.analytics_probes). The hourly call-specs Job is not among them: its
 # absence alert is analytics_job_not_succeeding.
 resource "google_monitoring_alert_policy" "analytics_probe_not_succeeding" {
   for_each = { for name in local.analytics_probes_active : name => local.analytics_probes[name] if contains(keys(local.analytics_probes), name) && contains(keys(local.analytics_jobs_created), name) }
@@ -982,8 +981,8 @@ resource "google_monitoring_alert_policy" "analytics_call_specs_lost" {
 # assert_reconcile_studio. Two more warn-severity tests guard the delivery-line
 # cutover: assert_backfill_deliveries_counts_are_frozen and
 # assert_delivery_line_cutover_vars_match_the_data. The metric counts their
-# WARN result lines, as analytics_edge_objects_lost does for the edge extract. The dbt Job runs
-# hourly, so a standing warning logs again each run.
+# WARN result lines, as analytics_edge_objects_lost does for the edge extract.
+# The dbt Job runs hourly, so a standing warning logs again each run.
 resource "google_logging_metric" "analytics_reconcile_warned" {
   count = local.analytics_jobs_count
 
