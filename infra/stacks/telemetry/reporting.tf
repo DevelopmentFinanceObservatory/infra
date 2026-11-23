@@ -32,17 +32,10 @@ resource "google_bigquery_dataset_access" "reporting_readers" {
   user_by_email  = each.value.kind == "user" ? each.value.address : null
 }
 
-resource "google_project_iam_member" "reporting_readers_job_user" {
-  for_each = local.reporting_reader_principals
-
-  project = var.project_id
-  role    = "roles/bigquery.jobUser"
-  member  = each.value.member
-}
-
 # The dashboard reads through Google's managed BigQuery MCP server at
 # https://bigquery.googleapis.com/mcp. A tool call there needs this role on
-# the project, and the query it runs needs the BigQuery grants above.
+# the project, and the query it runs needs READER above and
+# roles/bigquery.jobUser (people_job_user in main.tf).
 resource "google_project_iam_member" "reporting_readers_mcp_tool_user" {
   for_each = local.reporting_reader_principals
 

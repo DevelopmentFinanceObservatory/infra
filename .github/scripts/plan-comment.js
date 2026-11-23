@@ -3,9 +3,10 @@
 // from the "Comment plan on PR" step of .github/workflows/plan.yml and
 // .github/workflows/plan-prod.yml through actions/github-script, which
 // passes github, context and core. The step's env carries STACK, each
-// step's outcome and output, and PRINCIPALS_FILE, the principal addresses
+// step's outcome, and PRINCIPALS_FILE, the principal addresses
 // that redact-principals.js strips from the output before anything is posted.
 const redactor = require("./redact-principals.js");
+const tfOutput = require("./tf-output.js");
 
 module.exports = async ({ github, context, core }) => {
   const stack = process.env.STACK;
@@ -31,12 +32,12 @@ module.exports = async ({ github, context, core }) => {
   // Redacted here, at the read, so neither the summary nor the comment can
   // see an address.
   const redact = redactor(process.env.PRINCIPALS_FILE);
-  const initStdout = redact(process.env.INIT_STDOUT || "");
-  const initStderr = redact(process.env.INIT_STDERR || "");
-  const validateStdout = redact(process.env.VALIDATE_STDOUT || "");
-  const validateStderr = redact(process.env.VALIDATE_STDERR || "");
-  const planStdout = redact(process.env.PLAN_STDOUT || "");
-  const planStderr = redact(process.env.PLAN_STDERR || "");
+  const initStdout = redact(tfOutput("init").stdout);
+  const initStderr = redact(tfOutput("init").stderr);
+  const validateStdout = redact(tfOutput("validate").stdout);
+  const validateStderr = redact(tfOutput("validate").stderr);
+  const planStdout = redact(tfOutput("plan").stdout);
+  const planStderr = redact(tfOutput("plan").stderr);
 
   const initText = [initStdout, initStderr].filter(Boolean).join("\n").trim();
   const validateText = [validateStdout, validateStderr].filter(Boolean).join("\n").trim();
