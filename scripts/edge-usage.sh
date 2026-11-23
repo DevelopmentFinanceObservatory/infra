@@ -20,7 +20,8 @@
 # Dates are UTC days, YYYY-MM-DD, both inclusive. Adaptive datasets keep at
 # least 31 days, so a start date older than that returns nothing.
 # Output is tab-separated with a header row: day, prefix (/api/datasets or /api/v1/datasets),
-# kind (file, manifest, or selector for the /file route and any other path),
+# kind (file, derived_file for a derived frame's file, manifest, or selector for
+# the /file route and any other path),
 # cache status, [referer host,] requests, bytes (edgeResponseBytes) and sampled.
 # EDGE_USAGE_BY_REFERER=1 adds the clientRefererHost dimension and column. The
 # field is not documented on the pages the README cites, so check it against
@@ -94,7 +95,8 @@ else
     printf 'day\tprefix\tkind\tcache_status\trequests\tbytes\tsampled\n'
 fi
 jq -r --arg by_referer "${EDGE_USAGE_BY_REFERER:-}" '
-    def kind: if test("/files/") then "file"
+    def kind: if test("^/api(/v1)?/datasets/derived/.*/files/") then "derived_file"
+        elif test("/files/") then "file"
         elif test("^/api(/v1)?/datasets/spec_[^/]*/cv_[^/]*$") then "manifest"
         else "selector" end;
     map({day: .dimensions.date, prefix: (.dimensions.clientRequestPath | if startswith("/api/v1/") then "/api/v1/datasets" else "/api/datasets" end),

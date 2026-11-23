@@ -174,13 +174,16 @@ locals {
   # ignores case and lets * span slashes. A dataset id starts spec_ and a
   # content version cv_. A digest file is
   # <prefix>spec_<id>/cv_<hex>/files/<digest>, and a manifest is exactly
-  # <prefix>spec_<id>/cv_<hex>. Each pattern is paired with a test that rules
-  # out a deeper path: nothing may follow the digest, and the manifest has no
-  # third segment, which also excludes the /file selector. Share slot data is
-  # left out, since a share that is withdrawn has no purge path.
+  # <prefix>spec_<id>/cv_<hex>. A derived frame's file is
+  # <prefix>derived/ops_<id>/ocv_<hex>/files/<digest>. Each pattern is paired
+  # with a test that rules out a deeper path: nothing may follow the digest,
+  # and the manifest has no third segment, which also excludes the /file
+  # selector. A derived frame's manifest and selector stay uncached. Share
+  # slot data is left out, since a share that is withdrawn has no purge path.
   edge_cache_path_match = join(" or ", concat(
     [for prefix in local.dataset_path_prefixes : "(http.request.uri.path wildcard \"${prefix}spec_*/cv_*/files/*\" and not http.request.uri.path wildcard \"${prefix}*/*/files/*/*\")"],
     [for prefix in local.dataset_path_prefixes : "(http.request.uri.path wildcard \"${prefix}spec_*/cv_*\" and not http.request.uri.path wildcard \"${prefix}*/*/*\")"],
+    [for prefix in local.dataset_path_prefixes : "(http.request.uri.path wildcard \"${prefix}derived/ops_*/ocv_*/files/*\" and not http.request.uri.path wildcard \"${prefix}derived/*/*/files/*/*\")"],
   ))
 
   # A request with an Origin header is cross-origin, and its response carries
@@ -213,13 +216,16 @@ locals {
   edge_cache_logged_path = join(" or ", [for prefix in local.dataset_path_prefixes : "starts_with(http.request.uri.path, \"${prefix}\")"])
 }
 
-# Makes the website's dataset files and dataset manifests cache-eligible for
-# reads with no Authorization header, from any origin. Cloudflare then follows the
-# Cache-Control the website sends: a pinned digest file for a year, and a
-# working file and a manifest for 300 s. A response with no-store or with no
-# Cache-Control is never stored. The website sets Cache-Tag to the content
-# version on dataset responses, so a revoked version is purged by tag
-# (infra/dfo-prod/edge/README.md, "Revoking a dataset version"). Share slot
+# Makes the website's dataset files, dataset manifests and derived frames'
+# files cache-eligible for reads with no Authorization header, from any origin.
+# Cloudflare then follows the Cache-Control the website sends: a pinned digest
+# file for a year, and a working file, a manifest and a derived frame's file
+# for 300 s. A response with no-store or with no Cache-Control is never
+# stored. The website sets Cache-Tag to the content version on dataset
+# responses, so a revoked version is purged by tag
+# (infra/dfo-prod/edge/README.md, "Revoking a dataset version"). A revocation
+# cannot yet name the derived frames computed from it, so their files expire
+# from the edge within 300 s. Share slot
 # data is not in the rule; the website serves it with its own Cache-Control.
 #
 # The rule exists only while var.edge_cache_enabled is true, and the
@@ -254,14 +260,14 @@ resource "cloudflare_ruleset" "cache" {
 
   zone_id     = var.cloudflare_zone_id
   name        = "Cache"
-  description = "Cache the website's dataset files and manifests for reads with no Authorization header."
+  description = "Cache the website's dataset files, manifests and derived files for reads with no Authorization header."
   kind        = "zone"
   phase       = "http_request_cache_settings"
 
   rules = [
     {
       ref         = "datasets_plain_reads"
-      description = "Cache dataset files and dataset manifests for requests with no Authorization header, as the origin's Cache-Control says."
+      description = "Cache dataset files, dataset manifests and derived frame files for requests with no Authorization header, as the origin's Cache-Control says."
       expression  = "${local.edge_cache_get} and (${local.edge_cache_path_match}) and (${local.edge_cache_logged_path}) and ${local.edge_cache_plain_request}"
       action      = "set_cache_settings"
       action_parameters = {
