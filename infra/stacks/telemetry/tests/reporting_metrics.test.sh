@@ -199,6 +199,19 @@ SOURCES="WITH
     ('2026-10-19', 'subject', 'health', false, 8.0, 2.0, 0.25),
     ($CUR, 'subject', 'health', false, 9.0, 1.0, 0.11)])
   ),
+  website_returning_weekly AS (
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, active_accounts INT64, active_browsers INT64, active_staff INT64, returning_accounts_2_of_4 INT64, returning_browsers_2_of_4 INT64, returning_staff_2_of_4 INT64, returning_accounts_3_of_8 INT64, returning_browsers_3_of_8 INT64, returning_staff_3_of_8 INT64, weeks_observed_of_last_8 INT64, weeks_observed_of_last_4 INT64>>[
+    ('2026-10-12', 10, 20, 3, 4, 6, 2, 3, 5, 1, 8, 4),
+    ('2026-10-19', 11, 21, 3, 5, 7, 2, 4, 6, 2, 8, 4),
+    ($CUR, 12, 22, 4, 6, 8, 3, 5, 7, 3, 8, 4)])
+  ),
+  topic_callers_weekly AS (
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, axis STRING, topic_id STRING, topic_name STRING, callers INT64, staff_callers INT64, shared_servers INT64, datasets_pulled FLOAT64, total_callers INT64, observed BOOL>>[
+    ('2026-10-12', 'api', 'subject', 'health', 'Health', 5, 1, 0, 7.5, 20, true),
+    ('2026-10-12', 'mcp', 'subject', 'health', 'Health', 3, 0, 2, 4.0, 9, true),
+    ('2026-10-19', 'api', 'finance_kind', 'grant', 'Grants', 4, 1, 0, 6.0, 18, false),
+    ($CUR, 'api', 'subject', 'health', 'Health', 6, 2, 0, 8.0, 21, true)])
+  ),
   int_variable_topics AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<variable_dcid STRING, main_subject STRING, finance_kind STRING, stale BOOL>>[
     ('v1', 'health', 'grant', false),
@@ -221,7 +234,8 @@ metrics_rows() {
         public_repos_weekly=public_repos_weekly reach_weekly=reach_weekly \
         regular_consumers_weekly=regular_consumers_weekly regular_organisations_weekly=regular_organisations_weekly \
         requests_daily=requests_daily standing_pulls_weekly=standing_pulls_weekly supply_coverage_daily=supply_coverage_daily \
-        topic_demand_weekly=topic_demand_weekly topic_taxonomy=topic_taxonomy trust_weekly=trust_weekly
+        topic_callers_weekly=topic_callers_weekly topic_demand_weekly=topic_demand_weekly topic_taxonomy=topic_taxonomy trust_weekly=trust_weekly \
+        website_returning_weekly=website_returning_weekly
 }
 
 check metrics_headline_weekly \
@@ -348,5 +362,16 @@ check metrics_variable_topics \
 {"axis":"subject","topic_id":"health","topic_name":"Health","variables":2}
 {"axis":"subject","topic_id":"trade","topic_name":"trade","variables":1}' \
     "$(metrics_rows metrics_variable_topics 't.axis, t.topic_id')"
+
+check metrics_website_returning_weekly \
+    '{"iso_week":"2026-10-12","active_accounts":10,"active_browsers":20,"active_staff":3,"returning_accounts_2_of_4":4,"returning_browsers_2_of_4":6,"returning_staff_2_of_4":2,"returning_accounts_3_of_8":3,"returning_browsers_3_of_8":5,"returning_staff_3_of_8":1,"weeks_observed_of_last_8":8,"weeks_observed_of_last_4":4}
+{"iso_week":"2026-10-19","active_accounts":11,"active_browsers":21,"active_staff":3,"returning_accounts_2_of_4":5,"returning_browsers_2_of_4":7,"returning_staff_2_of_4":2,"returning_accounts_3_of_8":4,"returning_browsers_3_of_8":6,"returning_staff_3_of_8":2,"weeks_observed_of_last_8":8,"weeks_observed_of_last_4":4}' \
+    "$(metrics_rows metrics_website_returning_weekly 't.iso_week')"
+
+check metrics_topic_callers_weekly \
+    '{"iso_week":"2026-10-12","surface":"api","axis":"subject","topic_id":"health","topic_name":"Health","callers":5,"staff_callers":1,"shared_servers":0,"datasets_pulled":7.5,"total_callers":20,"observed":true}
+{"iso_week":"2026-10-12","surface":"mcp","axis":"subject","topic_id":"health","topic_name":"Health","callers":3,"staff_callers":0,"shared_servers":2,"datasets_pulled":4,"total_callers":9,"observed":true}
+{"iso_week":"2026-10-19","surface":"api","axis":"finance_kind","topic_id":"grant","topic_name":"Grants","callers":4,"staff_callers":1,"shared_servers":0,"datasets_pulled":6,"total_callers":18,"observed":false}' \
+    "$(metrics_rows metrics_topic_callers_weekly 't.iso_week, t.surface, t.axis, t.topic_id')"
 
 finish reporting_metrics.test.sh
