@@ -17,7 +17,7 @@ analytics_repository_id = "1464310463"
 # analytics Deploy workflow pushed for main; the workflow moves the Jobs named
 # in the repository variable ANALYTICS_JOBS to each later image.
 analytics_jobs_enabled = true
-analytics_jobs_image   = "europe-west1-docker.pkg.dev/prod-fin-observatory/analytics/dfo-analytics:bc8d2f8d470d4d31124e0635e3411184a268dac7"
+analytics_jobs_image   = "europe-west1-docker.pkg.dev/prod-fin-observatory/analytics/dfo-analytics:e7371e5adc6dab5df7fab3be90a4ce354639b74b"
 
 # The hourly dbt build and its freshness Job replace the logs_daily scheduled
 # query, and the dfo_reporting views read the analytics tables. The probes
