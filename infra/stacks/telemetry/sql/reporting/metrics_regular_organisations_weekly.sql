@@ -1,7 +1,8 @@
 -- The view dfo_reporting.metrics_regular_organisations_weekly, a Terraform
 -- template (reporting_views.tf) over the analytics dbt marts. Grain: surface x
--- iso_week x audience x organisation_group. Groups only; the mart suppresses
--- small groups as null.
+-- iso_week x audience x organisation_group. Groups only. organisations counts
+-- domains for Named organisations alone; the other groups, including No label,
+-- hold account counts, and no count is suppressed for small cells.
 SELECT
   r.surface,
   r.iso_week,

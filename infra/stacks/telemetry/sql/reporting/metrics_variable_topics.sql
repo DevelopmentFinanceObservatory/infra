@@ -1,7 +1,8 @@
 -- The view dfo_reporting.metrics_variable_topics, a Terraform template
 -- (reporting_views.tf) over the analytics dbt marts. Grain: axis x topic_id.
 -- Today's catalogue variables by main subject and by finance kind, from
--- int_variable_topics (labels that are not stale).
+-- int_variable_topics (labels that are not stale). Totals dip while a topics
+-- run re-asks changed variables.
 WITH labelled AS (
   SELECT 'subject' AS axis, main_subject AS topic_id, variable_dcid
   FROM `${int_variable_topics}`

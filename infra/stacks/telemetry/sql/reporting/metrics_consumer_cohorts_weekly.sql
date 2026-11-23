@@ -2,8 +2,10 @@
 -- (reporting_views.tf) over the analytics dbt marts. Grain: surface x
 -- cohort_week x caller_class x audience. A cohort is the keys first active on a
 -- surface in that week; pooled addresses join none. The mart leaves a return
--- null until the surface has observed the week it falls in, and leaves every
--- rate null for the address class, whose counts are floors.
+-- null until the surface has observed the week it falls in. A rate is retained
+-- over cohort size within one caller class; in the address class a changed
+-- address counts as a departure and several people behind one address count as
+-- one, so read it beside the identified rows.
 SELECT
   c.surface,
   c.cohort_week,

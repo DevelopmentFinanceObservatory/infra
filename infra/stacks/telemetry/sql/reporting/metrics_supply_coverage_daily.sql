@@ -1,7 +1,8 @@
 -- The view dfo_reporting.metrics_supply_coverage_daily, a Terraform template
 -- (reporting_views.tf) over the analytics dbt marts. Grain: day x coverage
--- (curated, data_commons, missing). Target sources on the seeded list by how
--- the day's catalogue holds them. Complete days only.
+-- (curated, data_commons, missing, unknown). Target sources on the seeded list
+-- by how the day's catalogue holds them; unknown is a day whose build logged
+-- no provenance lists. Complete days only.
 SELECT
   s.day,
   s.coverage,
