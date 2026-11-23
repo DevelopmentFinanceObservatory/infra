@@ -14,7 +14,7 @@
 #   dfo-prod-analytics-citations  python -m dfo_analytics.citations, the 1st of each month at 06:00 UTC
 #   dfo-prod-analytics-topics-variables  python -m dfo_analytics.topics variables, Mondays at 07:00 UTC
 #   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:45 UTC
-#   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, Mondays at 08:00 UTC
+#   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, daily at 08:00 UTC
 #   dfo-prod-analytics-call-specs        python -m dfo_analytics.extract.observation_specs, hourly at minute 35, except 04:35 to 06:35
 #
 # var.analytics_jobs_enabled creates everything in this file, the
@@ -122,8 +122,8 @@ locals {
 
   # The probes, each with the hours its absence alert looks back (the weekly
   # period plus a day, the monthly period plus four days, or 26 hours for the
-  # daily topics turns pass, which evaluates every 300 s as the grade alert
-  # does) and the least
+  # daily topics turns and specs passes, which evaluate every 300 s as the
+  # grade alert does) and the least
   # evaluation interval Cloud Monitoring allows for a PromQL condition that
   # looks that far back: 1 hour from 8 to 16 days, 6 hours from 32 to 93 days
   # (docs.cloud.google.com/monitoring/alerts/using-promql).
@@ -133,11 +133,11 @@ locals {
     replay     = { lookback_hours = 192, evaluation_interval = "3600s" }
     citations  = { lookback_hours = 840, evaluation_interval = "21600s" }
 
-    # The topics passes: weekly like the probes, and the daily turns pass
-    # with the grader's 26-hour window.
+    # The topics passes: the variables pass weekly like the probes, and the
+    # daily turns and specs passes with the grader's 26-hour window.
     "topics-variables" = { lookback_hours = 192, evaluation_interval = "3600s" }
     "topics-turns"     = { lookback_hours = 26, evaluation_interval = "300s" }
-    "topics-specs"     = { lookback_hours = 192, evaluation_interval = "3600s" }
+    "topics-specs"     = { lookback_hours = 26, evaluation_interval = "300s" }
   }
 
   # Every key of var.analytics_probes_enabled. The hourly call-specs Job has a
@@ -266,10 +266,11 @@ locals {
         GITHUB_TOKEN = google_secret_manager_secret.analytics_probe["repos_github_token"].secret_id
       }
     }
-    # 15 PageSpeed Insights calls in sequence, each up to 180 seconds with up
-    # to three tries and a backoff between tries. The worst case is 15 x 3 x
-    # 180 s = 8,100 s, about 2.3 hours with the backoff, so the timeout is 3
-    # hours. A run with no failed tries takes a few minutes.
+    # 5 URLs measured 3 times each, 15 measurements in sequence. A measurement
+    # makes up to three PageSpeed Insights calls of up to 180 seconds each,
+    # with a 10 s and a 20 s backoff between them. The worst case is 15 x (3 x
+    # 180 s + 30 s) = 8,550 s, about 2.4 hours, so the timeout is 3 hours. A
+    # run with no failed tries takes a few minutes.
     lighthouse = {
       account  = google_service_account.analytics_job["lighthouse"]
       args     = ["python", "-m", "dfo_analytics.lighthouse"]
@@ -383,7 +384,7 @@ locals {
       args     = ["python", "-m", "dfo_analytics.topics", "specs"]
       timeout  = "3600s"
       memory   = "2Gi"
-      schedule = "0 8 * * 1"
+      schedule = "0 8 * * *"
       env = merge(local.analytics_topics_env, {
         TOPICS_SPEC_SERVICES     = "${local.analytics_apis_service_name},${var.namespace}-website"
         TOPICS_APIS_URL          = local.analytics_apis_url
@@ -809,10 +810,9 @@ resource "google_monitoring_alert_policy" "analytics_grade_not_succeeding" {
 # so it opens only if the probe then stops succeeding. Cloud Monitoring lets a
 # PromQL condition that looks back 8 to 16 days evaluate hourly at most, and
 # one that looks back 32 to 93 days every 6 hours, so the weekly probes and
-# the topics variables and specs passes evaluate every 3600 s, the citation
-# probe every 21600 s, and the turns pass, whose 26-hour window is shorter
-# than that range, every 300 s as the grade policy does
-# (local.analytics_probes). The hourly call-specs Job is not among them: its
+# the topics variables pass evaluate every 3600 s, the citation probe every
+# 21600 s, and the turns and specs passes, whose 26-hour window is shorter than
+# that range, every 300 s as the grade policy does (local.analytics_probes). The hourly call-specs Job is not among them: its
 # absence alert is analytics_job_not_succeeding.
 resource "google_monitoring_alert_policy" "analytics_probe_not_succeeding" {
   for_each = { for name in local.analytics_probes_active : name => local.analytics_probes[name] if contains(keys(local.analytics_probes), name) && contains(keys(local.analytics_jobs_created), name) }
@@ -971,5 +971,75 @@ resource "google_monitoring_alert_policy" "analytics_call_specs_lost" {
 
   alert_strategy {
     auto_close = "3600s"
+  }
+}
+
+# dbt prints one result line per test, and a test at severity warn that finds
+# rows prints `<n> of <total> WARN <rows> <test name> ...` and lets the build
+# succeed, so no Job policy sees it. The three reconciliation tests compare a
+# producer's feeds per day: assert_reconcile_dfo_apis, assert_reconcile_mcp and
+# assert_reconcile_studio. Two more warn-severity tests guard the delivery-line
+# cutover: assert_backfill_deliveries_counts_are_frozen and
+# assert_delivery_line_cutover_vars_match_the_data. The metric counts their
+# WARN result lines, as analytics_edge_objects_lost does for the edge extract.
+# The dbt Job runs hourly, so a standing warning logs again each run.
+resource "google_logging_metric" "analytics_reconcile_warned" {
+  count = local.analytics_jobs_count
+
+  name    = "${var.namespace}-analytics-reconcile-warned"
+  project = var.project_id
+  filter  = <<-EOT
+    resource.type="cloud_run_job"
+    resource.labels.job_name="${google_cloud_run_v2_job.analytics["dbt"].name}"
+    resource.labels.location="${var.region}"
+    textPayload=~" WARN [0-9]+ (assert_reconcile_(dfo_apis|mcp|studio)|assert_backfill_deliveries_counts_are_frozen|assert_delivery_line_cutover_vars_match_the_data) "
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+resource "time_sleep" "analytics_reconcile_warned_metric_propagation" {
+  count = local.analytics_jobs_count
+
+  depends_on      = [google_logging_metric.analytics_reconcile_warned]
+  create_duration = "120s"
+}
+
+resource "google_monitoring_alert_policy" "analytics_reconcile_warned" {
+  count = local.analytics_jobs_count
+
+  project      = var.project_id
+  display_name = "${google_cloud_run_v2_job.analytics["dbt"].name} reconciliation test warned"
+  combiner     = "OR"
+
+  depends_on = [time_sleep.analytics_reconcile_warned_metric_propagation]
+
+  conditions {
+    display_name = "WARN result line for a reconciliation or delivery-line cutover test"
+
+    condition_threshold {
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.analytics_reconcile_warned[0].name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      # ALIGN_SUM, as for the edge metric.
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
+      }
+    }
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  # The dbt Job runs hourly, so a standing warning logs again within the hour
+  # and keeps one incident open.
+  alert_strategy {
+    auto_close = "7200s"
   }
 }
