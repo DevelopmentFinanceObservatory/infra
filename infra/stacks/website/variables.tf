@@ -172,3 +172,13 @@ variable "turnstile_site_key" {
   type        = string
   default     = null
 }
+
+variable "api_key_tag_secrets_version" {
+  description = "Version of the API key tag secret that the service mounts as API_KEY_TAG_SECRETS. Pinned, so a new version reaches instances only through the revision an apply of this value creates. 1 is the version api_key_tag_secrets.tf generates. A rotation adds versions by hand and sets this to each in turn. See README, \"API key tag secrets\"."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*$", var.api_key_tag_secrets_version))
+    error_message = "api_key_tag_secrets_version must be a version number such as \"1\"; \"latest\" would let a new version reach instances before any revision."
+  }
+}

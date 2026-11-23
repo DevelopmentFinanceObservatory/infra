@@ -39,3 +39,6 @@ turnstile_site_key = "0x4AAAAAAFiLWYsFJwHodJgu"
 
 # Organisations whose verified accounts may open the Graph Explorer.
 graph_explorer_email_domains = ["one.org", "ods.coop", "ode.partners"]
+
+# Version of dfo-dev-website-staging-api-key-tag-secrets that the service mounts. A rotation sets this to each new version in turn. See README, "API key tag secrets".
+api_key_tag_secrets_version = "1"
