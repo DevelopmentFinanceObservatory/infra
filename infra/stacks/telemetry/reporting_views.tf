@@ -34,7 +34,9 @@ locals {
     cloudflare       = [google_bigquery_dataset.web_history.dataset_id]
     cloudflare_pages = [google_bigquery_dataset.web_history.dataset_id]
     billing          = [var.billing_export_dataset]
-    # The metrics views read the marts the analytics dbt build writes.
+    # The metrics views, studio_turn_grades, api_consumers_daily,
+    # consumer_keys_daily and declared_agent_requests_daily read the marts the
+    # analytics dbt build writes.
     metrics = [google_bigquery_dataset.analytics["analytics"].dataset_id]
   }
 
@@ -235,6 +237,26 @@ locals {
       source      = "cloudflare_pages"
       description = "Cloudflare page loads per UTC day for the prototypes app's paths under /prototypes, the only paths captured: eyeball GET requests answered 200 with HTML on the website's hosts, from no verified bot and from verified bots, for the days scripts/load-cloudflare-pages-history.sh loaded."
       query       = templatefile("${path.module}/sql/reporting/cloudflare_pages_daily.sql", { history = "${local.web_history_ref}.cloudflare_pages_daily" })
+    }
+    studio_turn_grades = {
+      source      = "metrics"
+      description = "One row per Studio turn the topics Job labelled: the grader's final_grade (A answered, P partly, C asked for more detail, N no data, F a feature DFO lacks, X no response), whether it counts in the Studio question measures, its audience, and the question's main subject, topics and finance kind. Grade columns are null until the grader grades the turn. No trace id, caller or text."
+      query       = templatefile("${path.module}/sql/reporting/studio_turn_grades.sql", { studio_turn_topics = "${local.metrics_ref}.studio_turn_topics" })
+    }
+    api_consumers_daily = {
+      source      = "metrics"
+      description = "Consumers per UTC day, surface, consumer kind, caller class and audience, with an HLL++ sketch of them, their summed indicator and spec uses, delivery lines, backfill reads and rows served. Read the caller classes apart: a pooled consumer stands for no one person. No consumer key."
+      query       = templatefile("${path.module}/sql/reporting/api_consumers_daily.sql", { consumer_daily = "${local.metrics_ref}.consumer_daily" })
+    }
+    consumer_keys_daily = {
+      source      = "metrics"
+      description = "Person keys per whole UTC day and key kind across every surface: keys seen, keys returning from the 2 to 28 days before, the 7-day trailing returning count and share, and whether the day looks like a rotated hashing key. No key."
+      query       = templatefile("${path.module}/sql/reporting/consumer_keys_daily.sql", { consumer_key_persistence_daily = "${local.metrics_ref}.consumer_key_persistence_daily" })
+    }
+    declared_agent_requests_daily = {
+      source      = "metrics"
+      description = "Website requests per UTC day, route, kind, declared agent (crawler, user_fetcher, sdk or mcp_client), agent name and status class from agents that name themselves in their User-Agent, with the GETs answered 2xx, through yesterday."
+      query       = templatefile("${path.module}/sql/reporting/declared_agent_requests_daily.sql", { declared_agent_requests_daily = "${local.metrics_ref}.declared_agent_requests_daily" })
     }
     model_spend_daily = {
       source      = "billing"
