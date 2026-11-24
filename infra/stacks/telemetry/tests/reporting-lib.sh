@@ -11,13 +11,13 @@
 
 PROJECT="${1:-prod-fin-observatory}"
 
-# view_sql <view> <placeholder>=<text>...: prints sql/reporting/<view>.sql
-# with each `${name}` placeholder, backticks included, replaced by <text>.
-# Exits when a placeholder is left over.
+# view_sql <view> <placeholder>=<text>...: prints <view>.sql from SQL_DIR
+# (default sql/reporting) with each `${name}` placeholder, backticks
+# included, replaced by <text>. Exits when a placeholder is left over.
 view_sql() {
     local view="$1" sql pair name
     shift
-    sql="$(cat "$DIR/../sql/reporting/$view.sql")"
+    sql="$(cat "${SQL_DIR:-$DIR/../sql/reporting}/$view.sql")"
     for pair in "$@"; do
         name="${pair%%=*}"
         sql="${sql//"\`\${$name}\`"/${pair#*=}}"

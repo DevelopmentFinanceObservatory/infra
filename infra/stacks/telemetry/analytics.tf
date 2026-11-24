@@ -60,17 +60,18 @@ locals {
 
   # The datasets dbt/models/sources.yml in the analytics repository declares.
   # website_export and langfuse_export are created by the website and ai
-  # stacks, the GA4 export dataset by the GA4 BigQuery link, and the billing
-  # export dataset by the foundation stack. dfo_logs holds request IPs and
-  # user agents, and both accounts and every analytics developer below read
-  # it, as README "Logs" lists.
+  # stacks, and the GA4 export dataset by the GA4 BigQuery link. billing_dfo
+  # holds the DFO projects' billing lines (billing_dfo_costs below), so no
+  # account here reads the billing export itself. dfo_logs holds
+  # request IPs and user agents, and both accounts and every analytics
+  # developer below read it, as README "Logs" lists.
   analytics_source_datasets = [
     google_logging_linked_dataset.telemetry.link_id,
     "website_export",
     "langfuse_export",
     var.ga4_export_dataset,
     google_bigquery_dataset.searchconsole.dataset_id,
-    var.billing_export_dataset,
+    google_bigquery_dataset.billing_dfo.dataset_id,
     google_bigquery_dataset.logs_daily.dataset_id,
     google_bigquery_dataset.web_history.dataset_id,
     google_bigquery_dataset.analytics_job["edge_export"].dataset_id,
@@ -83,10 +84,10 @@ locals {
     google_bigquery_dataset.analytics_job["langfuse_specs"].dataset_id,
   ]
 
-  # The service accounts, each with the one dataset it writes. The
-  # runner writes only analytics, so a model the analytics repository places in
-  # another dataset with +schema needs a WRITER grant on that dataset here
-  # first.
+  # The service accounts, each with the one dataset it writes. The runner
+  # also writes reporting_marts (analytics_runner_reporting_marts below). A
+  # model the analytics repository places in any other dataset with +schema
+  # needs a WRITER grant on that dataset here first.
   analytics_accounts = {
     ci = {
       display_name = "${var.namespace} analytics CI"
@@ -161,6 +162,71 @@ resource "google_bigquery_dataset_access" "analytics_writer" {
   dataset_id    = google_bigquery_dataset.analytics[each.value.dataset].dataset_id
   role          = "WRITER"
   user_by_email = google_service_account.analytics[each.key].email
+}
+
+# The tables behind the dfo_reporting views that read the raw exports, which
+# the analytics repository's prod target writes with +schema: reporting_marts.
+# They hold spend, account and per-turn rows, so they sit apart from
+# analytics, which the topic-specs account in analytics_job_accounts reads.
+# Only the runner writes them, and dashboard readers reach them through the
+# authorised dfo_reporting views.
+resource "google_bigquery_dataset" "reporting_marts" {
+  dataset_id  = "reporting_marts"
+  location    = local.bigquery_location
+  description = "Tables behind the dfo_reporting views that read the raw exports, built by the analytics repository's scheduled dbt run as ${var.namespace}-analytics-runner."
+
+  # Every grant on this dataset is a google_bigquery_dataset_access, as on the
+  # dbt datasets above.
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_bigquery_dataset_access" "analytics_runner_reporting_marts" {
+  dataset_id    = google_bigquery_dataset.reporting_marts.dataset_id
+  role          = "WRITER"
+  user_by_email = google_service_account.analytics["runner"].email
+}
+
+# The billing account also bills projects outside DFO, so the analytics
+# accounts and developers read the billing export through this view, which
+# keeps only the projects in var.spend_callers, each labelled with its caller.
+# The view is authorised on the export, and nothing in this stack grants the
+# export itself to anyone who reads billing_dfo.
+resource "google_bigquery_dataset" "billing_dfo" {
+  dataset_id  = "billing_dfo"
+  location    = local.bigquery_location
+  description = "Cloud Billing cost lines of the DFO projects named in spend_callers, for the analytics repository's dbt build."
+
+  # Every grant on this dataset is a google_bigquery_dataset_access.
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_bigquery_table" "billing_dfo_costs" {
+  dataset_id  = google_bigquery_dataset.billing_dfo.dataset_id
+  table_id    = "costs"
+  description = "One row per Cloud Billing usage cost line of a project in spend_callers, with the caller its spend belongs to and its credits summed."
+
+  # A view holds no data.
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query = templatefile("${path.module}/sql/billing_dfo_costs.sql", {
+      billing = "${var.project_id}.${var.billing_export_dataset}.gcp_billing_export_v1_*"
+      callers = join(", ", [for id, caller in var.spend_callers : "('${id}', '${caller}')"])
+    })
+  }
+}
+
+resource "google_bigquery_dataset_access" "billing_dfo_costs" {
+  dataset_id = var.billing_export_dataset
+
+  view {
+    project_id = var.project_id
+    dataset_id = google_bigquery_dataset.billing_dfo.dataset_id
+    table_id   = google_bigquery_table.billing_dfo_costs.table_id
+  }
 }
 
 # READER on dfo_logs is all a query of the linked dataset needs, as for
