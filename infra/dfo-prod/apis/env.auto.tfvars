@@ -76,6 +76,7 @@ search_catalogue_tick = false
 # dfo-prod-telemetry-principals. Every apis alert policy notifies it.
 alert_notification_channel = "Telemetry pipeline alerts: team"
 
-# Sets the Jev call semaphore to 32 per apis process, a ceiling of 160 across
-# the five instances. The dfo-apis code default is 8 on main and 64 on dev.
+# Sets the Jev call semaphore size per apis process to 32, a ceiling of 160 in
+# flight across the five instances. Leaving it unset keeps the apis code
+# default.
 search_jev_max_concurrency = 32
