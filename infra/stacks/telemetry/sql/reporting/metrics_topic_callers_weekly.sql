@@ -1,8 +1,8 @@
 -- The view dfo_reporting.metrics_topic_callers_weekly, a Terraform template
 -- (reporting_views.tf) over the analytics dbt marts. Grain: iso_week x surface
 -- x axis x topic_id. Distinct callers who pulled data on each topic, with ONE
--- Campaign staff and AI tools' shared servers counted apart. Complete weeks
--- only.
+-- Campaign staff and AI tools' shared servers counted apart, and the datasets
+-- those shared servers pulled on the topic. Complete weeks only.
 SELECT
   c.iso_week,
   c.surface,
@@ -13,6 +13,7 @@ SELECT
   c.staff_callers,
   c.shared_servers,
   c.datasets_pulled,
+  c.shared_server_datasets,
   c.total_callers,
   c.observed
 FROM `${topic_callers_weekly}` AS c
