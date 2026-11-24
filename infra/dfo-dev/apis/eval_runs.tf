@@ -63,7 +63,7 @@ resource "google_service_account" "evals_runner" {
 resource "google_service_account_iam_member" "evals_runner_wif" {
   service_account_id = google_service_account.evals_runner.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${var.github_wif_pool_id}/attribute.repo_ref/${var.dfo_evals_repository_id}:refs/heads/main"
+  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${var.github_wif_pool_id}/attribute.repo_ref/${var.dfo_evals_repository_id}:refs/heads/dev"
 
   lifecycle {
     # member identifies the binding, so a new repository id replaces it.
