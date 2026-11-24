@@ -261,6 +261,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ matrix.stack == 'edge' && secrets.CLOUDFLARE_API_TOKEN || '' }}
         run: '"$GITHUB_WORKSPACE/base/scripts/tf-capture.sh" plan terraform plan -input=false -lock=false -no-color -out=tfplan'
 
+      # See plan.yml's "Pinned secret versions". Base's copy, like every
+      # script here; it reaches main in the same release as this step.
+      - name: Check pinned secret versions
+        id: pins
+        if: steps.plan.outcome == 'success' && matrix.stack == 'website'
+        env:
+          PROJECT: ${{ steps.auth.outputs.project_id }}
+        run: '"$GITHUB_WORKSPACE/base/scripts/check-secret-pins.sh" tfplan "$PROJECT" API_KEY_TAG_SECRETS ADMIN_EMAILS'
+
       - name: Guard against destroying protected data
         id: guard
         if: steps.plan.outcome == 'success'
@@ -295,6 +304,7 @@ jobs:
           VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
           PLAN_OUTCOME: ${{ steps.plan.outcome }}
           GUARD_OUTCOME: ${{ steps.guard.outcome }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
         with:
           script: |
             const comment = require(`${process.env.GITHUB_WORKSPACE}/base/.github/scripts/plan-comment.js`);

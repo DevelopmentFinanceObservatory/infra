@@ -29,6 +29,8 @@ module.exports = async ({ github, context, core }) => {
   const validateOutcome = process.env.VALIDATE_OUTCOME || "skipped";
   const planOutcome = process.env.PLAN_OUTCOME || "skipped";
   const guardOutcome = process.env.GUARD_OUTCOME || "skipped";
+  // Only plan.yml's website job runs the secret pin check; elsewhere it is unset.
+  const pinsOutcome = process.env.PINS_OUTCOME || "skipped";
   // Redacted here, at the read, so neither the summary nor the comment can
   // see an address.
   const redact = redactor(process.env.PRINCIPALS_FILE);
@@ -67,8 +69,11 @@ module.exports = async ({ github, context, core }) => {
   // Headline verdict line: always visible, never inside the
   // collapsed plan section below.
   const guardBlocked = guardOutcome !== "success" && guardOutcome !== "skipped";
+  const pinsBlocked = pinsOutcome !== "success" && pinsOutcome !== "skipped";
   let verdict;
-  if (guardBlocked) {
+  if (pinsBlocked) {
+    verdict = "**Blocked by the secret pin check.** This plan mounts a secret version that is missing, disabled or destroyed, so the revision would not start. See the run's `Check pinned secret versions` step.";
+  } else if (guardBlocked) {
     verdict = "**Blocked by the destroy guard.** This plan would destroy or replace protected resources. Add the `allow-destroy` label to override, or change the plan so it doesn't.";
   } else if (planOutcome === "success") {
     if (/^No changes\./m.test(planText)) {
@@ -97,7 +102,7 @@ module.exports = async ({ github, context, core }) => {
   // Prefer plan's own output; fall back to validate's, then
   // init's, when a later step never ran.
   const detailText = planText || validateText || initText;
-  const sectionKind = !detailText ? "none" : (planOutcome === "success" && !guardBlocked) ? "collapsed" : "expanded";
+  const sectionKind = !detailText ? "none" : (planOutcome === "success" && !guardBlocked && !pinsBlocked) ? "collapsed" : "expanded";
 
   // Compute the fence once, from the full (pre-truncation) detail
   // text, and reuse it everywhere: truncation only removes
