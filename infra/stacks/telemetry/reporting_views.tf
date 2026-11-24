@@ -11,6 +11,13 @@
 # analytics dbt build's tables of the same name in the analytics dataset,
 # which carry the same columns, and are authorised on that dataset instead.
 # README "Analytics jobs" gives the parity check to run before the switch.
+#
+# Under the same switch every other view in reporting_mart_views reads the
+# analytics build's table of its own name through
+# sql/reporting/<view>_analytics.sql, which selects the view's columns, so
+# every reporting view reads the one dbt pipeline. The dbt models apply the
+# rules of the views' own templates, which the views keep while the switch is
+# off.
 locals {
   # The dataset holding the log-fed day tables the views read.
   reporting_log_dataset = var.analytics_dbt_schedule_enabled ? google_bigquery_dataset.analytics["analytics"].dataset_id : google_bigquery_dataset.logs_daily.dataset_id
@@ -26,17 +33,38 @@ locals {
     website_requests = [local.reporting_log_dataset]
     # analytics.website_page_views_daily already joins the rebuilt history.
     website_pages    = var.analytics_dbt_schedule_enabled ? [local.reporting_log_dataset] : [local.reporting_log_dataset, google_bigquery_dataset.web_history.dataset_id]
-    website          = ["website_export"]
-    accounts         = ["website_export"]
-    langfuse         = ["langfuse_export"]
-    ga4              = [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
-    search_console   = [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
-    cloudflare       = [google_bigquery_dataset.web_history.dataset_id]
-    cloudflare_pages = [google_bigquery_dataset.web_history.dataset_id]
-    billing          = [var.billing_export_dataset]
+    website          = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : ["website_export"]
+    accounts         = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : ["website_export"]
+    langfuse         = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : ["langfuse_export"]
+    ga4              = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
+    search_console   = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
+    cloudflare       = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : [google_bigquery_dataset.web_history.dataset_id]
+    cloudflare_pages = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : [google_bigquery_dataset.web_history.dataset_id]
+    billing          = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : [var.billing_export_dataset]
     # The metrics views read the marts the analytics dbt build writes.
-    metrics = [google_bigquery_dataset.analytics["analytics"].dataset_id]
+    metrics = [local.reporting_analytics_dataset]
   }
+
+  reporting_analytics_dataset = google_bigquery_dataset.analytics["analytics"].dataset_id
+
+  # The views that read the analytics table of their own name under
+  # var.analytics_dbt_schedule_enabled, each through
+  # sql/reporting/<view>_analytics.sql.
+  reporting_mart_views = [
+    "account_returns_daily",
+    "accounts_daily",
+    "ai_observations_daily",
+    "ai_turns",
+    "cloudflare_daily",
+    "cloudflare_pages_daily",
+    "ga4_daily",
+    "ga4_pages_daily",
+    "ga4_user_ranges",
+    "model_spend_daily",
+    "product_events_daily",
+    "search_console_daily",
+    "search_console_pages",
+  ]
 
   reporting_log_ref = "${var.project_id}.${local.reporting_log_dataset}"
   web_history_ref   = "${var.project_id}.${google_bigquery_dataset.web_history.dataset_id}"
@@ -120,7 +148,18 @@ locals {
     }
   }
 
-  reporting_views = merge(local.metrics_views, {
+  reporting_views = {
+    for name, view in local.reporting_views_from_sources : name => (
+      var.analytics_dbt_schedule_enabled && contains(local.reporting_mart_views, name)
+      ? merge(view, { query = templatefile("${path.module}/sql/reporting/${name}_analytics.sql", { table = "${var.project_id}.${local.reporting_analytics_dataset}.${name}" }) })
+      : view
+    )
+  }
+
+  # Each view as its template reads its sources, before
+  # var.analytics_dbt_schedule_enabled moves the views in reporting_mart_views
+  # to the analytics tables.
+  reporting_views_from_sources = merge(local.metrics_views, {
     service_requests_daily = {
       source      = "logs"
       description = "Cloud Run requests per UTC day and service, with status counts and approximate latency quantiles."
