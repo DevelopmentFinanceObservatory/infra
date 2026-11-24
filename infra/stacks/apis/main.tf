@@ -94,6 +94,15 @@ data "google_service_account" "apis_deployer" {
   account_id = "dfo-apis-deployer@${var.project_id}.iam.gserviceaccount.com"
 }
 
+# The deploy workflow calls the candidate revision's tagged URL before traffic
+# moves, with an ID token the deployer mints for itself through
+# generateIdToken. The grant sits on the deployer's own account alone.
+resource "google_service_account_iam_member" "apis_deployer_self_id_token" {
+  service_account_id = data.google_service_account.apis_deployer.name
+  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
+  member             = "serviceAccount:${data.google_service_account.apis_deployer.email}"
+}
+
 module "apis_service" {
   source = "../../modules/cloud-run-service"
 

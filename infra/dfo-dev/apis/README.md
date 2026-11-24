@@ -300,6 +300,8 @@ The pool id and the apis repository's id reach this stack as `github_wif_pool_id
 
 The apis service's readiness depends on the origin catalogue existing. The deploy workflow has to update and execute `dfo-dev-origin-catalogue` (`gcloud run jobs update --image` then `gcloud run jobs execute --wait`, the same two calls it already runs against the migrate Jobs) before it deploys the apis service. In the reverse order the first deploy races a service revision that raises at startup against a Job that has not yet produced an artifact.
 
+Before traffic moves to a new revision, the deploy workflow calls the revision's tagged URL with an ID token the deployer mints for itself. `apis_deployer_self_id_token` in `main.tf` grants the deployer `roles/iam.serviceAccountOpenIdTokenCreator` on its own account for that call, and on no other account. Without it the call answers 403: dev warns and moves traffic, and prod fails the deploy with the previous revision still serving.
+
 ## State bootstrap
 
 This stack's state prefix has to exist before CI can plan it. `terraform init` creates the state on first run, creating it takes a lock on the bucket, and the read-only `dfo-infra-planner` service account CI plans as cannot write there. Until the prefix exists, `plan (apis)` fails on init with a 403 on `terraform/state/dfo-dev/apis/default.tflock`, and no flag on `init` avoids it: the write is the state creation, not the lock.
