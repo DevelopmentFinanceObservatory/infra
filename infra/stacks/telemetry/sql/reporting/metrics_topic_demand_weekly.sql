@@ -4,7 +4,9 @@
 -- grader's judgement, split into turns graded N (no_data_turns) and F
 -- (missing_feature_turns). staff_share is the share of turns from ONE Campaign
 -- staff accounts, a floor where turns name no consumer (unknown_caller_share).
--- Weeks follow the studio surface's observation mark.
+-- Every topic-week carries its figures, however few its turns, so judge a
+-- small base on the total read. Weeks follow the studio surface's observation
+-- mark.
 SELECT
   d.iso_week,
   d.axis,
