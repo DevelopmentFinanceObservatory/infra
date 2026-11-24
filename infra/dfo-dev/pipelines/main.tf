@@ -61,6 +61,21 @@ resource "google_storage_bucket" "processed" {
   }
 }
 
+resource "google_storage_bucket" "exports" {
+  name                        = "${var.project_id}-pipelines-exports"
+  location                    = var.region
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  soft_delete_policy {
+    retention_duration_seconds = 7776000 # 90 days
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 # One BigQuery dataset per pipeline in the format `<source>_<dataset>`
 # Terraform owns the datasets but the pipelines own the tables inside them.
 locals {
