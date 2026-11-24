@@ -34,9 +34,8 @@ locals {
     cloudflare       = [google_bigquery_dataset.web_history.dataset_id]
     cloudflare_pages = [google_bigquery_dataset.web_history.dataset_id]
     billing          = [var.billing_export_dataset]
-    # The metrics views, studio_turn_grades, api_consumers_daily,
-    # consumer_keys_daily and declared_agent_requests_daily read the marts the
-    # analytics dbt build writes.
+    # The metrics views, the Studio, consumer and declared-agent views read the
+    # marts the analytics dbt build writes.
     metrics = [google_bigquery_dataset.analytics["analytics"].dataset_id]
   }
 
@@ -238,14 +237,19 @@ locals {
       description = "Cloudflare page loads per UTC day for the prototypes app's paths under /prototypes, the only paths captured: eyeball GET requests answered 200 with HTML on the website's hosts, from no verified bot and from verified bots, for the days scripts/load-cloudflare-pages-history.sh loaded."
       query       = templatefile("${path.module}/sql/reporting/cloudflare_pages_daily.sql", { history = "${local.web_history_ref}.cloudflare_pages_daily" })
     }
-    studio_turn_grades = {
+    studio_turn_grades_daily = {
       source      = "metrics"
-      description = "One row per Studio turn the topics Job labelled: the grader's final_grade (A answered, P partly, C asked for more detail, N no data, F a feature DFO lacks, X no response), whether it counts in the Studio question measures, its audience, and the question's main subject, topics and finance kind. Grade columns are null until the grader grades the turn. No trace id, caller or text."
-      query       = templatefile("${path.module}/sql/reporting/studio_turn_grades.sql", { studio_turn_topics = "${local.metrics_ref}.studio_turn_topics" })
+      description = "Studio turns the topics Job labelled per UTC day, grade, population flag, audience, main subject, finance kind and data ask. final_grade is A answered, P partly, C asked for more detail, N no data, F a feature DFO lacks, X no response, or T a test turn, which never counts in the population; it and in_population and audience are null until the grader grades the turn. Counts only: no turn, time, trace id, caller or text."
+      query       = templatefile("${path.module}/sql/reporting/studio_turn_grades_daily.sql", { studio_turn_topics = "${local.metrics_ref}.studio_turn_topics" })
+    }
+    studio_question_topics_daily = {
+      source      = "metrics"
+      description = "Topics of Studio questions per UTC day, population flag, audience and topic: the turns naming the topic and the sum of its weight in them. Counts only: no turn, time, trace id, caller or text."
+      query       = templatefile("${path.module}/sql/reporting/studio_question_topics_daily.sql", { studio_turn_topics = "${local.metrics_ref}.studio_turn_topics" })
     }
     api_consumers_daily = {
       source      = "metrics"
-      description = "Consumers per UTC day, surface, consumer kind, caller class and audience, with an HLL++ sketch of them, their summed indicator and spec uses, delivery lines, backfill reads and rows served. Read the caller classes apart: a pooled consumer stands for no one person. No consumer key."
+      description = "Distinct consumers per UTC day, surface, consumer kind, caller class and audience, with their summed indicator and spec uses, delivery lines, backfill reads and rows served. consumers counts its own row only, so a sum over days counts a returning consumer once a day. Read the caller classes apart: a pooled consumer stands for no one person. No consumer key and no sketch of one."
       query       = templatefile("${path.module}/sql/reporting/api_consumers_daily.sql", { consumer_daily = "${local.metrics_ref}.consumer_daily" })
     }
     consumer_keys_daily = {

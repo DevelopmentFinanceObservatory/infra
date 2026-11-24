@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# Tests sql/reporting/studio_turn_grades.sql, api_consumers_daily.sql,
+# Tests sql/reporting/studio_turn_grades_daily.sql,
+# studio_question_topics_daily.sql, api_consumers_daily.sql,
 # consumer_keys_daily.sql and declared_agent_requests_daily.sql against
 # literal rows in the analytics marts' contracts (dbt/models/marts/models.yml
 # in the analytics repository), each with a column the view must leave out.
 # Not wired into CI. Run by hand after touching one of the views:
 #   infra/stacks/telemetry/tests/reporting_studio_consumers_agents.test.sh [project]
 #
-# studio_turn_grades drops the trace ids and keeps an ungraded turn with null
-# grade columns. api_consumers_daily counts three studio accounts on
-# 2026-11-20, two of them external, and sums their uses, so the indicator one
-# account used and another used too counts twice in indicator_uses; the
-# address row stays its own group, and the sketch counts what consumers does.
+# Four turns on 2026-11-20: two graded P that share a row, an ungraded one with
+# null grade columns, and a test turn graded T outside the population. The
+# topics view counts the turns naming each topic and sums its weights.
+# api_consumers_daily counts three studio accounts on 2026-11-20, two of them
+# external, and sums their uses, so the indicator one account used and another
+# used too counts twice in indicator_uses; the address row stays its own group.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,7 +25,9 @@ SOURCES="WITH
       question_topics ARRAY<STRUCT<topic_id STRING, weight FLOAT64>>, main_subject STRING,
       finance_kind STRING, asks_for_data BOOL, final_grade STRING, in_population BOOL, audience STRING>>[
     ('t1', 'w1', '2026-11-20 10:00:00+00', [('aid', 0.75), ('debt', 0.25)], 'aid', 'aid', TRUE, 'P', TRUE, 'external'),
-    ('t2', 'w2', '2026-11-20 23:59:59+00', [('not_data_question', 1.0)], 'not_data_question', 'not_finance', FALSE, NULL, NULL, NULL)])
+    ('t2', 'w2', '2026-11-20 23:59:59+00', [('not_data_question', 1.0)], 'not_data_question', 'not_finance', FALSE, NULL, NULL, NULL),
+    ('t3', 'w3', '2026-11-20 11:00:00+00', [('debt', 1.0)], 'debt', 'debt', TRUE, 'T', FALSE, 'one_campaign'),
+    ('t4', 'w4', '2026-11-20 12:00:00+00', [('aid', 1.0)], 'aid', 'aid', TRUE, 'P', TRUE, 'external')])
   ),
   consumers AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<day DATE, surface STRING, consumer STRING, consumer_kind STRING,
@@ -45,22 +49,24 @@ SOURCES="WITH
     ('2026-11-20', '/data/:id', 'page', 'user_fetcher', 'ChatGPT-User', 2, 7, 6, 'not selected')])
   )"
 
-check studio_turn_grades \
-    '{"day":"2026-11-20","started_at":"2026-11-20T10:00:00Z","final_grade":"P","in_population":true,"audience":"external","main_subject":"aid","question_topics":[{"topic_id":"aid","weight":0.75},{"topic_id":"debt","weight":0.25}],"finance_kind":"aid","asks_for_data":true}
-{"day":"2026-11-20","started_at":"2026-11-20T23:59:59Z","final_grade":null,"in_population":null,"audience":null,"main_subject":"not_data_question","question_topics":[{"topic_id":"not_data_question","weight":1}],"finance_kind":"not_finance","asks_for_data":false}' \
-    "$(view_rows studio_turn_grades 't.started_at' studio_turn_topics=turns)"
+check studio_turn_grades_daily \
+    '{"day":"2026-11-20","final_grade":null,"in_population":null,"audience":null,"main_subject":"not_data_question","finance_kind":"not_finance","asks_for_data":false,"turns":1}
+{"day":"2026-11-20","final_grade":"P","in_population":true,"audience":"external","main_subject":"aid","finance_kind":"aid","asks_for_data":true,"turns":2}
+{"day":"2026-11-20","final_grade":"T","in_population":false,"audience":"one_campaign","main_subject":"debt","finance_kind":"debt","asks_for_data":true,"turns":1}' \
+    "$(view_rows studio_turn_grades_daily 't.final_grade' studio_turn_topics=turns)"
+
+check studio_question_topics_daily \
+    '{"day":"2026-11-20","in_population":null,"audience":null,"topic_id":"not_data_question","turns":1,"weight":1}
+{"day":"2026-11-20","in_population":false,"audience":"one_campaign","topic_id":"debt","turns":1,"weight":1}
+{"day":"2026-11-20","in_population":true,"audience":"external","topic_id":"aid","turns":2,"weight":1.75}
+{"day":"2026-11-20","in_population":true,"audience":"external","topic_id":"debt","turns":1,"weight":0.25}' \
+    "$(view_rows studio_question_topics_daily 't.in_population, t.topic_id' studio_turn_topics=turns)"
 
 check api_consumers_daily \
-    '{"day":"2026-11-20","surface":"studio","consumer_kind":"account","caller_class":"identified","audience":"external","consumers":2,"sketch_consumers":2,"indicator_uses":3,"spec_uses":2,"spec_fetches":4,"delivery_lines":5,"backfill_reads":0,"rows_served":110}
-{"day":"2026-11-20","surface":"studio","consumer_kind":"account","caller_class":"identified","audience":"one_campaign","consumers":1,"sketch_consumers":1,"indicator_uses":1,"spec_uses":1,"spec_fetches":2,"delivery_lines":2,"backfill_reads":0,"rows_served":20}
-{"day":"2026-11-20","surface":"studio","consumer_kind":"ip","caller_class":"address","audience":"unknown","consumers":1,"sketch_consumers":1,"indicator_uses":1,"spec_uses":1,"spec_fetches":1,"delivery_lines":1,"backfill_reads":1,"rows_served":5}' \
-    "$(query_rows "SELECT TO_JSON_STRING(t) AS row FROM (
-  SELECT * EXCEPT (consumers_sketch, indicator_uses, spec_uses, spec_fetches, delivery_lines, backfill_reads, rows_served),
-    HLL_COUNT.EXTRACT(consumers_sketch) AS sketch_consumers,
-    indicator_uses, spec_uses, spec_fetches, delivery_lines, backfill_reads, rows_served
-  FROM ($(view_sql api_consumers_daily consumer_daily=consumers))
-) AS t
-ORDER BY t.consumer_kind, t.audience")"
+    '{"day":"2026-11-20","surface":"studio","consumer_kind":"account","caller_class":"identified","audience":"external","consumers":2,"indicator_uses":3,"spec_uses":2,"spec_fetches":4,"delivery_lines":5,"backfill_reads":0,"rows_served":110}
+{"day":"2026-11-20","surface":"studio","consumer_kind":"account","caller_class":"identified","audience":"one_campaign","consumers":1,"indicator_uses":1,"spec_uses":1,"spec_fetches":2,"delivery_lines":2,"backfill_reads":0,"rows_served":20}
+{"day":"2026-11-20","surface":"studio","consumer_kind":"ip","caller_class":"address","audience":"unknown","consumers":1,"indicator_uses":1,"spec_uses":1,"spec_fetches":1,"delivery_lines":1,"backfill_reads":1,"rows_served":5}' \
+    "$(view_rows api_consumers_daily 't.consumer_kind, t.audience' consumer_daily=consumers)"
 
 check consumer_keys_daily \
     '{"day":"2026-11-20","key_kind":"ip","keys_seen":40,"returning_keys":12,"trailing_returning_keys":10.5,"trailing_returning_share":0.25,"keys_look_rotated":false}' \
