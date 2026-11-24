@@ -37,7 +37,7 @@ A pull request into `dev` runs `.github/workflows/plan.yml`. It checks formattin
 
 - `terraform fmt check` covers formatting.
 - `Changed stacks planned` fails unless every changed stack planned and cleared the destroy guard.
-- `Prod pin placeholder unchanged` fails a pull request that edits `infra/dfo-prod/dcp/image.auto.tfvars`.
+- `Prod pin placeholder unchanged` fails a pull request that adds, edits, renames or deletes `infra/dfo-prod/dcp/image.auto.tfvars`, unless its head sets the file to `main`'s current version, as a sync of `main` into `dev` does.
 
 The per-stack `plan (<stack>)` jobs are not required, since a matrix job exists only for a changed stack. A pull request that deletes or renames a stack root fails `Detect changed stacks` until it carries the `allow-destroy` label, so destroy the stack's resources first. A draft pull request runs no jobs in `plan.yml`, `plan-prod.yml` or `prod-pin-placeholder.yml`. Marking it ready starts them.
 
