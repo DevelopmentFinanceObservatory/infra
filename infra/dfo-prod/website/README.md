@@ -76,13 +76,11 @@ The stack creates `dfo-prod-website-turnstile-secret-key` with a first version h
 
 ## Internal engineering accounts
 
-The stack creates `dfo-prod-website-internal-eng-emails` with a first version holding the literal `none`, which marks nobody, so every event carries `internal_eng: false` until the real list is added. The list names staff, so it never appears in this repository. After the prod apply, add the list as a new version holding every entry, then roll a new revision, since running instances keep the value they started with and `min_instances = 1` keeps one running. A list change reaches new events only. The entries below are placeholders:
+The stack creates `dfo-prod-website-internal-eng-emails` with a first version holding the literal `none`, which marks nobody, so every event carries `internal_eng: false` until the real list is added. The list names staff, so it never appears in this repository. After the prod apply, add the list as a new version holding every entry, then roll a new revision with the label roll in "Rolling onto a new revision", since running instances keep the value they started with and `min_instances = 1` keeps one running. A list change reaches new events only. The entries below are placeholders:
 
 ```
 printf '%s' 'eng@example.org,example.net' | gcloud secrets versions add dfo-prod-website-internal-eng-emails \
   --project prod-fin-observatory --data-file=-
-gcloud run services update dfo-prod-website --project prod-fin-observatory \
-  --region europe-west1 --update-labels=internal-eng-emails-rotated=$(date +%Y%m%d%H%M)
 ```
 
 Dispatching the website's production deploy (`gh workflow run deploy-prod.yml -R DevelopmentFinanceObservatory/website --ref main`) also rolls a revision. `infra/dfo-dev/website/README.md` ("Internal engineering accounts") explains the mount and the list format in full.

@@ -258,12 +258,7 @@ printf '%s' 'eng@example.org,example.net' | gcloud secrets versions add dfo-dev-
   --project dev-fin-observatory --data-file=-
 ```
 
-`printf` rather than `echo` keeps a trailing newline out of the stored value. A secret env var resolves when an instance starts, so running instances keep the list they started with until the service rolls onto a new revision. Force one without a new image by changing a label:
-
-```
-gcloud run services update dfo-dev-website-staging --project dev-fin-observatory \
-  --region northamerica-northeast1 --update-labels=internal-eng-emails-rotated=$(date +%Y%m%d%H%M)
-```
+`printf` rather than `echo` keeps a trailing newline out of the stored value. A secret env var resolves when an instance starts, so running instances keep the list they started with until the service rolls onto a new revision. Force one without a new image with the label roll in "Rolling onto a new revision".
 
 The app sets the flag when it records an event, so a list change reaches new events only, and events recorded earlier keep their flag. The anonymous events (`share.open`, `embed.view`, `feedback.submit`) carry only the email's domain, so on them only a domain entry sets the flag.
 
