@@ -287,7 +287,7 @@ variable "allow_unauthenticated" {
 }
 
 variable "search_jev_max_concurrency" {
-  description = "Size of the Jev call semaphore in each apis process (SEARCH_JEV_MAX_CONCURRENCY). dfo-apis uses the value as the exact size, so setting it replaces the code default, which differs between releases. The service-wide ceiling is this value times max_instances. Must stay below the 100 connections of the Jev HTTP client pool, because a call that waits for a pooled connection times out and opens the Jev breaker. Null leaves the variable unset."
+  description = "Size of the Jev call semaphore in each apis process (SEARCH_JEV_MAX_CONCURRENCY). dfo-apis uses the value as the exact size, so setting it replaces the code default, which differs between releases. The apis image starts one uvicorn worker per instance, so the service-wide ceiling is this value times max_instances. Must stay below the 100 connections of the Jev HTTP client pool, because a call that waits for a pooled connection times out and opens the Jev breaker. Null leaves the variable unset."
   type        = number
   default     = null
 
