@@ -12,4 +12,4 @@ The GCP footprint the `dfo-pipelines` repo reads and writes.
 
 ## BigQuery datasets
 
-One dataset per upstream source in format `<source>_<dataset>` e.g. `oecd_dac_crs`. To add a source, append its dataset id to `local.bigquery_datasets` in `main.tf`.
+One dataset per upstream source in format `<source>_<dataset>` e.g. `oecd_dac_crs`. To add a source, append its dataset id to `local.bigquery_datasets` in `infra/stacks/pipelines/main.tf`.
