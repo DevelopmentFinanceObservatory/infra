@@ -3,14 +3,13 @@
 -- topic_id. Studio questions split across subjects by weight; unmet is the
 -- grader's judgement, split into turns graded N (no_data_turns) and F
 -- (missing_feature_turns). staff_share is the share of turns from ONE Campaign
--- staff accounts, a floor where turns name no consumer (unknown_caller_share). The mart suppresses topic-weeks under 5 weighted turns.
+-- staff accounts, a floor where turns name no consumer (unknown_caller_share).
 -- Weeks follow the studio surface's observation mark.
 SELECT
   d.iso_week,
   d.axis,
   d.topic_id,
   COALESCE(t.name, d.topic_id) AS topic_name,
-  d.suppressed,
   d.turns,
   d.unmet_turns,
   d.unmet_rate,
