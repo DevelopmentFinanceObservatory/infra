@@ -138,14 +138,16 @@ Running instances keep the values they started with. A change to `turnstile_site
 
 `ADMIN_EMAILS` is the comma-separated, case-insensitive list of verified emails that may open the website's admin page, `/admin/api-keys`. Unset, empty or naming nobody, the app has no admins and that page answers 404. The list is private and this repository is public, so it lives in Secret Manager: `admin_emails.tf` owns the secret container (`dfo-dev-website-staging-admin-emails`) and the mount, and the list itself is added out-of-band as a version. The `cloud-run-service` module grants the website's runtime service account `roles/secretmanager.secretAccessor` on it, as it does for every secret in `secret_env_vars`, so nothing else needs granting.
 
-The mount tracks `latest`, so a change to the list is a new version with no Terraform change. A new version reaches every instance that starts after it, on autoscale or restart, and a roll brings the running instances onto it. A placeholder first version holding the literal `none` keeps the mount resolvable, since Cloud Run refuses to start a revision whose secret env var can't be read. `none` is not an email address, so the placeholder admits nobody, and `prevent_destroy` stops Terraform recreating it as the newest version. Each version replaces the whole list, so add one holding every admin. The prompt keeps the list off the screen and out of shell history:
+The mount is pinned to `admin_emails_version` in `env.auto.tfvars`, as the tag secret is, so a new list reaches instances only through the revision that the apply of a new value creates. Anyone who can add a version, project owners and the Terraform applier among them, therefore cannot grant admin alone: each change goes through a reviewed pull request, and its diff, a version number, reveals no address. The first version, which the stack creates and the pin starts at, holds the literal `none` and keeps the mount resolvable, since Cloud Run refuses to start a revision whose secret env var can't be read. `none` is not an email address, so it admits nobody.
+
+To change the list, add a version holding every admin, since each version replaces the whole list. The prompt keeps the list off the screen and out of shell history, and the command prints the new version's name, which ends in its number:
 
 ```
 read -rs ADMINS; printf '%s' "$ADMINS" | gcloud secrets versions add dfo-dev-website-staging-admin-emails \
-  --project dev-fin-observatory --data-file=-
+  --project dev-fin-observatory --data-file=- --format='value(name)'
 ```
 
-`printf` rather than `echo` keeps a trailing newline out of the stored value. Then roll the service onto a new revision (see "Rolling onto a new revision"), so an admin removed from the list loses the page on every instance.
+`printf` rather than `echo` keeps a trailing newline out of the stored value. Then set `admin_emails_version` to that number in a pull request. Merging it applies the change and rolls a new revision, which every instance then runs, so no label roll is needed. A removal takes effect at that apply too, not when the version is added, so merge the pull request promptly when an admin must lose the page.
 
 ## API key tag secrets
 

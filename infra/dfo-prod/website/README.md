@@ -49,14 +49,14 @@ Then roll the service onto a new revision (see "Rolling onto a new revision").
 
 ## Admin emails
 
-The stack creates `dfo-prod-website-admin-emails` with a first version holding the literal `none`, which is not an email address, so nobody is an admin and `/admin/api-keys` answers 404. The list is private, so it lives only in Secret Manager. After the first apply, add a version holding every admin, then roll the service onto a new revision (see "Rolling onto a new revision"), so an admin removed from the list loses the page on the warm instance too. The prompt keeps the list off the screen and out of shell history. The runtime account's `secretAccessor` on the secret comes from the `cloud-run-service` module:
+The stack creates `dfo-prod-website-admin-emails` with a first version holding the literal `none`, which is not an email address, so nobody is an admin and `/admin/api-keys` answers 404. The list is private, so it lives only in Secret Manager. The mount is pinned to `admin_emails_version` in `env.auto.tfvars`, which starts at that first version, so each list reaches prod through the apply of a reviewed release pull request. To change the list, add a version holding every admin. The prompt keeps the list off the screen and out of shell history, and the command prints the new version's name, which ends in its number. The runtime account's `secretAccessor` on the secret comes from the `cloud-run-service` module:
 
 ```
 read -rs ADMINS; printf '%s' "$ADMINS" | gcloud secrets versions add dfo-prod-website-admin-emails \
-  --project prod-fin-observatory --data-file=-
+  --project prod-fin-observatory --data-file=- --format='value(name)'
 ```
 
-`infra/dfo-dev/website/README.md` explains the mount in full.
+Then set `admin_emails_version` in `infra/dfo-prod/website/env.auto.tfvars` to that number in a pull request, and release it to main. Its apply rolls a new revision, the warm instance included, so no label roll is needed. A removal takes effect at that apply too, not when the version is added, so release it promptly when an admin must lose the page. `infra/dfo-dev/website/README.md` ("Admin emails") explains the mount in full.
 
 ## API key tag secrets
 

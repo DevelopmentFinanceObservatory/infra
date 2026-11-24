@@ -182,3 +182,13 @@ variable "api_key_tag_secrets_version" {
     error_message = "api_key_tag_secrets_version must be a version number such as \"1\"; \"latest\" would let a new version reach instances before any revision."
   }
 }
+
+variable "admin_emails_version" {
+  description = "Version of the admin emails secret that the service mounts as ADMIN_EMAILS. Pinned, so a new list reaches instances only through the revision an apply of this value creates, after its pull request is reviewed. 1 is the `none` placeholder admin_emails.tf creates, which admits nobody. See README, \"Admin emails\"."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*$", var.admin_emails_version))
+    error_message = "admin_emails_version must be a version number such as \"1\"; \"latest\" would let anyone who can add a version grant admin without review."
+  }
+}
