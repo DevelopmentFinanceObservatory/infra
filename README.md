@@ -20,7 +20,7 @@ infra/
 │   ├── pipelines/
 │   ├── platform/
 │   └── website/
-└── dfo-prod/       # prod environment: the same stacks except pipelines, plus the public edge and telemetry
+└── dfo-prod/       # prod environment: the same stacks, plus the public edge and telemetry
     ├── edge/
     └── telemetry/
 scripts/            # helpers for CI, GitHub setup and the dcp stack
