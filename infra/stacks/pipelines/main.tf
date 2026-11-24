@@ -54,6 +54,15 @@ locals {
     "data_commons_mappings",
     "oecd_dac_codelists",
     "oecd_dac_crs",
+    "dfo_shared",
+    "imf_weo",
+    "oecd_dac1",
+    "oecd_dac2a",
+    "oecd_dac2b",
+    "one_climate_finance",
+    "one_conversion_tables",
+    "one_imputed_multilateral_sectors",
+    "world_bank_ids",
   ])
 }
 
