@@ -193,6 +193,10 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # repo_environment, repo_ref and repo_env_ref exist so a deployer binding
   # can name one GitHub Environment, one git ref, or both together, without
   # matching the raw `sub` claim.
+  #
+  # repo_workflow_ref lets a binding name a workflow file and its ref. A
+  # dispatched PR evaluation and the nightly can both run on refs/heads/dev.
+  #
   # GitHub does not emit one subject shape: dfo-infra still gets the legacy
   # `repo:<owner>/<repo>` prefix while dfo-ai and dfo-apis already get the
   # immutable `repo:<owner>@<owner_id>/<repo>@<repo_id>` form, with all three
@@ -210,16 +214,14 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # owns it, and turns policy drift into a denied exchange on the offending
   # run rather than a silent widening.
   #
-  # All three compose from `repository_id` rather than `repository` for the same
-  # reason the attribute condition below gates on ids. A repository rename or
+  # The deployer attributes use `repository_id` for the same reason the
+  # attribute condition below gates on ids. A repository rename or
   # transfer changes the name and preserves the id, so a name-composed
   # binding would keep exchanging tokens and stop matching anything, with
   # Terraform planning clean throughout because nothing in this repo changed
-  # — the identical silent failure these attributes exist to end. Names stay
-  # mapped above for legibility; they do not decide authorization.
+  # — the identical silent failure these attributes exist to end.
   #
-  # All three guard on the claims being present rather than referencing them
-  # bare.
+  # The composed attributes guard on the presence of their claims.
   # This mapping is evaluated for every token the pool exchanges, including
   # jobs that declare no `environment:` and so carry no `environment` claim,
   # such as the apis repository's search eval jobs. An unguarded
@@ -243,6 +245,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.repo_environment"    = "'environment' in assertion ? assertion.repository_id + ':' + assertion.environment : assertion.repository_id"
     "attribute.repo_ref"            = "'ref' in assertion ? assertion.repository_id + ':' + assertion.ref : assertion.repository_id"
     "attribute.repo_env_ref"        = "'environment' in assertion ? ('ref' in assertion ? assertion.repository_id + ':' + assertion.environment + ':' + assertion.ref : assertion.repository_id) : assertion.repository_id"
+    "attribute.repo_workflow_ref"   = "'workflow_ref' in assertion ? assertion.repository_id + ':' + assertion.workflow_ref : assertion.repository_id"
   }
   # Required: the GitHub OIDC issuer rejects a provider with no attribute
   # condition. Gated on the immutable org id and repository ids, not their
