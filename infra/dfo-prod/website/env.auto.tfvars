@@ -59,3 +59,6 @@ turnstile_site_key = "0x4AAAAAAFiLPXQeqPLKYQs9"
 
 # The event export dataset, ID hashing key, Job and hourly trigger (event_export.tf).
 event_export_enabled = true
+
+# Organisations whose verified accounts may open the Graph Explorer.
+graph_explorer_email_domains = ["one.org", "ods.coop", "ode.partners"]
