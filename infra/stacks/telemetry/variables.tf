@@ -50,6 +50,22 @@ variable "billing_export_dataset" {
   type        = string
 }
 
+variable "reporting_marts_cutover" {
+  description = "Where the dfo_reporting views in reporting_mart_views (reporting_views.tf) read. off: their sources. on: the analytics build's tables in reporting_marts, with the views still authorised on their sources. done: reporting_marts, with the source entries removed. Step one state at a time, forward or back (README \"Reporting marts cutover\")."
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "on", "done"], var.reporting_marts_cutover)
+    error_message = "reporting_marts_cutover must be off, on or done."
+  }
+
+  validation {
+    condition     = var.reporting_marts_cutover == "off" || var.analytics_dbt_schedule_enabled
+    error_message = "reporting_marts_cutover needs analytics_dbt_schedule_enabled, since the scheduled dbt build writes the reporting_marts tables."
+  }
+}
+
 variable "spend_callers" {
   description = "Project ids model_spend_daily keeps, each mapped to the label of the caller its spend belongs to. The billing account also bills projects outside DFO, which the view leaves out."
   type        = map(string)

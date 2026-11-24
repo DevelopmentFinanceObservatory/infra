@@ -14,3 +14,7 @@ spend_callers = {
   "prod-fin-observatory"       = "platform"
   "gen-lang-client-0530528735" = "gemini-shared-key"
 }
+
+# Where the views the analytics build also makes in reporting_marts read:
+# off, on or done, one step at a time (README "Reporting marts cutover").
+reporting_marts_cutover = "off"

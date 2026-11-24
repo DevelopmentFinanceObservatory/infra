@@ -12,12 +12,15 @@
 # which carry the same columns, and are authorised on that dataset instead.
 # README "Analytics jobs" gives the parity check to run before the switch.
 #
-# Under the same switch every other view in reporting_mart_views reads the
-# analytics build's table of its own name through
-# sql/reporting/<view>_analytics.sql, which selects the view's columns, so
-# every reporting view reads the one dbt pipeline. The dbt models apply the
-# rules of the views' own templates, which the views keep while the switch is
-# off.
+# The views in reporting_mart_views read the analytics build's table of their
+# own name in reporting_marts once var.reporting_marts_cutover is on, through
+# sql/reporting/<view>_analytics.sql, which selects the view's columns. The
+# dbt models apply the rules of the views' own templates, which the views
+# keep while the cutover is off. Each of those views is authorised on
+# reporting_marts whatever the cutover says, and on its sources until it is
+# done, so stepping from off to on to done, or back the same way, never
+# leaves a view reading a dataset it is not authorised on. A step straight
+# from done to off would. README "Reporting marts cutover" gives the order.
 locals {
   # The dataset holding the log-fed day tables the views read.
   reporting_log_dataset = var.analytics_dbt_schedule_enabled ? google_bigquery_dataset.analytics["analytics"].dataset_id : google_bigquery_dataset.logs_daily.dataset_id
@@ -33,23 +36,21 @@ locals {
     website_requests = [local.reporting_log_dataset]
     # analytics.website_page_views_daily already joins the rebuilt history.
     website_pages    = var.analytics_dbt_schedule_enabled ? [local.reporting_log_dataset] : [local.reporting_log_dataset, google_bigquery_dataset.web_history.dataset_id]
-    website          = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : ["website_export"]
-    accounts         = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : ["website_export"]
-    langfuse         = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : ["langfuse_export"]
-    ga4              = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
-    search_console   = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
-    cloudflare       = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : [google_bigquery_dataset.web_history.dataset_id]
-    cloudflare_pages = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : [google_bigquery_dataset.web_history.dataset_id]
-    billing          = var.analytics_dbt_schedule_enabled ? [local.reporting_analytics_dataset] : [var.billing_export_dataset]
+    website          = ["website_export"]
+    accounts         = ["website_export"]
+    langfuse         = ["langfuse_export"]
+    ga4              = [var.ga4_export_dataset, google_bigquery_dataset.web_history.dataset_id]
+    search_console   = [google_bigquery_dataset.searchconsole.dataset_id, google_bigquery_dataset.web_history.dataset_id]
+    cloudflare       = [google_bigquery_dataset.web_history.dataset_id]
+    cloudflare_pages = [google_bigquery_dataset.web_history.dataset_id]
+    billing          = [var.billing_export_dataset]
     # The metrics views read the marts the analytics dbt build writes.
-    metrics = [local.reporting_analytics_dataset]
+    metrics = [google_bigquery_dataset.analytics["analytics"].dataset_id]
   }
 
-  reporting_analytics_dataset = google_bigquery_dataset.analytics["analytics"].dataset_id
-
-  # The views that read the analytics table of their own name under
-  # var.analytics_dbt_schedule_enabled, each through
-  # sql/reporting/<view>_analytics.sql.
+  # The views the analytics repository also builds as tables of the same
+  # names in reporting_marts (its dbt/models/marts/reporting), which they read
+  # once var.reporting_marts_cutover is on.
   reporting_mart_views = [
     "account_returns_daily",
     "accounts_daily",
@@ -150,15 +151,15 @@ locals {
 
   reporting_views = {
     for name, view in local.reporting_views_from_sources : name => (
-      var.analytics_dbt_schedule_enabled && contains(local.reporting_mart_views, name)
-      ? merge(view, { query = templatefile("${path.module}/sql/reporting/${name}_analytics.sql", { table = "${var.project_id}.${local.reporting_analytics_dataset}.${name}" }) })
+      var.reporting_marts_cutover != "off" && contains(local.reporting_mart_views, name)
+      ? merge(view, { query = templatefile("${path.module}/sql/reporting/${name}_analytics.sql", { table = "${var.project_id}.${google_bigquery_dataset.reporting_marts.dataset_id}.${name}" }) })
       : view
     )
   }
 
   # Each view as its template reads its sources, before
-  # var.analytics_dbt_schedule_enabled moves the views in reporting_mart_views
-  # to the analytics tables.
+  # var.reporting_marts_cutover moves the views in reporting_mart_views to
+  # the reporting_marts tables.
   reporting_views_from_sources = merge(local.metrics_views, {
     service_requests_daily = {
       source      = "logs"
@@ -289,10 +290,20 @@ locals {
     for name, view in local.reporting_views : name => view if contains(var.reporting_sources, view.source)
   }
 
+  # A view in reporting_mart_views is authorised on reporting_marts from the
+  # first apply, before it reads there, and keeps its source entries until
+  # the cutover is done.
+  reporting_view_datasets = {
+    for name, view in local.reporting_views_enabled : name => concat(
+      var.reporting_marts_cutover == "done" && contains(local.reporting_mart_views, name) ? [] : local.reporting_source_datasets[view.source],
+      contains(local.reporting_mart_views, name) ? [google_bigquery_dataset.reporting_marts.dataset_id] : [],
+    )
+  }
+
   reporting_view_grants = {
     for grant in flatten([
-      for name, view in local.reporting_views_enabled : [
-        for dataset in local.reporting_source_datasets[view.source] : { view = name, dataset = dataset }
+      for name, datasets in local.reporting_view_datasets : [
+        for dataset in datasets : { view = name, dataset = dataset }
       ]
     ]) : "${grant.dataset}/${grant.view}" => grant
   }

@@ -296,7 +296,7 @@ The service views, `website_requests_daily`, `website_page_views_daily` and `mcp
 
 `analytics_dbt_schedule_enabled` disables the `dfo-prod-logs-daily` scheduled query, so the `logs_daily` tables stop growing under it. Under the same switch those seven views read the analytics dbt build's tables in `analytics` instead, and their authorised-view entries move from `logs_daily` and `web_history` to `analytics`. Each view reads the table of the same name: `requests_daily`, `routes_daily`, `errors_daily`, `mcp_daily`, `website_requests_daily`, `website_page_views_daily` and `deploys`. Those tables carry the columns and types the views select. `website_page_views_daily` then reads `analytics.website_page_views_daily`, which the build makes with the rule below, through `sql/reporting/website_page_views_daily_analytics.sql`. Step 6 of "Switching the Jobs on" checks that the two sources agree before the switch.
 
-Under the same switch the thirteen views over the exports and the history tables, `product_events_daily`, `account_returns_daily`, `accounts_daily`, `ai_turns`, `ai_observations_daily`, `ga4_daily`, `ga4_pages_daily`, `ga4_user_ranges`, `search_console_daily`, `search_console_pages`, `cloudflare_daily`, `cloudflare_pages_daily` and `model_spend_daily` (`reporting_mart_views` in `reporting_views.tf`), read the analytics build's table of the same name in `analytics` through `sql/reporting/<view>_analytics.sql`, which selects the view's columns in order, and their authorised-view entries move to `analytics`. The analytics models apply the rules the paragraphs below describe. The tables hold the sources as of the last hourly build at :25, where the view's own template reads them live, and `model_spend_daily` cuts its days at that build's UTC day, so until the first build after midnight UTC it holds one day fewer. `ai_turns`'s `session_sketch` sketches the SHA-256 digest of the session id, which counts the same sessions. `model_spend_daily` keeps the projects in the analytics repository's `spend_callers` seed, which lists the same projects as `spend_callers` here, so a new Gemini key project goes in both. `tests/reporting_analytics_marts.test.sh` pins each template's columns.
+Thirteen views read the exports and the history tables: `product_events_daily`, `account_returns_daily`, `accounts_daily`, `ai_turns`, `ai_observations_daily`, `ga4_daily`, `ga4_pages_daily`, `ga4_user_ranges`, `search_console_daily`, `search_console_pages`, `cloudflare_daily`, `cloudflare_pages_daily` and `model_spend_daily` (`reporting_mart_views` in `reporting_views.tf`). The analytics build also makes each of them as a table of the same name in `reporting_marts`, with the rules the paragraphs below describe, and `reporting_marts_cutover` (`reporting.auto.tfvars`) decides which one the view reads ("Reporting marts cutover"). Once a view reads its table, through `sql/reporting/<view>_analytics.sql`, which selects the view's columns in order, it holds the sources as of the last hourly build at :25, where its own template reads them live. `model_spend_daily` then cuts its days at that build's UTC day, so until the first build after midnight UTC it holds one day fewer. `ai_turns`'s `session_sketch` sketches the SHA-256 digest of the session id, which counts the same sessions. Both sides of `model_spend_daily` keep the projects in `spend_callers`, the table through `billing_dfo.costs` ("Analytics repo"). `tests/reporting_analytics_marts.test.sh` pins each template's columns.
 
 `website_page_views_daily` counts the website's page views per day: requests of kind `page` answered 2xx, from visitors the website did not judge to be bots in `page_views` and from bots in `bot_page_views`. From the request log's first parsed day, the first day on which `logs_daily.website_requests_daily` holds a row other than `unparsed`, it sums those rows. Before that day it reads `web_history.website_page_history` (see "Website page views before the request log"), which counts the public hosts only, while the request log counts every host the service answers. The seam is read from the request log inside the view, so no day is counted twice, and a day such as 2026-10-23, which holds only unparsed lines, keeps its history row. A later day holding only unparsed lines has no row. The view has no callers sketch, since the history cannot rebuild the website's caller digest, so distinct networks come from `website_requests_daily` and start on its first parsed day.
 
@@ -356,6 +356,23 @@ Every view cuts the ISO week holding today, so it returns complete weeks (Monday
 
 `tests/reporting_*.test.sh` in `infra/stacks/telemetry` run each view over literal source rows and fail on any row that differs from the ones they pin. Run them by hand after changing a view.
 
+### Reporting marts cutover
+
+`reporting_marts_cutover` takes three values, and each apply moves it one step, forward or back:
+
+| Value  | The thirteen views read | They are authorised on              |
+| ------ | ----------------------- | ----------------------------------- |
+| `off`  | their sources           | their sources and `reporting_marts` |
+| `on`   | `reporting_marts`       | their sources and `reporting_marts` |
+| `done` | `reporting_marts`       | `reporting_marts`                   |
+
+The `reporting_marts` entries exist from the first apply, before any view reads there, and a step from `on` to `done` only removes entries, so no step leaves a view reading a dataset it is not authorised on. A step straight from `done` to `off` would, for the minutes between the view's new query and its recreated source entries, so a rollback from `done` passes through `on`.
+
+1. Apply `analytics.tf`, which creates `reporting_marts` and `billing_dfo`, then merge the analytics repository's change that builds the thirteen tables. The first hourly build after the merge writes them.
+2. Shortly after a build, run `infra/scripts/compare-reporting-marts.sh`. For each view it checks that the column names, order and types match, prints the days each side holds, and counts the rows on each side and the rows on one side alone, duplicates included, on the days both hold before the current UTC day. It prints counts only and exits 1 when a view differs.
+3. Set `reporting_marts_cutover = "on"` and apply. Open each of the thirteen views, or the Telemetry dashboard, as a member of `readers` with no other grant on the sources. The views read only `reporting_marts` now, so a view that answers is authorised there.
+4. Set `reporting_marts_cutover = "done"` and apply. The plan destroys only `google_bigquery_dataset_access.reporting_views` entries on the sources.
+
 ### Switching a source on
 
 A view cannot name a table that does not exist, so `reporting_sources` in `reporting.auto.tfvars` lists the source groups whose tables exist, and only their views and authorised-view entries are created. Add a group once the tables below exist, and apply.
@@ -375,8 +392,6 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 | `cloudflare_pages` | `cloudflare_pages_daily`                          | `web_history.cloudflare_pages_daily`, from `scripts/load-cloudflare-pages-history.sh`                                                                                                             |
 | `billing`          | `model_spend_daily`                               | a `billing_export.gcp_billing_export_v1_*` table                                                                                                                                                  |
 | `metrics`          | the `metrics_*` views                             | the marts the `metrics_*` views read in `analytics`, from the analytics dbt build                                                                                                                 |
-
-Under `analytics_dbt_schedule_enabled` the views of the `website`, `accounts`, `langfuse`, `ga4`, `search_console`, `cloudflare`, `cloudflare_pages` and `billing` groups read the `analytics` tables of their own names instead, which the hourly dbt build creates once the tables above exist and the analytics accounts can read them (`analytics.tf`).
 
 `bq ls prod-fin-observatory:<dataset>` lists a dataset's tables.
 

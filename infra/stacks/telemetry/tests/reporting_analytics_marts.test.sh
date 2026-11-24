@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Tests the sql/reporting/<view>_analytics.sql templates, which the views in
-# reporting_mart_views (reporting_views.tf) read under
-# var.analytics_dbt_schedule_enabled, each against one literal row in its
-# analytics table's contract (dbt/models/marts/models.yml in the analytics
-# repository). The row puts its columns in reverse order and adds a column
+# reporting_mart_views (reporting_views.tf) read once
+# var.reporting_marts_cutover is on, each against one literal row in its
+# reporting_marts table's contract (dbt/models/marts/reporting/models.yml in
+# the analytics repository). The row puts its columns in reverse order and adds a column
 # the view must leave out, so each check pins the view's columns and their
 # order. Not wired into CI. Run by hand after touching a template:
 #   infra/stacks/telemetry/tests/reporting_analytics_marts.test.sh [project]
