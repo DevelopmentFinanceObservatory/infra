@@ -3,8 +3,8 @@
 # dfo-evals library), and the evals repository builds one static results page
 # from them after each nightly.
 #
-# The bucket lives here because its first writers are the apis repository's
-# eval jobs, whose account (eval_reader.tf) this stack owns, and so every grant
+# The bucket lives here because its first writer is the apis repository's
+# nightly eval, and the apis eval accounts live in this stack, so every grant
 # names the bucket and the accounts by resource reference.
 
 # Copied from ../foundation's `github_repositories["evals"].id`. The pool's
@@ -38,9 +38,18 @@ output "eval_runs_bucket_name" {
   value       = google_storage_bucket.eval_runs.name
 }
 
+locals {
+  # Object names in IAM conditions carry this prefix ahead of the object path.
+  eval_runs_object_prefix = "projects/_/buckets/${google_storage_bucket.eval_runs.name}/objects/"
+  # The one object the results page publisher may overwrite.
+  eval_runs_page_object = "site/index.html"
+  # The suite name the apis nightly writes its runs under.
+  apis_search_suite = "apis-search"
+}
+
 # The evals repository's workflow identity. It reads every run record to build
-# the results page and overwrites the page, so it needs read, create and delete
-# (an overwrite deletes the old object) on this one bucket, and nothing else.
+# the results page and overwrites the page, so it reads the whole bucket and
+# writes the page object alone.
 resource "google_service_account" "evals_runner" {
   project      = var.project_id
   account_id   = "${var.namespace}-evals-runner"
@@ -64,18 +73,72 @@ resource "google_service_account_iam_member" "evals_runner_wif" {
   }
 }
 
-resource "google_storage_bucket_iam_member" "evals_runner_eval_runs_user" {
+resource "google_storage_bucket_iam_member" "evals_runner_eval_runs_viewer" {
   bucket = google_storage_bucket.eval_runs.name
-  role   = "roles/storage.objectUser"
+  role   = "roles/storage.objectViewer"
   member = google_service_account.evals_runner.member
 }
 
-# The apis repository's eval jobs write one new run directory per run and never
-# overwrite one (dfo-evals refuses to), so create is all they need.
-resource "google_storage_bucket_iam_member" "eval_reader_eval_runs_creator" {
+# Overwriting the page creates the new object and deletes the old one, so the
+# account holds objectUser, conditioned on that one object so it cannot alter
+# or delete a run record.
+resource "google_storage_bucket_iam_member" "evals_runner_eval_runs_page_user" {
+  bucket = google_storage_bucket.eval_runs.name
+  role   = "roles/storage.objectUser"
+  member = google_service_account.evals_runner.member
+
+  condition {
+    title       = "results-page-only"
+    description = "Only the published results page object"
+    expression  = "resource.name == \"${local.eval_runs_object_prefix}${local.eval_runs_page_object}\""
+  }
+}
+
+# The apis repository's nightly eval identity. It is separate from
+# eval_reader.tf's account, which pull request jobs also mint, so a pull
+# request cannot write the page or add a run record the page build would
+# then read.
+resource "google_service_account" "apis_eval_writer" {
+  project      = var.project_id
+  account_id   = "${var.namespace}-apis-eval-writer"
+  display_name = "dfo-apis nightly eval run writer (CI)"
+  description  = "Writes the apis nightly eval's run records to the eval runs bucket; holds no project roles"
+}
+
+# Only a run on the apis repository's default branch, where the nightly
+# schedule fires, may impersonate the account. The member keys on
+# `attribute.repo_ref` for the reason sdk_e2e.tf gives.
+resource "google_service_account_iam_member" "apis_eval_writer_wif" {
+  service_account_id = google_service_account.apis_eval_writer.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${var.github_wif_pool_id}/attribute.repo_ref/${var.dfo_apis_repository_id}:refs/heads/dev"
+
+  lifecycle {
+    # member identifies the binding, so a new repository id replaces it.
+    # Creating the new member first keeps the nightly authenticating
+    # through the swap.
+    create_before_destroy = true
+  }
+}
+
+# The nightly writes one new run directory per run and never overwrites one
+# (dfo-evals refuses to), so create under its own suite's prefix is all it
+# needs.
+resource "google_storage_bucket_iam_member" "apis_eval_writer_eval_runs_creator" {
   bucket = google_storage_bucket.eval_runs.name
   role   = "roles/storage.objectCreator"
-  member = google_service_account.eval_reader.member
+  member = google_service_account.apis_eval_writer.member
+
+  condition {
+    title       = "apis-search-runs-only"
+    description = "Only run records under the apis-search suite"
+    expression  = "resource.name.startsWith(\"${local.eval_runs_object_prefix}${local.apis_search_suite}/\")"
+  }
+}
+
+output "apis_eval_writer_service_account_email" {
+  description = "Email of the apis nightly eval's run writer account. The apis repository's nightly workflow impersonates it through the `foundation` stack's `workload_identity_provider` output."
+  value       = google_service_account.apis_eval_writer.email
 }
 
 resource "google_storage_bucket_iam_member" "eval_runs_viewers" {

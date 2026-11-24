@@ -1,7 +1,7 @@
 # The apis repository's search eval job identity. The job stages the origin
 # catalogue onto a GitHub runner, loads the graph release, and starts two
-# local apps against them, so it reads those two buckets. It writes only run
-# records, to the eval runs bucket (eval_runs.tf).
+# local apps against them, so it reads those two buckets. It writes nothing;
+# the nightly's run records go through its own account (eval_runs.tf).
 # It also calls the dev apis service, so it holds run.invoker there.
 #
 # The account lives here, beside the buckets, and not in ../foundation with
