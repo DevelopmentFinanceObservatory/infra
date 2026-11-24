@@ -105,18 +105,17 @@ resource "google_service_account" "apis_eval_writer" {
   description  = "Writes the apis nightly eval's run records to the eval runs bucket; holds no project roles"
 }
 
-# Only a run on the apis repository's default branch, where the nightly
-# schedule fires, may impersonate the account. The member keys on
-# `attribute.repo_ref` for the reason sdk_e2e.tf gives.
+# Only the nightly workflow on the apis repository's default branch may
+# impersonate the account. The PR eval gate can also be dispatched on dev,
+# so the binding uses the workflow file and ref as well as the repository id.
 resource "google_service_account_iam_member" "apis_eval_writer_wif" {
   service_account_id = google_service_account.apis_eval_writer.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${var.github_wif_pool_id}/attribute.repo_ref/${var.dfo_apis_repository_id}:refs/heads/dev"
+  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${var.github_wif_pool_id}/attribute.repo_workflow_ref/${var.dfo_apis_repository_id}:DevelopmentFinanceObservatory/apis/.github/workflows/eval-nightly.yml@refs/heads/dev"
 
   lifecycle {
-    # member identifies the binding, so a new repository id replaces it.
-    # Creating the new member first keeps the nightly authenticating
-    # through the swap.
+    # A new repository id or workflow ref replaces the member. Creating the
+    # new member first keeps the nightly authenticating through the swap.
     create_before_destroy = true
   }
 }
