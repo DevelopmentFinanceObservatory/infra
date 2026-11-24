@@ -287,12 +287,12 @@ variable "allow_unauthenticated" {
 }
 
 variable "search_jev_max_concurrency" {
-  description = "Cap on Jev calls in flight in each apis process (SEARCH_JEV_MAX_CONCURRENCY). The cap applies per instance, so the service-wide ceiling is this value times max_instances. Null leaves the variable unset and the dfo-apis default applies."
+  description = "Size of the Jev call semaphore in each apis process (SEARCH_JEV_MAX_CONCURRENCY). dfo-apis uses the value as the exact size, so setting it replaces the code default, which differs between releases. The service-wide ceiling is this value times max_instances. Must stay below the 100 connections of the Jev HTTP client pool, because a call that waits for a pooled connection times out and opens the Jev breaker. Null leaves the variable unset."
   type        = number
   default     = null
 
   validation {
-    condition     = var.search_jev_max_concurrency == null || (var.search_jev_max_concurrency >= 1 && var.search_jev_max_concurrency == floor(var.search_jev_max_concurrency))
-    error_message = "search_jev_max_concurrency must be null or a whole number of at least 1."
+    condition     = var.search_jev_max_concurrency == null ? true : (var.search_jev_max_concurrency >= 1 && var.search_jev_max_concurrency < 100 && var.search_jev_max_concurrency == floor(var.search_jev_max_concurrency))
+    error_message = "search_jev_max_concurrency must be null or a whole number from 1 to 99, below the Jev client's 100-connection pool."
   }
 }
