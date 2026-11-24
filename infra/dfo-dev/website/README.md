@@ -217,6 +217,8 @@ Set `api_key_tag_secrets_version` to the new number in a pull request, as in ste
 
 Steps 1 and 2 keep both secrets verifying on every instance, so no instance meets a key signed by a secret it doesn't know.
 
+Rolling traffic back to a revision older than step 1, in the console or with `gcloud run services update-traffic`, puts instances back on the old secret alone. Every key signed since step 2 then fails on them until traffic returns to a revision that holds the new secret. Once step 2 is live, roll back only to a revision from step 1 or later.
+
 ## Tenant databases
 
 `database.tf` holds the website's database on the shared Cloud SQL instance from the `platform` stack: accounts, saved views, share links. ADK agent sessions live in the ai stack's own tenant database instead (#155), because ADK creates its schema over whatever connection it gets and the website runtime should hold DML only.
