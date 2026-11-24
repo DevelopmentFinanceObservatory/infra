@@ -175,12 +175,23 @@ Each step below runs in a subshell under `set -euo pipefail`, so a failed read s
 
 The command prints the new version's name, which ends in its number. Set `api_key_tag_secrets_version` to that number in a pull request, and merging it applies the change and rolls a new revision.
 
-**Check before step 2.** Every instance must run the step-1 revision, or a key signed by the new secret reaches an instance that doesn't know it. The two revision names below must match and the percentage must be 100:
+**Check before step 2.** Every instance must run the step-1 revision, or a key signed by the new secret reaches an instance that doesn't know it. A step-1 revision that failed to start leaves the last ready revision serving all traffic, so the check also requires the newest revision created to be the ready one, and the serving revision to mount the version step 1 added. Set `STEP1` to that version number. The check needs `jq`, prints the serving revision and its pin, and stops on any mismatch:
 
 ```
-gcloud run services describe dfo-dev-website-staging --project dev-fin-observatory \
-  --region northamerica-northeast1 \
-  --format='value(status.latestReadyRevisionName,status.traffic[0].revisionName,status.traffic[0].percent)'
+(
+  set -euo pipefail
+  SERVICE=dfo-dev-website-staging PROJECT=dev-fin-observatory REGION=northamerica-northeast1 STEP1=VERSION_FROM_STEP_1
+  SVC=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format=json)
+  CREATED=$(jq -r '.status.latestCreatedRevisionName' <<<"$SVC")
+  READY=$(jq -r '.status.latestReadyRevisionName' <<<"$SVC")
+  [ "$CREATED" = "$READY" ] || { echo "the newest revision $CREATED is not ready; $READY is" >&2; exit 1; }
+  jq -e --arg r "$READY" '[.status.traffic[] | select((.percent // 0) > 0)] | length == 1 and .[0].revisionName == $r and .[0].percent == 100' <<<"$SVC" >/dev/null \
+    || { echo "$READY does not serve all traffic" >&2; exit 1; }
+  PIN=$(gcloud run revisions describe "$READY" --project "$PROJECT" --region "$REGION" --format=json \
+    | jq -r '.spec.containers[0].env[] | select(.name == "API_KEY_TAG_SECRETS") | .valueFrom.secretKeyRef.key')
+  echo "$READY serves all traffic with API_KEY_TAG_SECRETS version $PIN"
+  [ "$PIN" = "$STEP1" ] || { echo "the serving pin is $PIN, not $STEP1" >&2; exit 1; }
+)
 ```
 
 **Step 2: the new secret signs.** Set `STEP1` to the version number step 1 printed. Left as it is, the read fails and the step stops:
