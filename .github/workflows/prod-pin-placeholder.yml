@@ -1,8 +1,17 @@
 # Fail any PR into dev that adds, edits, renames or deletes
-# infra/dfo-prod/dcp/image.auto.tfvars. The dcp repo's prod release build
-# writes that pin with a PR straight into main. A release merges dev into
-# main, and the merge keeps main's pin only while dev leaves the file alone,
-# so an edit on dev would roll prod's dcp image back at the next release.
+# infra/dfo-prod/dcp/image.auto.tfvars, unless the edit sets the file to
+# main's current version. The dcp repo's prod release build writes that pin
+# with a PR straight into main. A release merges dev into main, and the merge
+# keeps main's pin only while dev leaves the file alone, so an edit on dev
+# would roll prod's dcp image back at the next release.
+#
+# A sync that merges main into dev carries main's pin into dev. That edit is
+# safe: once the sync merges, its main commit is the merge base of the next
+# release, dev's pin equals the base's, and the release takes main's pin. So
+# the check passes a PR whose only change to the file is a modification that
+# leaves the head's blob identical to main's. Reverting the file on such a
+# sync is the unsafe option: dev would then differ from the base and the next
+# release would carry dev's older pin into main.
 #
 # Runs on every ready PR into dev, with no paths filter, so it can be a
 # required check on dev. It skips while the PR is a draft and runs again on
@@ -27,6 +36,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PIN_FILE: infra/dfo-prod/dcp/image.auto.tfvars
     steps:
       - name: Check the PR's files
@@ -36,7 +46,21 @@ jobs:
           gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
             --jq '.[] | "\(.status) \(.filename) \(.previous_filename // "")"' >files.txt
           echo "Checked $(wc -l <files.txt) changed file(s)."
-          if awk -v pin="$PIN_FILE" '$2 == pin || $3 == pin { found = 1 } END { exit !found }' files.txt; then
-            echo "::error file=$PIN_FILE::This PR changes $PIN_FILE. Only the dcp repo's prod release writes that file, on main, and a dev edit would roll prod's dcp image back at the next release. Revert the change."
-            exit 1
+          awk -v pin="$PIN_FILE" '$2 == pin || $3 == pin' files.txt >pin.txt
+          if [ ! -s pin.txt ]; then
+            echo "This PR leaves $PIN_FILE alone."
+            exit 0
           fi
+          # The one change allowed: a modification of the file in place whose
+          # head blob is main's current blob, as a sync of main into dev makes.
+          if [ "$(wc -l <pin.txt)" -eq 1 ] && awk -v pin="$PIN_FILE" '$1 == "modified" && $2 == pin { ok = 1 } END { exit !ok }' pin.txt; then
+            head_blob="$(gh api "repos/$REPO/contents/$PIN_FILE?ref=$HEAD_SHA" --jq .sha)"
+            main_blob="$(gh api "repos/$REPO/contents/$PIN_FILE?ref=main" --jq .sha)"
+            echo "Head blob: $head_blob. Main blob: $main_blob."
+            if [ -n "$head_blob" ] && [ "$head_blob" = "$main_blob" ]; then
+              echo "This PR sets $PIN_FILE to main's current version, so the next release keeps main's pin."
+              exit 0
+            fi
+          fi
+          echo "::error file=$PIN_FILE::This PR changes $PIN_FILE to something other than main's current version. Only the dcp repo's prod release writes that file, on main, and a dev edit would roll prod's dcp image back at the next release. Revert the change, or merge main into the branch."
+          exit 1
