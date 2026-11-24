@@ -75,3 +75,7 @@ search_catalogue_tick = false
 # The telemetry stack's email channel, built from the alerts object in
 # dfo-prod-telemetry-principals. Every apis alert policy notifies it.
 alert_notification_channel = "Telemetry pipeline alerts: team"
+
+# Caps the Jev calls in flight in each apis process at 32, so the five-instance
+# ceiling is 160. The dfo-apis default is 64 per process.
+search_jev_max_concurrency = 32

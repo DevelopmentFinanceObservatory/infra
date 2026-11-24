@@ -285,3 +285,14 @@ variable "allow_unauthenticated" {
   description = "Grant roles/run.invoker on the apis service to allUsers. True lets any caller reach the run.app URL with no token. False admits the website and ai runtime service accounts (granted in their own stacks), the grants other files in this stack make on the service by resource reference (dev's eval_reader.tf and sdk_e2e.tf), the members in the principals secret's invokers object, and people who hold a project role with run.routes.invoke and reach the service through `gcloud run services proxy`."
   type        = bool
 }
+
+variable "search_jev_max_concurrency" {
+  description = "Cap on Jev calls in flight in each apis process (SEARCH_JEV_MAX_CONCURRENCY). The cap applies per instance, so the service-wide ceiling is this value times max_instances. Null leaves the variable unset and the dfo-apis default applies."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.search_jev_max_concurrency == null || (var.search_jev_max_concurrency >= 1 && var.search_jev_max_concurrency == floor(var.search_jev_max_concurrency))
+    error_message = "search_jev_max_concurrency must be null or a whole number of at least 1."
+  }
+}
