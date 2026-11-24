@@ -16,38 +16,8 @@ provider "google" {
   region  = var.region
 }
 
-resource "google_storage_bucket" "raw" {
-  name                        = "${var.project_id}-pipelines-raw"
-  location                    = var.region
-  uniform_bucket_level_access = true
-  public_access_prevention    = "enforced"
-
-  soft_delete_policy {
-    retention_duration_seconds = 7776000 # 90 days
-  }
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
 resource "google_storage_bucket" "landing" {
   name                        = "${var.project_id}-pipelines-landing"
-  location                    = var.region
-  uniform_bucket_level_access = true
-  public_access_prevention    = "enforced"
-
-  soft_delete_policy {
-    retention_duration_seconds = 7776000 # 90 days
-  }
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
-resource "google_storage_bucket" "processed" {
-  name                        = "${var.project_id}-pipelines-processed"
   location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
