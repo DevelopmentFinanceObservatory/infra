@@ -1,6 +1,6 @@
 # The datasets and identities of the DevelopmentFinanceObservatory/analytics
-# repository, a dbt project that builds its models from the four source
-# datasets below. The metric logic lives in that repository. This stack holds
+# repository, a dbt project that builds its models from the source datasets
+# below. The metric logic lives in that repository. This stack holds
 # only the datasets dbt writes and the grants that let it read and write.
 #
 # Each dbt target writes one dataset: prod (the scheduled job's service
@@ -60,12 +60,17 @@ locals {
 
   # The datasets dbt/models/sources.yml in the analytics repository declares.
   # website_export and langfuse_export are created by the website and ai
-  # stacks. dfo_logs holds request IPs and user agents, and both accounts and
-  # every analytics developer below read it, as README "Logs" lists.
+  # stacks, the GA4 export dataset by the GA4 BigQuery link, and the billing
+  # export dataset by the foundation stack. dfo_logs holds request IPs and
+  # user agents, and both accounts and every analytics developer below read
+  # it, as README "Logs" lists.
   analytics_source_datasets = [
     google_logging_linked_dataset.telemetry.link_id,
     "website_export",
     "langfuse_export",
+    var.ga4_export_dataset,
+    google_bigquery_dataset.searchconsole.dataset_id,
+    var.billing_export_dataset,
     google_bigquery_dataset.logs_daily.dataset_id,
     google_bigquery_dataset.web_history.dataset_id,
     google_bigquery_dataset.analytics_job["edge_export"].dataset_id,
