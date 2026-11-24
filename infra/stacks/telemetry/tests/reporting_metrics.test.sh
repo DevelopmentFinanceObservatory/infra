@@ -199,6 +199,19 @@ SOURCES="WITH
     ('2026-10-19', 'subject', 'health', false, 8.0, 2.0, 0.25, 1.0, 1.0, 0.0, 0.0),
     ($CUR, 'subject', 'health', false, 9.0, 1.0, 0.11, 1.0, 0.0, 0.3, 0.4)])
   ),
+  website_log_users_weekly AS (
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, users INT64, searchers INT64, sharers INT64, staff_users INT64, observed BOOL, accounts_linked BOOL>>[
+    ('2026-10-12', 30, 28, 5, 0, true, false),
+    ('2026-10-19', 31, 29, 4, 2, false, true),
+    ('2026-10-26', 33, 30, 6, 3, true, true),
+    ($CUR, 9, 9, 0, 1, true, true)])
+  ),
+  assistant_fetches_by_page_weekly AS (
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, agent_name STRING, route STRING, retrievals INT64>>[
+    ('2026-10-12', 'Claude-User', '/', 40),
+    ('2026-10-12', 'ChatGPT-User', '/docs', 7),
+    ($CUR, 'Claude-User', '/', 5)])
+  ),
   website_returning_weekly AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, active_accounts INT64, active_browsers INT64, active_staff INT64, returning_accounts_2_of_4 INT64, returning_browsers_2_of_4 INT64, returning_staff_2_of_4 INT64, returning_accounts_3_of_8 INT64, returning_browsers_3_of_8 INT64, returning_staff_3_of_8 INT64, weeks_observed_of_last_8 INT64, weeks_observed_of_last_4 INT64>>[
     ('2026-10-12', 10, 20, 3, 4, 6, 2, 3, 5, 1, 8, 4),
@@ -241,7 +254,8 @@ metrics_rows() {
         regular_consumers_weekly=regular_consumers_weekly regular_organisations_weekly=regular_organisations_weekly \
         requests_daily=requests_daily standing_pulls_weekly=standing_pulls_weekly supply_coverage_daily=supply_coverage_daily \
         mcp_tool_calls_weekly=mcp_tool_calls_weekly topic_callers_weekly=topic_callers_weekly topic_demand_weekly=topic_demand_weekly topic_taxonomy=topic_taxonomy trust_weekly=trust_weekly \
-        website_returning_weekly=website_returning_weekly
+        website_returning_weekly=website_returning_weekly website_log_users_weekly=website_log_users_weekly \
+        assistant_fetches_by_page_weekly=assistant_fetches_by_page_weekly
 }
 
 check metrics_headline_weekly \
@@ -384,5 +398,15 @@ check metrics_mcp_tool_calls_weekly \
     '{"iso_week":"2026-10-12","tool":"get_data","calls":25,"callers":4,"shared_server_calls":0,"failed_calls":1}
 {"iso_week":"2026-10-12","tool":"search","calls":40,"callers":6,"shared_server_calls":5,"failed_calls":2}' \
     "$(metrics_rows metrics_mcp_tool_calls_weekly 't.iso_week, t.tool')"
+
+check metrics_website_log_users_weekly \
+    '{"iso_week":"2026-10-12","users":30,"searchers":28,"sharers":5,"staff_users":0,"accounts_linked":false}
+{"iso_week":"2026-10-26","users":33,"searchers":30,"sharers":6,"staff_users":3,"accounts_linked":true}' \
+    "$(metrics_rows metrics_website_log_users_weekly 't.iso_week')"
+
+check metrics_assistant_pages_weekly \
+    '{"iso_week":"2026-10-12","agent_name":"ChatGPT-User","route":"/docs","retrievals":7}
+{"iso_week":"2026-10-12","agent_name":"Claude-User","route":"/","retrievals":40}' \
+    "$(metrics_rows metrics_assistant_pages_weekly 't.iso_week, t.agent_name, t.route')"
 
 finish reporting_metrics.test.sh
