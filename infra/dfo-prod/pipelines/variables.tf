@@ -1,0 +1,1 @@
+../../stacks/pipelines/variables.tf
