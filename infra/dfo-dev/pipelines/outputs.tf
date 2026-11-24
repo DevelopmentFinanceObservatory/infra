@@ -3,6 +3,11 @@ output "raw_bucket_name" {
   value       = google_storage_bucket.raw.name
 }
 
+output "landing_bucket_name" {
+  description = "Name of the pipelines' landing bucket."
+  value       = google_storage_bucket.landing.name
+}
+
 output "processed_bucket_name" {
   description = "Name of the processed output bucket."
   value       = google_storage_bucket.processed.name
