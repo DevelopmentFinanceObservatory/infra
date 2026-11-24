@@ -341,7 +341,10 @@ module "apis_service" {
     var.graph_release_coverage ? { GRAPH_RELEASE_COVERAGE = "1" } : {},
     # Read the origin catalogue from that release too, once
     # var.graph_release_origin is true.
-    var.graph_release_origin ? { GRAPH_RELEASE_ORIGIN = "1" } : {}
+    var.graph_release_origin ? { GRAPH_RELEASE_ORIGIN = "1" } : {},
+    # Caps the Jev calls in flight in each process, once
+    # var.search_jev_max_concurrency is set. Unset leaves the dfo-apis default.
+    var.search_jev_max_concurrency != null ? { SEARCH_JEV_MAX_CONCURRENCY = tostring(var.search_jev_max_concurrency) } : {}
   )
 
   deployer_members = ["serviceAccount:${data.google_service_account.apis_deployer.email}"]
