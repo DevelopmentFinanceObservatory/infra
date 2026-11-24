@@ -206,11 +206,11 @@ SOURCES="WITH
     ($CUR, 12, 22, 4, 6, 8, 3, 5, 7, 3, 8, 4)])
   ),
   topic_callers_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, axis STRING, topic_id STRING, topic_name STRING, callers INT64, staff_callers INT64, shared_servers INT64, datasets_pulled FLOAT64, total_callers INT64, observed BOOL>>[
-    ('2026-10-12', 'api', 'subject', 'health', 'Health', 5, 1, 0, 7.5, 20, true),
-    ('2026-10-12', 'mcp', 'subject', 'health', 'Health', 3, 0, 2, 4.0, 9, true),
-    ('2026-10-19', 'api', 'finance_kind', 'grant', 'Grants', 4, 1, 0, 6.0, 18, false),
-    ($CUR, 'api', 'subject', 'health', 'Health', 6, 2, 0, 8.0, 21, true)])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, surface STRING, axis STRING, topic_id STRING, topic_name STRING, callers INT64, staff_callers INT64, shared_servers INT64, datasets_pulled FLOAT64, shared_server_datasets FLOAT64, total_callers INT64, observed BOOL>>[
+    ('2026-10-12', 'api', 'subject', 'health', 'Health', 5, 1, 0, 7.5, 0.0, 20, true),
+    ('2026-10-12', 'mcp', 'subject', 'health', 'Health', 3, 0, 2, 4.0, 5.5, 9, true),
+    ('2026-10-19', 'api', 'finance_kind', 'grant', 'Grants', 4, 1, 0, 6.0, 0.0, 18, false),
+    ($CUR, 'api', 'subject', 'health', 'Health', 6, 2, 0, 8.0, 0.0, 21, true)])
   ),
   mcp_tool_calls_weekly AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, tool STRING, calls INT64, callers INT64, shared_server_calls INT64, failed_calls INT64>>[
@@ -375,9 +375,9 @@ check metrics_website_returning_weekly \
     "$(metrics_rows metrics_website_returning_weekly 't.iso_week')"
 
 check metrics_topic_callers_weekly \
-    '{"iso_week":"2026-10-12","surface":"api","axis":"subject","topic_id":"health","topic_name":"Health","callers":5,"staff_callers":1,"shared_servers":0,"datasets_pulled":7.5,"total_callers":20,"observed":true}
-{"iso_week":"2026-10-12","surface":"mcp","axis":"subject","topic_id":"health","topic_name":"Health","callers":3,"staff_callers":0,"shared_servers":2,"datasets_pulled":4,"total_callers":9,"observed":true}
-{"iso_week":"2026-10-19","surface":"api","axis":"finance_kind","topic_id":"grant","topic_name":"Grants","callers":4,"staff_callers":1,"shared_servers":0,"datasets_pulled":6,"total_callers":18,"observed":false}' \
+    '{"iso_week":"2026-10-12","surface":"api","axis":"subject","topic_id":"health","topic_name":"Health","callers":5,"staff_callers":1,"shared_servers":0,"datasets_pulled":7.5,"shared_server_datasets":0,"total_callers":20,"observed":true}
+{"iso_week":"2026-10-12","surface":"mcp","axis":"subject","topic_id":"health","topic_name":"Health","callers":3,"staff_callers":0,"shared_servers":2,"datasets_pulled":4,"shared_server_datasets":5.5,"total_callers":9,"observed":true}
+{"iso_week":"2026-10-19","surface":"api","axis":"finance_kind","topic_id":"grant","topic_name":"Grants","callers":4,"staff_callers":1,"shared_servers":0,"datasets_pulled":6,"shared_server_datasets":0,"total_callers":18,"observed":false}' \
     "$(metrics_rows metrics_topic_callers_weekly 't.iso_week, t.surface, t.axis, t.topic_id')"
 
 check metrics_mcp_tool_calls_weekly \
