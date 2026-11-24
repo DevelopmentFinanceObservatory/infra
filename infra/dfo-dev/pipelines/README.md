@@ -2,17 +2,9 @@
 
 The GCP footprint the `dfo-pipelines` repo reads and writes.
 
-## Raw data bucket
-
-`<project>-pipelines-raw` holds source files as published, prefixed by source and dataset.
-
 ## Landing bucket
 
 `<project>-pipelines-landing` is the pipelines' landing store: source files as downloaded, prefixed by source and dataset.
-
-## Processed data bucket
-
-`<project>-pipelines-processed` holds pipeline output, prefixed by DCP import.
 
 ## Exports bucket
 
