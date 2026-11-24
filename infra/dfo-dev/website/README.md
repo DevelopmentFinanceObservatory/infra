@@ -194,17 +194,18 @@ The command prints the new version's name, which ends in its number. Set `api_ke
 )
 ```
 
-**Step 2: the new secret signs.** Set `STEP1` to the version number step 1 printed. Left as it is, the read fails and the step stops:
+**Step 2: the new secret signs.** Set `CURRENT` to the same number as in step 1, the pin before this rotation, and `STEP1` to the version number step 1 printed. Left as they are, the reads fail and the step stops. The step refuses a `STEP1` that does not start with the secret `CURRENT` holds, so a two-secret version from an earlier rotation can't bring back a retired secret:
 
 ```
 (
   set -euo pipefail
-  SECRET=dfo-dev-website-staging-api-key-tag-secrets PROJECT=dev-fin-observatory STEP1=VERSION_FROM_STEP_1
-  PAIR=$(gcloud secrets versions access "$STEP1" --secret "$SECRET" --project "$PROJECT")
-  case "$PAIR" in *,*) ;; *) echo "version $STEP1 holds one secret: give the version step 1 added" >&2; exit 1 ;; esac
-  OLD=${PAIR%%,*} NEW=${PAIR#*,}
+  SECRET=dfo-dev-website-staging-api-key-tag-secrets PROJECT=dev-fin-observatory CURRENT=VERSION_BEFORE_STEP_1 STEP1=VERSION_FROM_STEP_1
+  OLD=$(gcloud secrets versions access "$CURRENT" --secret "$SECRET" --project "$PROJECT")
   test -n "$OLD"
-  test -n "$NEW"
+  case "$OLD" in *,*) echo "version $CURRENT holds more than one secret: give the pin from before step 1" >&2; exit 1 ;; esac
+  PAIR=$(gcloud secrets versions access "$STEP1" --secret "$SECRET" --project "$PROJECT")
+  case "$PAIR" in "$OLD",?*) ;; *) echo "version $STEP1 is not version $CURRENT's secret followed by a new one: give the version step 1 added" >&2; exit 1 ;; esac
+  NEW=${PAIR#"$OLD",}
   case "$NEW" in *,*) echo "version $STEP1 holds more than two secrets" >&2; exit 1 ;; esac
   printf '%s' "$NEW,$OLD" | gcloud secrets versions add "$SECRET" --project "$PROJECT" --data-file=- --format='value(name)'
 )
