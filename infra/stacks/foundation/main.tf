@@ -344,7 +344,9 @@ locals {
 # is allowed to read the contents of. It lists the stacks of every
 # environment, so it is a superset of what either one plans. plan.yml and
 # plan-prod.yml derive their matrices from scripts/terraform-stacks.sh;
-# this list is kept in sync with the stack directories by hand.
+# this list is kept in sync with the stack directories by hand. edge-logs is
+# left out: no pull-request plan runs it (plan-prod.yml, "Apply-only
+# stacks"), so the planner has no reason to read its state.
 locals {
   state_bucket_stacks = ["foundation", "ai", "apis", "website", "dcp", "platform", "pipelines", "edge", "telemetry"]
 }

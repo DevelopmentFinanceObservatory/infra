@@ -376,6 +376,10 @@ A view cannot name a table that does not exist, so `reporting_sources` in `repor
 
 `bq ls prod-fin-observatory:<dataset>` lists a dataset's tables.
 
+## Edge request logs
+
+`edge_logs.tf` creates `dfo-prod-edge-logs-prod-fin-observatory`, the bucket the edge-logs stack's Cloudflare Logpush job writes dataset-read request lines to, one gzipped NDJSON batch at a time under `http_requests/<YYYYMMDD>/`. The lines hold raw client IPs, so batches (`*.log.gz`) are deleted three days after they are written, which leaves time to repair a fault in the load into BigQuery and soft delete is off. Cloudflare's `logpush@cloudflare-data.iam.gserviceaccount.com` holds `roles/storage.objectAdmin` on the bucket. The planner holds no object grant on it, since no pull-request plan runs the edge-logs stack. Copy the `edge_logs_bucket` output into the edge-logs stack's `edge_logpush_bucket`. [`infra/dfo-prod/edge-logs/README.md`](../edge-logs/README.md) has the order to turn the job and the cache on, and [`infra/dfo-prod/edge/README.md`](../edge/README.md), "Logpush", the fields and the cost.
+
 ## Analytics repo
 
 The private repository `DevelopmentFinanceObservatory/analytics` holds a dbt project that turns the raw usage data into usage metrics. Every metric's logic lives there. This stack holds only the datasets the project writes and the accounts that run it (`analytics.tf`). The project reads thirteen source datasets: `dfo_logs`, `website_export`, `langfuse_export`, `logs_daily`, `web_history`, `edge_export`, `studio_grades`, `repo_search`, `lighthouse`, `replay_probe`, `citation_probe`, `topics` and `langfuse_specs`. The last eight are written by the repository's own Python jobs ("Analytics jobs").
