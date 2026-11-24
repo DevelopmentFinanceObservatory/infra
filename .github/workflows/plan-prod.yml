@@ -63,6 +63,21 @@
 #
 # A removed stack root under infra/dfo-prod fails detection unless the PR
 # carries `allow-destroy`, as in plan.yml.
+#
+# Apply-only stacks
+# -----------------
+# `edge-logs` holds the zone's Logpush job, and every Logpush API call needs
+# Logs Write on the zone, reads included
+# (https://developers.cloudflare.com/logs/logpush/permissions/). The `plan`
+# environment's Cloudflare token is read-only, so detect drops `edge-logs`
+# from the plan matrix with a notice. apply-stack.yml plans it with the
+# `production` token in a job of its own, approved and read before a second
+# approval admits the apply ("Reviewed stacks" there). The list is
+# `APPLY_ONLY_STACKS` in detect. The edge stack's plan sets
+# `TF_VAR_edge_cache_logpush_check=false`, so its cache rule's precondition
+# reads no Logpush job here either. This file runs from main, so the change
+# that adds `APPLY_ONLY_STACKS` reaches main in a release of its own, before
+# the release that adds infra/dfo-prod/edge-logs.
 name: Terraform Plan (prod)
 
 on:
@@ -174,6 +189,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           MERGE_SHA: ${{ needs.verify.outputs.merge_sha }}
           ALLOW_DESTROY: ${{ contains(github.event.pull_request.labels.*.name, 'allow-destroy') }}
+          # Stacks no plan here may run; see "Apply-only stacks".
+          APPLY_ONLY_STACKS: '["edge-logs"]'
         # base's terraform-stacks.sh reads the merge commit's tree, from its
         # root.
         working-directory: merge
@@ -182,8 +199,13 @@ jobs:
           [ "$ALLOW_DESTROY" = "true" ] && allow="--allow-removed"
           git diff --name-only --no-renames "$BASE_SHA" "$MERGE_SHA" -- infra >"$RUNNER_TEMP/files.txt"
           echo "Changed $(wc -l <"$RUNNER_TEMP/files.txt") file(s) under infra/."
-          stacks="$(../base/scripts/terraform-stacks.sh changed "$ENV_DIR" ${allow:+"$allow"} <"$RUNNER_TEMP/files.txt")"
-          echo "Changed stacks in infra/$ENV_DIR: $stacks"
+          changed="$(../base/scripts/terraform-stacks.sh changed "$ENV_DIR" ${allow:+"$allow"} <"$RUNNER_TEMP/files.txt")"
+          echo "Changed stacks in infra/$ENV_DIR: $changed"
+          for stack in $(jq -r --argjson a "$APPLY_ONLY_STACKS" '.[] | select(IN($a[]))' <<<"$changed"); do
+            echo "::notice::$stack changed. It plans only in apply-stack.yml, with the production token, before the release-approved apply; see this file's \"Apply-only stacks\"."
+          done
+          stacks="$(jq -c --argjson a "$APPLY_ONLY_STACKS" '[.[] | select(IN($a[]) | not)]' <<<"$changed")"
+          echo "Stacks to plan: $stacks"
           echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
 
   plan:
@@ -255,10 +277,15 @@ jobs:
       # Here it is the `plan` environment's read-only token. Other stacks get
       # an empty value, so the token never reaches their Terraform. Init and
       # validate make no Cloudflare calls and need none. Actions masks it.
+      # TF_VAR_edge_cache_logpush_check keeps the edge plan from reading the
+      # Logpush job, which the read-only token cannot do; see "Apply-only
+      # stacks". Only the edge stack declares the variable, and Terraform
+      # ignores it in the others.
       - name: terraform plan
         id: plan
         env:
           CLOUDFLARE_API_TOKEN: ${{ matrix.stack == 'edge' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          TF_VAR_edge_cache_logpush_check: "false"
         run: '"$GITHUB_WORKSPACE/base/scripts/tf-capture.sh" plan terraform plan -input=false -lock=false -no-color -out=tfplan'
 
       - name: Guard against destroying protected data
@@ -323,7 +350,7 @@ jobs:
             exit 1
           fi
           if [ "$STACKS" = "[]" ]; then
-            echo "No stack in infra/$ENV_DIR changed."
+            echo "No stack in infra/$ENV_DIR to plan here."
             exit 0
           fi
           if [ "$PLAN_RESULT" != "success" ]; then

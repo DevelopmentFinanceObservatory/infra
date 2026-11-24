@@ -401,18 +401,17 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
         }
       }
 
-      # The same website origin main.tf mounts: the worker builds a bundle's
-      # links on it and refuses to start without it.
-      env {
-        name  = "DFO_PUBLIC_SITE_URL"
-        value = var.dfo_public_site_url
-      }
-
-      # The same dataset-link flag main.tf mounts, so a bundle the worker
-      # renders matches one the apis service renders.
-      env {
-        name  = "DFO_SITE_DATASET_LINKS"
-        value = "true"
+      # The website origin and dataset-link flag main.tf mounts
+      # (local.datasets_site_env), so a bundle the worker renders matches one
+      # the apis service renders. The worker refuses to start without the
+      # origin. The map's keys iterate in lexical order, the order these two
+      # variables have always had on the worker.
+      dynamic "env" {
+        for_each = local.datasets_site_env
+        content {
+          name  = env.key
+          value = env.value
+        }
       }
 
       # The same two values main.tf mounts on the apis service so the mint
@@ -429,6 +428,16 @@ resource "google_cloud_run_v2_service" "datasets_worker" {
       env {
         name  = "DFO_WORKER_INVOKER_SERVICE_ACCOUNT"
         value = google_service_account.datasets_worker_invoker.email
+      }
+
+      # The queue the worker schedules a retry onto after a run fails
+      # transiently and releases its row: a new task 60 s ahead, so the retry
+      # skips the queue's 1,680 s backoff, which exists for a worker that died
+      # holding its lease. Without it the worker answers 503 and the queue's
+      # backoff applies.
+      env {
+        name  = "DFO_TASKS_QUEUE"
+        value = google_cloud_tasks_queue.datasets_worker.id
       }
 
       # dfo-apis's deadline for one submission of an operation, the same value
@@ -543,6 +552,14 @@ resource "google_service_account_iam_member" "datasets_worker_invoker_act_as" {
   member             = "serviceAccount:${module.apis_service.runtime_service_account_email}"
 }
 
+# The worker schedules its own retry after a transient failure, so it names
+# the same account as that task's OIDC identity.
+resource "google_service_account_iam_member" "datasets_worker_invoker_act_as_worker" {
+  service_account_id = google_service_account.datasets_worker_invoker.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.datasets_worker.email}"
+}
+
 output "datasets_worker_invoker_service_account_email" {
   description = "Email of the Cloud Tasks OIDC invoker identity. dfo-apis's DFO_WORKER_INVOKER_SERVICE_ACCOUNT (main.tf) reads this when it creates a task, and the worker's app-level OIDC check verifies an incoming token's email against it."
   value       = google_service_account.datasets_worker_invoker.email
@@ -612,6 +629,16 @@ resource "google_cloud_tasks_queue_iam_member" "datasets_worker_queue_enqueuer" 
   name     = google_cloud_tasks_queue.datasets_worker.name
   role     = "roles/cloudtasks.enqueuer"
   member   = "serviceAccount:${module.apis_service.runtime_service_account_email}"
+}
+
+# The worker enqueues onto this queue only to schedule the retry of a run
+# that failed transiently.
+resource "google_cloud_tasks_queue_iam_member" "datasets_worker_queue_enqueuer_worker" {
+  project  = google_cloud_tasks_queue.datasets_worker.project
+  location = google_cloud_tasks_queue.datasets_worker.location
+  name     = google_cloud_tasks_queue.datasets_worker.name
+  role     = "roles/cloudtasks.enqueuer"
+  member   = "serviceAccount:${google_service_account.datasets_worker.email}"
 }
 
 output "datasets_worker_queue_name" {
