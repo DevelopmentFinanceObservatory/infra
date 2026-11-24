@@ -52,6 +52,7 @@ locals {
   metrics_ref = "${var.project_id}.${google_bigquery_dataset.analytics["analytics"].dataset_id}"
   metrics_table_refs = {
     for table in [
+      "assistant_fetches_by_page_weekly",
       "assistant_fetches_weekly",
       "catalogue_daily",
       "chat_host_weekly",
@@ -78,6 +79,7 @@ locals {
       "topic_demand_weekly",
       "topic_taxonomy",
       "trust_weekly",
+      "website_log_users_weekly",
       "website_returning_weekly",
     ] : table => "${local.metrics_ref}.${table}"
   }
@@ -104,8 +106,10 @@ locals {
     metrics_catalogue_daily              = "Grain: day. The search catalogue live at each complete day's end. Indicators are variables."
     metrics_topic_demand_weekly          = "Grain: iso_week x axis x topic_id. Studio questions split across subjects by weight; unmet is the grader's judgement. The mart suppresses topic-weeks under 5 weighted turns. Weeks follow the studio surface's observation mark. no_data_turns and missing_feature_turns split unmet_turns by grade (N and F) and are null where it is null. staff_share is the share of turns from ONE Campaign staff accounts, a floor where turns name no consumer; unknown_caller_share is the share of turns that name none."
     metrics_website_returning_weekly     = "Grain: iso_week. Website people active (a search or a share) and returning, by account, consented browser id and ONE Campaign staff; a browser ever seen signed in counts as its account. Returning is active in 2 of the last 4, or 3 of the last 8, weeks, whether or not active this week."
-    metrics_topic_callers_weekly         = "Grain: iso_week x surface x axis x topic_id. Distinct callers who pulled data on each topic, ONE Campaign staff and AI tools' shared servers apart; total_callers is the surface's distinct callers that week, so callers / total_callers is a share of callers. datasets_pulled splits caller-dataset pairs by topic weight."
+    metrics_topic_callers_weekly         = "Grain: iso_week x surface x axis x topic_id. Distinct callers who pulled data on each topic, ONE Campaign staff and AI tools' shared servers apart; total_callers is the surface's distinct callers that week, so callers / total_callers is a share of callers. datasets_pulled splits caller-dataset pairs by topic weight, and shared_server_datasets does the same for the shared servers."
     metrics_mcp_tool_calls_weekly        = "Grain: iso_week x tool. Successful MCP tool calls from outside callers, with shared servers' calls and failed calls apart; polls for pending answers are not counted. Complete weeks only."
+    metrics_website_log_users_weekly     = "Grain: iso_week. Website users from the website's request lines, cookies or not: distinct address keys with a search or a share, so two browsers on one address count once. staff_users holds the ONE Campaign staff the account lines identify. A later account line also marks earlier activity, so a week can hold staff before accounts_linked turns true; accounts_linked marks the weeks that start on or after the first day the website logged account lines, the first weeks linked in full. Observed weeks only."
+    metrics_assistant_pages_weekly       = "Grain: iso_week x agent_name x route. Pages that assistants such as ChatGPT-User and Claude-User fetched for a person's question, by route template; files such as robots.txt are not pages."
     metrics_variable_topics              = "Grain: axis x topic_id. Today's catalogue variables by main subject and by finance kind, from int_variable_topics (labels that are not stale). Totals dip while a topics run re-asks changed variables."
   }
   metrics_views = {
