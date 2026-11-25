@@ -153,8 +153,8 @@ locals {
     vpc_subnetwork = module.psc_network.subnetwork_id
     vpc_egress     = "PRIVATE_RANGES_ONLY"
 
-    # The list order matches the scheduled Job's existing env order;
-    # reordering it plans an in-place update.
+    # The list order matches the scheduled Job's existing env order.
+    # Reordering it plans an in-place update.
     env = [
       { name = "ORIGIN_CATALOGUE_URI", value = "gs://${google_storage_bucket.origin_catalogue.name}/" },
       { name = "ORIGIN_CATALOGUE_BQ_CONNECTION", value = "${var.project_id}.${var.region}.${var.dc_spanner_connection_id}" },
