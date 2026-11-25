@@ -110,14 +110,15 @@ resource "google_service_account_iam_member" "origin_catalogue_job_deployer_act_
 # ─────────────────────────────────────────────────────────────────────────────
 
 variable "origin_catalogue_bootstrap_image" {
-  description = "Overrides the image the origin catalogue Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, the tag the apis service is currently running."
+  description = "Overrides the image both the scheduled and the candidate origin catalogue Job are created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, the tag the apis service is currently running."
   type        = string
   default     = null
 }
 
 # The scheduled Job and the candidate Job below run one definition, held in
 # this local, so the candidate builds exactly what the scheduled Job would on
-# the image the deploy hands it.
+# the image the deploy hands it. `lifecycle` and `depends_on` cannot come from
+# a local, so each Job repeats them.
 locals {
   origin_catalogue_job = {
     # No retry. The Scheduler polls every 15 minutes and the job's lease
@@ -143,8 +144,17 @@ locals {
       memory = "2Gi"
     }
 
-    # A list, so the scheduled Job keeps the env order it was created with
-    # and the shared definition plans no change to it.
+    service_account = google_service_account.origin_catalogue_job.email
+
+    # The same private path the service and the migrate Job use; the UN
+    # deployment and the mixer sit on public addresses, reached over the
+    # default route.
+    vpc_network    = module.psc_network.network_id
+    vpc_subnetwork = module.psc_network.subnetwork_id
+    vpc_egress     = "PRIVATE_RANGES_ONLY"
+
+    # The list order matches the scheduled Job's existing env order;
+    # reordering it plans an in-place update.
     env = [
       { name = "ORIGIN_CATALOGUE_URI", value = "gs://${google_storage_bucket.origin_catalogue.name}/" },
       { name = "ORIGIN_CATALOGUE_BQ_CONNECTION", value = "${var.project_id}.${var.region}.${var.dc_spanner_connection_id}" },
@@ -166,7 +176,7 @@ resource "google_cloud_run_v2_job" "origin_catalogue" {
 
   template {
     template {
-      service_account = google_service_account.origin_catalogue_job.email
+      service_account = local.origin_catalogue_job.service_account
       max_retries     = local.origin_catalogue_job.max_retries
       timeout         = local.origin_catalogue_job.timeout
 
@@ -188,15 +198,12 @@ resource "google_cloud_run_v2_job" "origin_catalogue" {
         }
       }
 
-      # The same private path the service and the migrate Job use; the UN
-      # deployment and the mixer sit on public addresses, reached over the
-      # default route.
       vpc_access {
         network_interfaces {
-          network    = module.psc_network.network_id
-          subnetwork = module.psc_network.subnetwork_id
+          network    = local.origin_catalogue_job.vpc_network
+          subnetwork = local.origin_catalogue_job.vpc_subnetwork
         }
-        egress = "PRIVATE_RANGES_ONLY"
+        egress = local.origin_catalogue_job.vpc_egress
       }
     }
   }
@@ -244,7 +251,7 @@ resource "google_cloud_run_v2_job" "origin_catalogue_candidate" {
 
   template {
     template {
-      service_account = google_service_account.origin_catalogue_job.email
+      service_account = local.origin_catalogue_job.service_account
       max_retries     = local.origin_catalogue_job.max_retries
       timeout         = local.origin_catalogue_job.timeout
 
@@ -268,10 +275,10 @@ resource "google_cloud_run_v2_job" "origin_catalogue_candidate" {
 
       vpc_access {
         network_interfaces {
-          network    = module.psc_network.network_id
-          subnetwork = module.psc_network.subnetwork_id
+          network    = local.origin_catalogue_job.vpc_network
+          subnetwork = local.origin_catalogue_job.vpc_subnetwork
         }
-        egress = "PRIVATE_RANGES_ONLY"
+        egress = local.origin_catalogue_job.vpc_egress
       }
     }
   }
