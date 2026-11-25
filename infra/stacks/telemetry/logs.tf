@@ -6,7 +6,7 @@ resource "google_logging_project_bucket_config" "telemetry" {
   project          = var.project_id
   location         = local.log_location
   bucket_id        = "${var.namespace}-telemetry"
-  description      = "Cloud Run request logs and service and job stdout and stderr, for logs_daily."
+  description      = "Cloud Run request logs and service and job stdout and stderr, for the analytics dbt build."
   retention_days   = var.log_retention_days
   enable_analytics = true
 
@@ -36,9 +36,8 @@ resource "google_logging_project_sink" "telemetry" {
 }
 
 # BigQuery roles decide who can query dfo_logs, whose entries hold request
-# IPs and user agents. The logs_daily query account reads it by its dataset
-# grant (logs_daily.tf), and the analytics service accounts and developers by
-# theirs (analytics.tf). Project-level BigQuery data roles reach it too:
+# IPs and user agents. The analytics service accounts and developers read it
+# by their dataset grants (analytics.tf). Project-level BigQuery data roles reach it too:
 # today the applier's roles/bigquery.dataOwner, dfo-prod-dc-ing-pst-sa's
 # roles/bigquery.dataEditor, and the project owners. If the linked dataset
 # carries BigQuery's default projectWriters and projectReaders entries, the
@@ -79,5 +78,35 @@ resource "google_bigquery_dataset" "logs_daily_archive" {
 
   lifecycle {
     prevent_destroy = true
+  }
+}
+
+# logs_daily holds the daily aggregates, the backfill table and the entries
+# view that logs_daily_archive copies, and nothing reads it. A dataset
+# resource being removed cannot set delete_contents_on_destroy, a destroy of
+# a dataset that holds tables fails, and both tables carry the provider's
+# default deletion protection, so Terraform forgets the three here and README
+# "Datasets deleted by hand" gives the bq rm that deletes the dataset.
+removed {
+  from = google_bigquery_dataset.logs_daily
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = google_bigquery_table.backfill_entries
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = google_bigquery_table.entries
+
+  lifecycle {
+    destroy = false
   }
 }

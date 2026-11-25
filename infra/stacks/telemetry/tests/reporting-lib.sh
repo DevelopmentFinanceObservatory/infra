@@ -1,8 +1,7 @@
 # shellcheck shell=bash
-# Shared by the reporting_*.test.sh tests, which source it after setting DIR
-# to their own directory. Each test runs a view's template from
-# sql/reporting over literal source rows and compares the output with the
-# rows it pins.
+# Shared by billing_dfo_costs.test.sh, which sources it after setting DIR to
+# its own directory and SQL_DIR to sql/. The test runs a view's template over
+# literal source rows and compares the output with the rows it pins.
 #
 # The sources are CTEs of literal rows, so a query reads no table and scans
 # no bytes. The project (default prod-fin-observatory, or the test's first
@@ -12,12 +11,12 @@
 PROJECT="${1:-prod-fin-observatory}"
 
 # view_sql <view> <placeholder>=<text>...: prints <view>.sql from SQL_DIR
-# (default sql/reporting) with each `${name}` placeholder, backticks
-# included, replaced by <text>. Exits when a placeholder is left over.
+# (default sql) with each `${name}` placeholder, backticks included, replaced
+# by <text>. Exits when a placeholder is left over.
 view_sql() {
     local view="$1" sql pair name
     shift
-    sql="$(cat "${SQL_DIR:-$DIR/../sql/reporting}/$view.sql")"
+    sql="$(cat "${SQL_DIR:-$DIR/../sql}/$view.sql")"
     for pair in "$@"; do
         name="${pair%%=*}"
         sql="${sql//"\`\${$name}\`"/${pair#*=}}"

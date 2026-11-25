@@ -72,7 +72,6 @@ locals {
     var.ga4_export_dataset,
     google_bigquery_dataset.searchconsole.dataset_id,
     google_bigquery_dataset.billing_dfo.dataset_id,
-    google_bigquery_dataset.logs_daily.dataset_id,
     google_bigquery_dataset.web_history.dataset_id,
     google_bigquery_dataset.analytics_job["edge_export"].dataset_id,
     google_bigquery_dataset.analytics_job["studio_grades"].dataset_id,
@@ -85,7 +84,7 @@ locals {
   ]
 
   # The service accounts, each with the one dataset it writes. The runner
-  # also writes reporting_marts (analytics_runner_reporting_marts below). A
+  # also writes dfo_reporting (analytics_runner_reporting in reporting.tf). A
   # model the analytics repository places in any other dataset with +schema
   # needs a WRITER grant on that dataset here first.
   analytics_accounts = {
@@ -164,27 +163,17 @@ resource "google_bigquery_dataset_access" "analytics_writer" {
   user_by_email = google_service_account.analytics[each.key].email
 }
 
-# The tables behind the dfo_reporting views that read the raw exports, which
-# the analytics repository's prod target writes with +schema: reporting_marts.
-# They hold spend, account and per-turn rows, so they sit apart from
-# analytics, which the topic-specs account in analytics_job_accounts reads.
-# Only the runner writes them, and dashboard readers reach them through the
-# authorised dfo_reporting views.
-resource "google_bigquery_dataset" "reporting_marts" {
-  dataset_id  = "reporting_marts"
-  location    = local.bigquery_location
-  description = "Tables behind the dfo_reporting views that read the raw exports, built by the analytics repository's scheduled dbt run as ${var.namespace}-analytics-runner."
+# reporting_marts holds 13 tables the analytics build wrote before it wrote
+# dfo_reporting directly, and nothing reads them. A dataset resource being
+# removed cannot set delete_contents_on_destroy, and a destroy of a dataset
+# that holds tables fails, so Terraform forgets the dataset here and README
+# "Datasets deleted by hand" gives the bq rm that deletes it.
+removed {
+  from = google_bigquery_dataset.reporting_marts
 
-  # Every grant on this dataset is a google_bigquery_dataset_access, as on the
-  # dbt datasets above.
-
-  depends_on = [google_project_service.apis]
-}
-
-resource "google_bigquery_dataset_access" "analytics_runner_reporting_marts" {
-  dataset_id    = google_bigquery_dataset.reporting_marts.dataset_id
-  role          = "WRITER"
-  user_by_email = google_service_account.analytics["runner"].email
+  lifecycle {
+    destroy = false
+  }
 }
 
 # The billing account also bills projects outside DFO, so the analytics
@@ -229,8 +218,7 @@ resource "google_bigquery_dataset_access" "billing_dfo_costs" {
   }
 }
 
-# READER on dfo_logs is all a query of the linked dataset needs, as for
-# dfo-prod-logs-daily (logs_daily.tf).
+# READER on dfo_logs is all a query of the linked dataset needs.
 resource "google_bigquery_dataset_access" "analytics_source_reader" {
   for_each = local.analytics_account_source_grants
 

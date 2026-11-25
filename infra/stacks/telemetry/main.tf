@@ -9,8 +9,9 @@ terraform {
       version = ">= 5.11.0, < 8.0.0"
     }
     time = {
-      # time_sleep in logs_daily.tf, which waits out a new log-based metric's
-      # propagation to Cloud Monitoring before the alert policy names it.
+      # time_sleep in analytics_jobs.tf, which waits out a new log-based
+      # metric's propagation to Cloud Monitoring before an alert policy names
+      # it.
       source  = "hashicorp/time"
       version = ">= 0.9.0"
     }
@@ -28,7 +29,6 @@ resource "google_project_service" "apis" {
   for_each = toset([
     "logging.googleapis.com",
     "bigquery.googleapis.com",
-    "bigquerydatatransfer.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false

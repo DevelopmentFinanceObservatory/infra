@@ -47,17 +47,11 @@ variable "analytics_jobs_image" {
   }
 }
 
-# The dbt Job's hourly trigger, apart from the flag because the logs_daily
-# cutover runs as one-off executions of the dbt Job before any scheduled build
-# (README "Analytics jobs"). A scheduled build before the cutover's first step
-# creates the six log-fed tables, and the archive copy then refuses to run.
-# The same switch disables the logs_daily scheduled query (logs_daily.tf) and
-# drops its absence alert (alerts.tf), since the dbt build replaces it, moves
-# the dfo_reporting views over its tables to the analytics tables
-# (reporting_views.tf), and creates the freshness Job, which checks the
-# sources the scheduled build reads and so runs only beside it.
+# The scheduled dbt build: the dbt Job's hourly trigger, and the freshness
+# Job, which checks the sources that build reads and so runs only beside it.
+# The dbt Job itself exists with analytics_jobs_enabled alone.
 variable "analytics_dbt_schedule_enabled" {
-  description = "Creates the dbt Job's hourly trigger and its alert and the source freshness Job, disables the logs_daily scheduled query the build replaces, and points the dfo_reporting views over the logs_daily tables at the analytics tables. Needs analytics_jobs_enabled. Switch it on once the logs_daily cutover has run and the views' parity check is clean."
+  description = "Creates the dbt Job's hourly trigger and its alert, and the source freshness Job with its trigger and alert. Needs analytics_jobs_enabled."
   type        = bool
   default     = false
 
@@ -185,6 +179,10 @@ locals {
 
     TOPICS_RUN_DEADLINE_MINUTES = "50"
   }
+
+  # The site's launch day, the first day of the GA4 user ranges Job's
+  # since_floor range and of its first week and month.
+  ga4_user_ranges_floor = "2026-10-05"
 
   # Every Job has max_retries = 0, so a failed run is one failed execution and
   # the next scheduled run is the retry. Each Job's timeout keeps one execution
@@ -328,11 +326,9 @@ locals {
       }
     }
     # Replaces web_history.ga4_user_ranges with GA4 Data API users over each
-    # range, as the dfo-prod-ga4-user-ranges workflow (ga4_user_ranges.tf)
-    # does. Each GA4_USER_RANGES_* variable carries the value the workflow's
-    # template receives under the same name. 06:00 UTC, when yesterday has
-    # been over for six hours in the property's time zone (Etc/GMT). A run
-    # makes a few Data API calls and one truncating load job.
+    # range. 06:00 UTC, when yesterday has been over for six hours in the
+    # property's time zone (Etc/GMT). A run makes a few Data API calls and
+    # one truncating load job.
     "ga4-user-ranges" = {
       account  = google_service_account.analytics_job["ga4-ranges"]
       args     = ["python", "-m", "dfo_analytics.extract.ga4_user_ranges"]
@@ -806,7 +802,7 @@ resource "google_monitoring_alert_policy" "analytics_job_failed" {
 
 # One day's schedule plus two hours' slack. A condition_absent caps the
 # absence at 23.5 hours, so this is a PromQL condition, as
-# logs_daily_not_succeeding (alerts.tf) is: it returns 1 when the window's
+# export_job_not_succeeding (alerts.tf) is: it returns 1 when the window's
 # succeeded executions sum to less than one, and when the series is absent.
 # It is evaluated over stored data, so it alerts within minutes of the flag
 # being switched on and closes after the Job's first success.
@@ -901,8 +897,7 @@ resource "google_logging_metric" "analytics_edge_objects_lost" {
 }
 
 # Waits out the new metric's propagation to Cloud Monitoring before the alert
-# policy names it, as logs_daily_failed_metric_propagation (logs_daily.tf)
-# does.
+# policy names it.
 resource "time_sleep" "analytics_edge_objects_lost_metric_propagation" {
   count = local.analytics_jobs_count
 
