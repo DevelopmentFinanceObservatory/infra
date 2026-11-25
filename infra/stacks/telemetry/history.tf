@@ -41,14 +41,3 @@ resource "google_bigquery_dataset_access" "web_history_writer" {
   role          = "WRITER"
   user_by_email = google_service_account.web_history.email
 }
-
-# The dfo-prod-analytics-ga4-user-ranges Job (analytics_jobs.tf) replaces
-# web_history.ga4_user_ranges whole on each run, and the analytics dbt build
-# reads it, so Terraform forgets the table and leaves it in place.
-removed {
-  from = google_bigquery_table.ga4_user_ranges
-
-  lifecycle {
-    destroy = false
-  }
-}

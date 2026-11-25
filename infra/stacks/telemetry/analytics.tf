@@ -163,19 +163,6 @@ resource "google_bigquery_dataset_access" "analytics_writer" {
   user_by_email = google_service_account.analytics[each.key].email
 }
 
-# reporting_marts holds 13 tables the analytics build wrote before it wrote
-# dfo_reporting directly, and nothing reads them. A dataset resource being
-# removed cannot set delete_contents_on_destroy, and a destroy of a dataset
-# that holds tables fails, so Terraform forgets the dataset here and README
-# "Datasets deleted by hand" gives the bq rm that deletes it.
-removed {
-  from = google_bigquery_dataset.reporting_marts
-
-  lifecycle {
-    destroy = false
-  }
-}
-
 # The billing account also bills projects outside DFO, so the analytics
 # accounts and developers read the billing export through this view, which
 # keeps only the projects in var.spend_callers, each labelled with its caller.
