@@ -284,10 +284,11 @@ resource "google_bigquery_routine" "reporting_normalise_route" {
 }
 
 # The analytics repository's dbt build writes each dfo_reporting name as a
-# table, dropping the view of that name in the same step, so Terraform stops
-# managing the views and their authorised-view entries here and leaves both
-# in place. A view keeps reading its sources through its entries until the
-# build replaces it. The templates under sql/reporting and the locals above
+# table, once infra/scripts/cutover-reporting-tables.sh has swapped a table in
+# for the view of that name (README "Moving a view to dbt"), so Terraform
+# stops managing the views and their authorised-view entries here and leaves
+# both in place. A view keeps reading its sources through its entries until
+# the swap. The templates under sql/reporting and the locals above
 # no longer reach BigQuery, so a change to them changes no view.
 removed {
   from = google_bigquery_table.reporting
