@@ -50,3 +50,34 @@ resource "google_logging_linked_dataset" "telemetry" {
   bucket      = google_logging_project_bucket_config.telemetry.id
   description = "Log Analytics view of the ${google_logging_project_bucket_config.telemetry.bucket_id} bucket."
 }
+
+# A copy of the logs_daily dataset's seven tables, the only record of the
+# raw entries before the sink started on 2026-10-23. backfill_entries holds
+# those entries with caller IPs and user agents, so the access block is
+# authoritative, unlike every other dataset in this stack: an apply removes any
+# grant added outside it, and only the project owners read the archive. No
+# google_bigquery_dataset_access names it, and it is not an analytics source
+# (analytics.tf).
+import {
+  to = google_bigquery_dataset.logs_daily_archive
+  id = "projects/${var.project_id}/datasets/logs_daily_archive"
+}
+
+resource "google_bigquery_dataset" "logs_daily_archive" {
+  dataset_id  = "logs_daily_archive"
+  location    = local.bigquery_location
+  description = "A copy of the logs_daily dataset, taken before its removal. backfill_entries holds raw Cloud Run log entries from before 23 Oct 2026, with caller IPs and user agents, so only project owners can read this dataset."
+
+  labels = {
+    purpose = "archive"
+  }
+
+  access {
+    role          = "OWNER"
+    special_group = "projectOwners"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
