@@ -565,6 +565,8 @@ resource "google_bigquery_table" "analytics_probe" {
 }
 
 # One account per Python job, each writing its own dataset and nothing else.
+# The GA4 user ranges account writes web_history, which the history loaders'
+# account also writes.
 # They exist whatever var.analytics_jobs_enabled says, so the dataset grants
 # are in place before a job first runs. What only a running job needs (the
 # edge logs and origin catalogue buckets, the secrets, the replay and topics
@@ -574,7 +576,8 @@ resource "google_bigquery_table" "analytics_probe" {
 # topic-specs reads the whole analytics dataset, the only job account that
 # does, for its request paths in stg_log_lines. That table keeps the delivery
 # lines' json_payload, which carries user agents and hashed IP caller ids
-# (ip:<hash>). The four probe accounts and topic-vars read no other dataset.
+# (ip:<hash>). The four probe accounts, topic-vars and ga4-ranges read no
+# other dataset.
 locals {
   analytics_job_accounts = {
     edge = {
@@ -640,7 +643,22 @@ locals {
       dataset      = "langfuse_specs"
       readers      = ["langfuse_export"]
     }
+    # GA4 Viewer on the property is granted by hand (README "Web history
+    # before the exports").
+    ga4-ranges = {
+      display_name = "${var.namespace} analytics GA4 user ranges extract"
+      description  = "Runs the analytics repository's GA4 user ranges extract: calls the GA4 Data API, writes web_history.ga4_user_ranges."
+      dataset      = "web_history"
+      readers      = []
+    }
   }
+
+  # The dataset each account's WRITER grant names: the job datasets above,
+  # and web_history, which history.tf owns.
+  analytics_job_writer_datasets = merge(
+    { for key, dataset in google_bigquery_dataset.analytics_job : key => dataset.dataset_id },
+    { web_history = google_bigquery_dataset.web_history.dataset_id },
+  )
 
   analytics_job_account_reader_grants = merge([
     for account, spec in local.analytics_job_accounts : {
@@ -668,7 +686,7 @@ resource "google_project_iam_member" "analytics_job_job_user" {
 resource "google_bigquery_dataset_access" "analytics_job_writer" {
   for_each = local.analytics_job_accounts
 
-  dataset_id    = google_bigquery_dataset.analytics_job[each.value.dataset].dataset_id
+  dataset_id    = local.analytics_job_writer_datasets[each.value.dataset]
   role          = "WRITER"
   user_by_email = google_service_account.analytics_job[each.key].email
 }
