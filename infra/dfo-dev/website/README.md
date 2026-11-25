@@ -138,7 +138,15 @@ Running instances keep the values they started with. A change to `turnstile_site
 
 `ADMIN_EMAILS` is the comma-separated, case-insensitive list of verified emails that may open the website's admin page, `/admin/api-keys`. Unset, empty or naming nobody, the app has no admins and that page answers 404. The list is private and this repository is public, so it lives in Secret Manager: `admin_emails.tf` owns the secret container (`dfo-dev-website-staging-admin-emails`) and the mount, and the list itself is added out-of-band as a version. The `cloud-run-service` module grants the website's runtime service account `roles/secretmanager.secretAccessor` on it, as it does for every secret in `secret_env_vars`, so nothing else needs granting.
 
-The mount is pinned to `admin_emails_version` in `env.auto.tfvars`, as the tag secret is, so a new list reaches instances only through the revision that the apply of a new value creates. Anyone who can add a version, project owners and the Terraform applier among them, therefore cannot grant admin alone: each change goes through a reviewed pull request, and its diff, a version number, reveals no address. The first version, which the stack creates and the pin starts at, holds the literal `none` and keeps the mount resolvable, since Cloud Run refuses to start a revision whose secret env var can't be read. `none` is not an email address, so it admits nobody.
+The mount is pinned to `admin_emails_version` in `env.auto.tfvars`, as the tag secret is, so a new list reaches instances only through the revision that the apply of a new value creates, and each change made through Terraform goes through a reviewed pull request. The diff of that pull request is a version number, which reveals no address, so before approving it the reviewer reads the version it names:
+
+```
+gcloud secrets versions access N --secret dfo-dev-website-staging-admin-emails --project dev-fin-observatory
+```
+
+Review covers the Terraform path only. Anyone with `run.services.update` on the service, the website's CI deployer (`roles/run.developer`) and project owners among them, can point the mount at any version with `gcloud run services update`, since the runtime service account can read every version of the secret. That change stays live until the next apply of this stack reverts it.
+
+The first version, which the stack creates and the pin starts at, holds the literal `none` and keeps the mount resolvable, since Cloud Run refuses to start a revision whose secret env var can't be read. `none` is not an email address, so it admits nobody.
 
 To change the list, add a version holding every admin, since each version replaces the whole list. The prompt keeps the list off the screen and out of shell history, and the command prints the new version's name, which ends in its number:
 
@@ -147,7 +155,7 @@ read -rs ADMINS; printf '%s' "$ADMINS" | gcloud secrets versions add dfo-dev-web
   --project dev-fin-observatory --data-file=- --format='value(name)'
 ```
 
-`printf` rather than `echo` keeps a trailing newline out of the stored value. Then set `admin_emails_version` to that number in a pull request. Merging it applies the change and rolls a new revision, which every instance then runs, so no label roll is needed. A removal takes effect at that apply too, not when the version is added, so merge the pull request promptly when an admin must lose the page.
+`printf` rather than `echo` keeps a trailing newline out of the stored value. Then set `admin_emails_version` to that number in a pull request. Merging it applies the change and rolls a new revision, which every instance then runs, so no label roll is needed. A removal also takes effect only at that apply, so merge the pull request promptly when an admin must lose the page.
 
 Never destroy or disable the first version, even after the pin has moved on. `prevent_destroy` in `admin_emails.tf` stops only a Terraform plan from replacing it, not a `gcloud secrets versions destroy` or a console click. The provider drops a destroyed version from state, so the next apply writes a fresh `none` version, and while the pin is still `1` it names a version no revision can read, so every new revision, image deploys included, fails to start. For the same reason, never destroy or disable the version the pin names; move the pin first.
 
@@ -157,7 +165,7 @@ Never destroy or disable the first version, even after the pin has moved on. `pr
 
 Apply this stack to `dfo-dev` before the dfo-website change that issues keys (website#143) reaches staging. That deploy runs its migration first and then updates the image, and the new revision refuses to start without `API_KEY_TAG_SECRETS`, leaving staging on the old revision with the new schema.
 
-The mount is pinned to `api_key_tag_secrets_version` in `env.auto.tfvars`, so a new version reaches instances only through the revision that the apply of a new value creates. Rotate by adding versions by hand and moving that value to each in turn. A bump of the counter in `api_key_tag_secrets.tf` would replace the generated version, whose secret signed every key issued so far, and `prevent_destroy` refuses that plan. Keys don't expire, and a secret dropped from the list voids every key it signed, so the old secret keeps verifying until its keys are replaced. Plan checks the pin only for format, so the plan and apply workflows also run `scripts/check-secret-pins.sh`, which fails unless every version the service mounts by number is `ENABLED`; it reads version metadata, never a payload.
+The mount is pinned to `api_key_tag_secrets_version` in `env.auto.tfvars`, so a new version reaches instances only through the revision that the apply of a new value creates. Rotate by adding versions by hand and moving that value to each in turn. A bump of the counter in `api_key_tag_secrets.tf` would replace the generated version, whose secret signed every key issued so far, and `prevent_destroy` refuses that plan. Keys don't expire, and a secret dropped from the list voids every key it signed, so the old secret keeps verifying until its keys are replaced. Plan checks the pin only for format, so the plan and apply workflows also run `scripts/check-secret-pins.sh`, which fails unless every version the service mounts by number is `ENABLED`. It reads version metadata only.
 
 Each step below runs in a subshell under `set -euo pipefail`, so a failed read stops it without closing your terminal. Each reads its input back from Secret Manager, so a step can run from a fresh terminal.
 

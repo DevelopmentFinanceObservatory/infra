@@ -183,6 +183,7 @@ jobs:
           VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
           PLAN_OUTCOME: ${{ steps.plan.outcome }}
           GUARD_OUTCOME: ${{ steps.guard.outcome }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
         with:
           script: |

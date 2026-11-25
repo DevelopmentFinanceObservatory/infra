@@ -200,10 +200,13 @@ locals {
   # Origin value is cached as its own variant with the header the website sent
   # for it. This stack sets no custom cache key, and the rule must not set one
   # that excludes Origin, or one origin's header would reach another's pages.
-  # A request with an Authorization header is not cache-eligible. Header names
-  # keep their case on HTTP/1.1, hence lower(). A truncated header list may
-  # have dropped the Authorization header, so it counts as authenticated.
-  edge_cache_plain_request = "not http.request.headers.truncated and not any(lower(http.request.headers.names[*])[*] in {\"authorization\"})"
+  # A request with an Authorization or X-API-Key header is not
+  # cache-eligible. The website accepts an API key in either header, and
+  # counts every keyed read against the key's account, so a keyed read must
+  # reach it whichever header carries the key. Header names keep their case on
+  # HTTP/1.1, hence lower(). A truncated header list may have dropped either
+  # header, so it counts as keyed.
+  edge_cache_plain_request = "not http.request.headers.truncated and not any(lower(http.request.headers.names[*])[*] in {\"authorization\" \"x-api-key\"})"
 
   # Only GET is cache-eligible. Cloudflare answers an eligible HEAD from a
   # cached GET and fetches a cold one from the origin as a GET
@@ -223,8 +226,8 @@ locals {
 }
 
 # Makes the website's dataset files, dataset manifests, derived frames' files
-# and heads lookups cache-eligible for reads with no Authorization header,
-# from any origin.
+# and heads lookups cache-eligible for reads with no Authorization or
+# X-API-Key header, from any origin.
 # Cloudflare then follows the Cache-Control the website sends: a pinned digest
 # file for a year, and a working file, a manifest and a derived frame's file
 # for 300 s, and a heads lookup for the 300 s the origin sets.
@@ -268,14 +271,14 @@ resource "cloudflare_ruleset" "cache" {
 
   zone_id     = var.cloudflare_zone_id
   name        = "Cache"
-  description = "Cache the website's dataset files, manifests, derived files and heads lookups for reads with no Authorization header."
+  description = "Cache the website's dataset files, manifests, derived files and heads lookups for reads with no Authorization or X-API-Key header."
   kind        = "zone"
   phase       = "http_request_cache_settings"
 
   rules = [
     {
       ref         = "datasets_plain_reads"
-      description = "Cache dataset files, dataset manifests, derived frame files and heads lookups (/datasets/heads, under either prefix) for requests with no Authorization header, as the origin's Cache-Control says."
+      description = "Cache dataset files, dataset manifests, derived frame files and heads lookups (/datasets/heads, under either prefix) for requests with no Authorization or X-API-Key header, as the origin's Cache-Control says."
       expression  = "${local.edge_cache_get} and (${local.edge_cache_path_match}) and (${local.edge_cache_logged_path}) and ${local.edge_cache_plain_request}"
       action      = "set_cache_settings"
       action_parameters = {

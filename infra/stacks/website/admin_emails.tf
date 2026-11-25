@@ -5,8 +5,11 @@
 # container and the mount, and the real list is added out-of-band as a new
 # version (see README.md, "Admin emails"). The mount is pinned to
 # var.admin_emails_version, so a new version reaches instances only through
-# the revision that the apply of a new pin creates. Each new admin then gets
-# a reviewed pull request, and the pin, a version number, reveals no address.
+# the revision that the apply of a new pin creates, through a reviewed pull
+# request. The pin, a version number, reveals no address, so the reviewer
+# reads the version it names. `gcloud run services update` can point the
+# mount elsewhere outside Terraform until the next apply (README.md, "Admin
+# emails").
 
 resource "google_secret_manager_secret" "website_admin_emails" {
   secret_id = "${local.website_name}-admin-emails"

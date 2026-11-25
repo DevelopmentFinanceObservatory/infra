@@ -162,7 +162,7 @@ module "website_service" {
     DFO_CALLER_PRINCIPAL = { secret_id = var.caller_principal_secret_id }
     # Comma-separated emails or bare domains whose signed-in users' events carry internal_eng: true. Not version-pinned: the list is added out-of-band and the newest must win. See internal_eng_emails.tf and README.
     INTERNAL_ENG_EMAILS = { secret_id = google_secret_manager_secret.website_internal_eng_emails.secret_id }
-    # Comma-separated emails of the signed-in users who may open /admin/api-keys. Pinned to var.admin_emails_version, so a new list reaches instances only through the revision the apply of a reviewed pin creates, and anyone able to add a version cannot grant admin alone. See admin_emails.tf and README.
+    # Comma-separated emails of the signed-in users who may open /admin/api-keys. Pinned to var.admin_emails_version, so a new list reaches instances only through the revision the apply of a reviewed pin creates. The reviewer reads the version the pin names, since the pin shows no address. See admin_emails.tf and README.
     ADMIN_EMAILS = {
       secret_id = google_secret_manager_secret.website_admin_emails.secret_id
       version   = var.admin_emails_version

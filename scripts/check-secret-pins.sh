@@ -14,9 +14,11 @@
 #
 # Only known numeric versions are checked. `latest` and a version the apply
 # will create (unknown at plan, as when a generated secret is rotated) are
-# skipped. A version of a secret this same plan creates cannot exist yet, so
-# version 1 of such a secret passes: the apply writes it before the revision
-# that mounts it (see the stack's readiness_dependencies).
+# skipped. Version 1 that does not exist yet passes when this same plan
+# creates the secret, or creates a version of a secret that is in state but
+# has none, as after a first apply that failed between the two creates. The
+# apply writes that version before the revision that mounts it (see the
+# stack's readiness_dependencies).
 #
 # The jq path follows the google provider's schema (7.40.0):
 # template[] > containers[] > env[] (a set, a JSON array in the plan) >
@@ -42,7 +44,7 @@ shift 2
 
 command -v gcloud >/dev/null || { echo "::error::gcloud not found." >&2; exit 1; }
 
-# Write the JSON to a file first rather than piping, as check-destroys.sh does.
+# The JSON goes to a file first, as in check-destroys.sh.
 terraform show -json "$plan" >"$plan.pins.json"
 
 # One line per pinned mount: project, secret, version, resource address, env
@@ -66,12 +68,23 @@ pins="$(jq -r --arg project "$default_project" '
   | @tsv
 ' "$plan.pins.json" | sort -u)"
 
-# Secrets the plan creates, as project<TAB>secret_id.
+# Secrets whose first version this plan may write, as project<TAB>secret_id:
+# each secret the plan creates, and each secret in state that the plan
+# creates a version of. A version's secret is the full
+# projects/<p>/secrets/<s> id, known at plan when the secret is in state.
 created="$(jq -r --arg project "$default_project" '
   (.resource_changes // [])[]
-  | select(.type == "google_secret_manager_secret")
   | select(.change.actions | index("create"))
-  | [(.change.after.project // $project), .change.after.secret_id]
+  | if .type == "google_secret_manager_secret" then
+      [(.change.after.project // $project), .change.after.secret_id]
+    elif .type == "google_secret_manager_secret_version" then
+      .change.after.secret
+      | strings
+      | capture("^projects/(?<p>[^/]+)/secrets/(?<s>[^/]+)$")
+      | [.p, .s]
+    else
+      empty
+    end
   | @tsv
 ' "$plan.pins.json")"
 

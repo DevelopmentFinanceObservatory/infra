@@ -65,6 +65,16 @@ plan() {
     }' >"$STUB_PLAN"
 }
 
+# add_version <secret-id>: adds to the fixture plan a create of a version of
+# secret <secret-id> in project p, which is already in state.
+add_version() {
+    jq --arg s "projects/p/secrets/$1" '.resource_changes += [{
+      address: "google_secret_manager_secret_version.v",
+      type: "google_secret_manager_secret_version",
+      change: { actions: ["create"], after: { secret: $s } }
+    }]' "$STUB_PLAN" >"$STUB_PLAN.tmp" && mv "$STUB_PLAN.tmp" "$STUB_PLAN"
+}
+
 ref() { jq -n --arg n "$1" --arg s "$2" --arg v "$3" '{name: $n, value_source: [{secret_key_ref: [{secret: $s, version: $v}]}]}'; }
 unknown() { jq -n --arg n "$1" --arg s "$2" '{name: $n, value_source: [{secret_key_ref: [{secret: $s}]}]}'; }
 plain() { jq -n --arg n "$1" '{name: $n, value: "x"}'; }
@@ -137,6 +147,23 @@ check "it says the plan creates it" "$(says "created by this plan")"
 plan '["tag"]' "$(ref API_KEY_TAG_SECRETS tag 2)"
 run
 check "version 2 of a created secret exits 3" "$(is "$status" 3)"
+
+# 6a. Version 1 passes when the plan creates that version of a secret already
+# in state, as after a first apply that created the secret and failed before
+# its version. Any other version of that secret, and version 1 of another
+# secret, still fail.
+: >"$STUB_STATES"
+plan '[]' "$(ref ADMIN_EMAILS admins 1)"
+add_version admins
+run ADMIN_EMAILS
+check "version 1 of a planned version exits 0" "$(is "$status" 0)"
+check "it says the plan creates it" "$(says "created by this plan")"
+plan '[]' "$(ref ADMIN_EMAILS admins 2)" "$(ref API_KEY_TAG_SECRETS tag 1)"
+add_version admins
+run
+check "version 2, or another secret's version 1, exits 3" "$(is "$status" 3)"
+check "the other secret's version 1 is named" "$(says "p/tag version 1")"
+check "version 2 is named" "$(says "p/admins version 2")"
 
 # 7. A lookup that fails for another reason is an error, not a pass.
 printf '%s\n' "p/tag/3 DENIED" >"$STUB_STATES"
