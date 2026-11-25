@@ -1,5 +1,5 @@
-# The analytics repository's twelve scheduled Cloud Run Jobs, their Cloud
-# Scheduler triggers and their alerts. All twelve run the one image the
+# The analytics repository's thirteen scheduled Cloud Run Jobs, their Cloud
+# Scheduler triggers and their alerts. All thirteen run the one image the
 # repository's Deploy workflow pushes to the analytics Artifact Registry
 # repository (analytics.tf), and each Job's args pick the command, since the
 # image has no entrypoint:
@@ -16,6 +16,7 @@
 #   dfo-prod-analytics-topics-turns      python -m dfo_analytics.topics turns, daily at 05:45 UTC
 #   dfo-prod-analytics-topics-specs      python -m dfo_analytics.topics specs, daily at 08:00 UTC
 #   dfo-prod-analytics-call-specs        python -m dfo_analytics.extract.observation_specs, hourly at minute 35, except 04:35 to 06:35
+#   dfo-prod-analytics-ga4-user-ranges   python -m dfo_analytics.extract.ga4_user_ranges, daily at 06:00 UTC
 #
 # var.analytics_jobs_enabled creates everything in this file, the
 # freshness Job also waits for var.analytics_dbt_schedule_enabled, and each
@@ -326,6 +327,26 @@ locals {
         GEMINI_API_KEY = google_secret_manager_secret.analytics_probe["citations_gemini_api_key"].secret_id
       }
     }
+    # Replaces web_history.ga4_user_ranges with GA4 Data API users over each
+    # range, as the dfo-prod-ga4-user-ranges workflow (ga4_user_ranges.tf)
+    # does. Each GA4_USER_RANGES_* variable carries the value the workflow's
+    # template receives under the same name. 06:00 UTC, when yesterday has
+    # been over for six hours in the property's time zone (Etc/GMT). A run
+    # makes a few Data API calls and one truncating load job.
+    "ga4-user-ranges" = {
+      account  = google_service_account.analytics_job["ga4-ranges"]
+      args     = ["python", "-m", "dfo_analytics.extract.ga4_user_ranges"]
+      timeout  = "900s"
+      memory   = "1Gi"
+      schedule = "0 6 * * *"
+      env = {
+        GA4_USER_RANGES_GA4_PROPERTY = trimprefix(var.ga4_export_dataset, "analytics_")
+        GA4_USER_RANGES_PROJECT      = var.project_id
+        GA4_USER_RANGES_LOCATION     = local.bigquery_location
+        GA4_USER_RANGES_FLOOR        = local.ga4_user_ranges_floor
+      }
+      secrets = {}
+    }
   }
 
   analytics_jobs_topics = {
@@ -605,7 +626,7 @@ resource "google_cloud_run_v2_job" "analytics" {
 }
 
 output "analytics_job_names" {
-  description = "Names of the analytics Jobs by command (dbt, edge, grade, freshness, repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, call-specs), empty while analytics_jobs_enabled is false."
+  description = "Names of the analytics Jobs by command (dbt, edge, grade, freshness, repos, lighthouse, replay, citations, topics-variables, topics-turns, topics-specs, call-specs, ga4-user-ranges), empty while analytics_jobs_enabled is false."
   value       = { for name, job in google_cloud_run_v2_job.analytics : name => job.name }
 }
 
@@ -688,6 +709,18 @@ resource "google_cloud_scheduler_job" "analytics" {
 # Alerts
 # ─────────────────────────────────────────────────────────────────────────────
 
+# The hours each Job's analytics_job_not_succeeding policy looks back, for
+# the Jobs that have one.
+locals {
+  analytics_job_not_succeeding_hours = {
+    dbt               = 3
+    edge              = 3
+    freshness         = 3
+    "call-specs"      = 5
+    "ga4-user-ranges" = 26
+  }
+}
+
 # The hourly Jobs alert when no execution has succeeded for three hours, as
 # export_job_not_succeeding (alerts.tf) does for the export Jobs. That covers
 # a failing run, a paused trigger and a deleted Job alike. A single failed
@@ -697,8 +730,9 @@ resource "google_cloud_scheduler_job" "analytics" {
 # analytics_job_failed below also alerts on each failed freshness run. The
 # call-specs Job skips three runs a night, 04:35 to 06:35, so its last
 # success and the next can be four hours apart; its window is five hours,
-# which also covers one failed run beside the gap. The condition is PromQL,
-# as the grade policy's is: it returns 1 when the window's succeeded
+# which also covers one failed run beside the gap. The daily GA4 user ranges
+# Job's window is 26 hours, a day's schedule plus two hours, as the grade
+# policy's is. The condition is PromQL, as the grade policy's is: it returns 1 when the window's succeeded
 # executions sum to less than one, and when the series is absent, so it also
 # fires for a Job that has never succeeded, which a condition_absent misses
 # because it needs a data point written after the policy is created. It is
@@ -707,17 +741,17 @@ resource "google_cloud_scheduler_job" "analytics" {
 # Job's first success. The dbt policy exists once the dbt trigger does, and
 # the call-specs policy once its switch in var.analytics_probes_enabled is on.
 resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
-  for_each = { for name, job in local.analytics_job_triggers : name => job if contains(["dbt", "edge", "freshness", "call-specs"], name) }
+  for_each = { for name, job in local.analytics_job_triggers : name => local.analytics_job_not_succeeding_hours[name] if contains(keys(local.analytics_job_not_succeeding_hours), name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job not succeeding"
   combiner     = "OR"
 
   conditions {
-    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution in ${each.key == "call-specs" ? 5 : 3} hours"
+    display_name = "no succeeded ${google_cloud_run_v2_job.analytics[each.key].name} execution in ${each.value} hours"
 
     condition_prometheus_query_language {
-      query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.key == "call-specs" ? 5 : 3}h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.key == "call-specs" ? 5 : 3}h])"
+      query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.value}h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.analytics[each.key].name}\",location=\"${var.region}\",result=\"succeeded\"}[${each.value}h])"
       duration            = "0s"
       evaluation_interval = "300s"
     }
@@ -731,8 +765,8 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
 }
 
 # A failed run of these Jobs alerts at once, as export_job_failed (alerts.tf)
-# does. The grader runs once a day, so a failed run waits a day for its
-# retry, and the four probes and the topics passes a week or a month, or a day for
+# does. The grader and the GA4 user ranges Job run once a day, so a failed run
+# waits a day for its retry, and the four probes and the topics passes a week or a month, or a day for
 # the turns pass. A failed freshness run is the
 # alert itself: a source the dbt build reads has stopped arriving, or the
 # build has stopped writing it. A probe whose trigger stops firing fails no
@@ -741,7 +775,7 @@ resource "google_monitoring_alert_policy" "analytics_job_not_succeeding" {
 # analytics_job_not_succeeding catches a run of failures, as for the dbt and
 # edge Jobs. The rows it loses alert through analytics_call_specs_lost below.
 resource "google_monitoring_alert_policy" "analytics_job_failed" {
-  for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness", "repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs"], name) }
+  for_each = { for name, job in local.analytics_jobs_created : name => job if contains(["grade", "freshness", "repos", "lighthouse", "replay", "citations", "topics-variables", "topics-turns", "topics-specs", "ga4-user-ranges"], name) }
 
   project      = var.project_id
   display_name = "${google_cloud_run_v2_job.analytics[each.key].name} Job execution failed"
