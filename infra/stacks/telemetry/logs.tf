@@ -35,15 +35,15 @@ resource "google_logging_project_sink" "telemetry" {
   unique_writer_identity = true
 }
 
-# BigQuery roles decide who can query dfo_logs, whose entries hold request
-# IPs and user agents. The analytics service accounts and developers read it
-# by their dataset grants (analytics.tf). Project-level BigQuery data roles reach it too:
-# today the applier's roles/bigquery.dataOwner, dfo-prod-dc-ing-pst-sa's
+# BigQuery roles decide who can query dfo_logs, whose entries hold request IPs
+# and user agents. The analytics service accounts and developers read it by
+# their dataset grants (analytics.tf). Project-level BigQuery data roles reach
+# it too: today the applier's roles/bigquery.dataOwner, dfo-prod-dc-ing-pst-sa's
 # roles/bigquery.dataEditor, and the project owners. If the linked dataset
 # carries BigQuery's default projectWriters and projectReaders entries, the
 # project's editors (the default compute service account and the Google APIs
-# service agent) and viewers (dfo-infra-planner) read it as well. Readers of
-# the reporting dataset get no access here.
+# service agent) and viewers (dfo-infra-planner) read it as well. Readers of the
+# reporting dataset get no access here.
 resource "google_logging_linked_dataset" "telemetry" {
   link_id     = "dfo_logs"
   bucket      = google_logging_project_bucket_config.telemetry.id
