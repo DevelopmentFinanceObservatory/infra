@@ -1,3 +1,8 @@
+# The view definitions the dfo_reporting views were created from. Terraform
+# no longer manages those views (the removed blocks at the end), and the
+# analytics repository's dbt build replaces each with a table of the same
+# name and columns.
+#
 # The views the team dashboard reads, in dfo_reporting. Each view's query is
 # a template under sql/reporting, and tests/reporting_*.test.sh run each one
 # over literal source rows. Each view reads one source group, and is created
@@ -278,34 +283,25 @@ resource "google_bigquery_routine" "reporting_normalise_route" {
   }
 }
 
-resource "google_bigquery_table" "reporting" {
-  for_each = local.reporting_views_enabled
+# The analytics repository's dbt build writes each dfo_reporting name as a
+# table, once infra/scripts/cutover-reporting-tables.sh has swapped a table in
+# for the view of that name (README "Moving a view to dbt"), so Terraform
+# stops managing the views and their authorised-view entries here and leaves
+# both in place. A view keeps reading its sources through its entries until
+# the swap. The templates under sql/reporting and the locals above
+# no longer reach BigQuery, so a change to them changes no view.
+removed {
+  from = google_bigquery_table.reporting
 
-  dataset_id  = google_bigquery_dataset.reporting.dataset_id
-  table_id    = each.key
-  description = each.value.description
-
-  # A view holds no data, so removing its group from var.reporting_sources
-  # may delete it.
-  deletion_protection = false
-
-  view {
-    use_legacy_sql = false
-    query          = each.value.query
+  lifecycle {
+    destroy = false
   }
 }
 
-# One authorised-view entry per view and source dataset. Each is a
-# google_bigquery_dataset_access, the only kind of grant on these datasets
-# (README), so applying one leaves every other entry in place.
-resource "google_bigquery_dataset_access" "reporting_views" {
-  for_each = local.reporting_view_grants
+removed {
+  from = google_bigquery_dataset_access.reporting_views
 
-  dataset_id = each.value.dataset
-
-  view {
-    project_id = var.project_id
-    dataset_id = google_bigquery_dataset.reporting.dataset_id
-    table_id   = google_bigquery_table.reporting[each.value.view].table_id
+  lifecycle {
+    destroy = false
   }
 }
