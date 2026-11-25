@@ -12,6 +12,7 @@ The owning repo's CI, not Terraform, updates the running image after the first a
 lifecycle {
   ignore_changes = [
     template[0].containers[0].image,
+    template[0].labels,
     client,
     client_version,
   ]
@@ -19,6 +20,8 @@ lifecycle {
 ```
 
 `client` and `client_version` are ignored for the same reason as the image. `gcloud run services update` stamps them with its own name and version to record which tool last mutated the service, so they belong to whoever deployed last. Left unignored, every plan after a deploy proposes nulling them and every deploy sets them again, and the stack never plans clean.
+
+`template[0].labels` is ignored because only `gcloud run services update --update-labels` sets revision template labels, which the stack READMEs use to roll a service onto a new revision. The module sets none, so without the entry the next plan would propose removing them and its apply would roll another revision.
 
 ## Sizing
 

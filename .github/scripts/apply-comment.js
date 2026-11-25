@@ -30,6 +30,8 @@ module.exports = async ({ github, context, core }) => {
   const validateOutcome = process.env.VALIDATE_OUTCOME || "skipped";
   const planOutcome = process.env.PLAN_OUTCOME || "skipped";
   const guardOutcome = process.env.GUARD_OUTCOME || "skipped";
+  // Only the website stack runs the secret pin check; elsewhere it is skipped.
+  const pinsOutcome = process.env.PINS_OUTCOME || "skipped";
   const applyOutcome = process.env.APPLY_OUTCOME || "skipped";
   // Redacted here, at the read, so neither the summary nor the comment can
   // see an address.
@@ -91,6 +93,8 @@ module.exports = async ({ github, context, core }) => {
     verdict = "**Plan failed.** See details below.";
   } else if (guardOutcome !== "success" && guardOutcome !== "skipped") {
     verdict = "**Blocked by the destroy guard.** The plan would destroy or replace protected resources without the `allow-destroy` label; apply was skipped.";
+  } else if (pinsOutcome !== "success" && pinsOutcome !== "skipped") {
+    verdict = "**Blocked by the secret pin check.** A pinned secret version is missing, disabled or destroyed, a required env var has no numeric pin, or the check could not run; apply was skipped. The run's `Check pinned secret versions` step names the cause.";
   } else {
     verdict = "**Apply failed.** See details below.";
   }

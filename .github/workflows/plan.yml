@@ -81,6 +81,23 @@
 # guard fails the plan job, and with it `Changed stacks planned`, which blocks
 # the merge.
 #
+# Pinned secret versions
+# ----------------------
+# The website stack pins API_KEY_TAG_SECRETS and ADMIN_EMAILS to version
+# numbers set in env.auto.tfvars, which plan checks only for format. A
+# missing, disabled or destroyed version passes plan, and the apply's
+# revision then fails to start, as does every later image deploy. After
+# planning, `scripts/check-secret-pins.sh` reads the state of every numeric
+# version the plan mounts with `gcloud secrets versions describe` and fails
+# the job unless each is ENABLED. It reads metadata only, which the planner's
+# roles/viewer allows, and no payload reaches state or the log. Version 1
+# passes when the same plan creates its secret or that version, since the
+# apply writes it first. The step names API_KEY_TAG_SECRETS and ADMIN_EMAILS,
+# and the check also fails unless it finds both as numeric pins, so a plan
+# shape the script no longer reads fails the job. The check runs after the
+# destroy guard, whatever the guard's outcome, so the plan comment reports
+# both. apply-stack.yml runs the same check before it applies.
+#
 # Removed stacks
 # --------------
 # A PR into `dev` that deletes or renames a directory under `infra/dfo-dev`
@@ -277,6 +294,14 @@ jobs:
             exit "$code"
           fi
 
+      # See "Pinned secret versions" above.
+      - name: Check pinned secret versions
+        id: pins
+        if: ${{ !cancelled() && steps.plan.outcome == 'success' && matrix.stack == 'website' }}
+        env:
+          PROJECT: ${{ steps.auth.outputs.project_id }}
+        run: '"$GITHUB_WORKSPACE/scripts/check-secret-pins.sh" tfplan "$PROJECT" API_KEY_TAG_SECRETS ADMIN_EMAILS'
+
       - name: Comment plan on PR
         if: always()
         uses: actions/github-script@v7
@@ -287,6 +312,7 @@ jobs:
           VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
           PLAN_OUTCOME: ${{ steps.plan.outcome }}
           GUARD_OUTCOME: ${{ steps.guard.outcome }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
         with:
           script: |
             const comment = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/plan-comment.js`);
