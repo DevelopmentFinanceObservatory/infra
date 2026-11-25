@@ -315,7 +315,7 @@ The pool id and the apis repository's id reach this stack as `github_wif_pool_id
 
 ## Deploy order
 
-The apis service's readiness depends on the origin catalogue existing. The deploy workflow points `dfo-dev-origin-catalogue-candidate` at the new image (`gcloud run jobs update --image`) and runs a verify, a build and a verify execution on it (`gcloud run jobs execute --wait`, the same calls it runs against the migrate Jobs) before traffic moves. Right after traffic moves, it moves the scheduled `dfo-dev-origin-catalogue` to the new image. In the reverse order a service revision that raises at startup races a Job that has not yet produced an artifact.
+The apis service's readiness depends on the origin catalogue existing. The deploy workflow points `dfo-dev-origin-catalogue-candidate` at the new image (`gcloud run jobs update --image`) and runs a verify, a build and a verify execution on it (`gcloud run jobs execute --wait`, the same calls it runs against the migrate Jobs) before the datasets worker and the apis service move to the new image, since both raise at startup when no catalogue loads. Right after traffic moves, it moves the scheduled `dfo-dev-origin-catalogue` to the new image. In the reverse order a service revision that raises at startup races a Job that has not yet produced an artifact.
 
 ## State bootstrap
 

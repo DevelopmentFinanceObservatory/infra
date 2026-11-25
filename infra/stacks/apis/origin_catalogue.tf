@@ -146,7 +146,7 @@ locals {
 
     service_account = google_service_account.origin_catalogue_job.email
 
-    # The same private path the service and the migrate Job use; the UN
+    # The same private path the service and the migrate Job use. The UN
     # deployment and the mixer sit on public addresses, reached over the
     # default route.
     vpc_network    = module.psc_network.network_id
@@ -306,7 +306,7 @@ resource "google_cloud_run_v2_job_iam_member" "origin_catalogue_candidate_deploy
 }
 
 output "origin_catalogue_candidate_job_name" {
-  description = "Name of the unscheduled origin catalogue candidate Job. The deploy workflow points it at the new image and runs a verify, a build and a verify execution against it before traffic moves."
+  description = "Name of the unscheduled origin catalogue candidate Job. The deploy workflow points it at the new image and runs a verify, a build and a verify execution against it before the datasets worker moves and before traffic moves."
   value       = google_cloud_run_v2_job.origin_catalogue_candidate.name
 }
 
