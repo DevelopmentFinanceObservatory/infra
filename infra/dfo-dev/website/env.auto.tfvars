@@ -44,4 +44,4 @@ graph_explorer_email_domains = ["one.org", "ods.coop", "ode.partners"]
 api_key_tag_secrets_version = "1"
 
 # Version of dfo-dev-website-staging-admin-emails that the service mounts. Each change to the admin list sets this to the new version. See README, "Admin emails".
-admin_emails_version = "1"
+admin_emails_version = "2"
