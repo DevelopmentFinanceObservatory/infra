@@ -1,7 +1,6 @@
-# Failure alerts for the data pipeline the team dashboard reads: the
-# logs_daily scheduled query (logs_daily.tf) and the two hourly export Jobs
-# that fill the datasets the reporting views read. The Jobs belong to the
-# website and ai stacks, and this stack names them by their fixed names.
+# Failure alerts for the two hourly export Jobs that fill the datasets the
+# analytics dbt build reads. The Jobs belong to the website and ai stacks, and
+# this stack names them by their fixed names.
 
 # An email channel carries one address, so each recipient in the principals
 # secret's alerts object (main.tf) gets a channel, keyed and named by its
@@ -64,11 +63,11 @@ resource "google_monitoring_alert_policy" "export_job_failed" {
 # renamed or deleted Job, or every run failing. It is its own policy, as the
 # apis stack's search_catalogue_heartbeat is, because an auto_close timer
 # shorter than the absence would close the incident while no execution
-# succeeds. The condition is PromQL, as logs_daily_not_succeeding's is
-# below: it returns 1 when the window's succeeded executions sum to less
-# than one, and when the series is absent, so it also fires for a Job that
-# has never succeeded, which a condition_absent misses because it needs a
-# data point written after the policy is created.
+# succeeds. The condition is PromQL: it returns 1 when the window's
+# succeeded executions sum to less than one, and when the series is absent,
+# so it also fires for a Job that has never succeeded, which a
+# condition_absent misses because it needs a data point written after the
+# policy is created.
 resource "google_monitoring_alert_policy" "export_job_not_succeeding" {
   for_each = local.export_jobs
 
@@ -81,44 +80,6 @@ resource "google_monitoring_alert_policy" "export_job_not_succeeding" {
 
     condition_prometheus_query_language {
       query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${each.value}\",location=\"${var.region}\",result=\"succeeded\"}[3h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${each.value}\",location=\"${var.region}\",result=\"succeeded\"}[3h])"
-      duration            = "0s"
-      evaluation_interval = "300s"
-    }
-  }
-
-  notification_channels = local.alert_notification_channels
-
-  alert_strategy {
-    auto_close = "604800s"
-  }
-}
-
-# A scheduled query that is paused, disabled, or deleted completes no run, so
-# logs_daily_failed (logs_daily.tf) stays quiet. This policy fires when the
-# config has no succeeded run in the last 26 hours of stored data, one day's
-# schedule plus two hours' slack, whatever the run cause. A condition_absent
-# cannot watch a once-a-day success, since it caps the absence at 23.5 hours,
-# so the policy uses a PromQL condition. The transfer service writes
-# zero-valued SUCCEEDED points, so the query returns 1 when the window's
-# succeeded runs sum to less than one, and also when the series is absent. It
-# is evaluated every 5 minutes over stored data, so a config with no success
-# in the 26 hours before the policy exists, such as a newly created config,
-# alerts within minutes, and the incident closes after its first success. It is
-# its own policy, as export_job_not_succeeding is, with a seven-day auto_close.
-# A disabled config runs nothing, so the policy goes with
-# var.analytics_dbt_schedule_enabled, which disables it (logs_daily.tf).
-resource "google_monitoring_alert_policy" "logs_daily_not_succeeding" {
-  count = var.analytics_dbt_schedule_enabled ? 0 : 1
-
-  project      = var.project_id
-  display_name = "logs_daily scheduled query not succeeding"
-  combiner     = "OR"
-
-  conditions {
-    display_name = "no succeeded logs_daily run in 26 hours"
-
-    condition_prometheus_query_language {
-      query               = "(sum(sum_over_time(bigquerydatatransfer_googleapis_com:transfer_config_completed_runs{monitored_resource=\"bigquery_dts_config\",config_id=\"${local.logs_daily_config_id}\",completion_state=\"SUCCEEDED\"}[26h])) < 1) or absent_over_time(bigquerydatatransfer_googleapis_com:transfer_config_completed_runs{monitored_resource=\"bigquery_dts_config\",config_id=\"${local.logs_daily_config_id}\",completion_state=\"SUCCEEDED\"}[26h])"
       duration            = "0s"
       evaluation_interval = "300s"
     }
