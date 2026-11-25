@@ -1,1 +1,0 @@
-../../stacks/telemetry/reporting_views.tf

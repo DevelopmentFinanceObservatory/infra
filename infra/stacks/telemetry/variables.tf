@@ -14,7 +14,7 @@ variable "namespace" {
 }
 
 variable "log_retention_days" {
-  description = "Days the telemetry log bucket keeps entries, and so how far back the linked dfo_logs dataset reaches. logs_daily keeps its aggregates for longer."
+  description = "Days the telemetry log bucket keeps entries, and so how far back the linked dfo_logs dataset reaches."
   type        = number
   default     = 30
 }
@@ -23,16 +23,6 @@ variable "search_console_export_account" {
   description = "Service account Search Console's bulk data export writes as."
   type        = string
   default     = "search-console-data-export@system.gserviceaccount.com"
-}
-
-variable "reporting_sources" {
-  description = "Source groups whose first table exists, out of the keys of local.reporting_source_datasets (reporting_views.tf). A reporting view is created, and authorised on its sources, only when the group it reads is listed."
-  type        = set(string)
-
-  validation {
-    condition     = length(setsubtract(var.reporting_sources, keys(local.reporting_source_datasets))) == 0
-    error_message = "reporting_sources may list only ${join(", ", sort(keys(local.reporting_source_datasets)))}."
-  }
 }
 
 variable "ga4_export_dataset" {

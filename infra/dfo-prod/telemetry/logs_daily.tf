@@ -1,1 +1,0 @@
-../../stacks/telemetry/logs_daily.tf
