@@ -57,11 +57,6 @@ resource "google_logging_linked_dataset" "telemetry" {
 # grant added outside it, and only the project owners read the archive. No
 # google_bigquery_dataset_access names it, and it is not an analytics source
 # (analytics.tf).
-import {
-  to = google_bigquery_dataset.logs_daily_archive
-  id = "projects/${var.project_id}/datasets/logs_daily_archive"
-}
-
 resource "google_bigquery_dataset" "logs_daily_archive" {
   dataset_id  = "logs_daily_archive"
   location    = local.bigquery_location
@@ -78,35 +73,5 @@ resource "google_bigquery_dataset" "logs_daily_archive" {
 
   lifecycle {
     prevent_destroy = true
-  }
-}
-
-# logs_daily holds the daily aggregates, the backfill table and the entries
-# view that logs_daily_archive copies, and nothing reads it. A dataset
-# resource being removed cannot set delete_contents_on_destroy, a destroy of
-# a dataset that holds tables fails, and both tables carry the provider's
-# default deletion protection, so Terraform forgets the three here and README
-# "Datasets deleted by hand" gives the bq rm that deletes the dataset.
-removed {
-  from = google_bigquery_dataset.logs_daily
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = google_bigquery_table.backfill_entries
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = google_bigquery_table.entries
-
-  lifecycle {
-    destroy = false
   }
 }

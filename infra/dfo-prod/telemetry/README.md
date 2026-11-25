@@ -12,7 +12,7 @@ The bucket's linked dataset `dfo_logs` exposes the entries to BigQuery as the vi
 
 A sink routes only entries written after it exists, and this one routes every entry only from about 18:50 UTC on 2026-10-23.
 
-The dataset `logs_daily_archive` (`logs.tf`) is a copy of `logs_daily` made by hand before that dataset's removal, and Terraform adopted it with an `import` block. Its `backfill_entries` holds raw Cloud Run log entries from before 2026-10-23, with caller IPs and user agents, so its one `access` block gives `OWNER` to the project owners and nothing else. The block is authoritative: an apply removes any grant added outside it. No `google_bigquery_dataset_access` names the dataset, and it is not an analytics source.
+The dataset `logs_daily_archive` (`logs.tf`) is a copy of the retired `logs_daily` dataset's seven tables. Its `backfill_entries` holds raw Cloud Run log entries from before 2026-10-23, with caller IPs and user agents, so its one `access` block gives `OWNER` to the project owners and nothing else. The block is authoritative: an apply removes any grant added outside it. No `google_bigquery_dataset_access` names the dataset, and it is not an analytics source.
 
 ## Alerts
 
@@ -352,14 +352,3 @@ Telemetry applies after `foundation`, which lets the applier write this stack's 
 - The analytics repository's id in both stacks and its two repository variables, as "Analytics repo" shows. The repository's `dbt-build` job is skipped until then.
 - The analytics Jobs, switched on in the order "Switching the Jobs on" gives.
 - In Search Console, under Settings, Bulk data export, a property owner of developmentfinance.org enters the project `prod-fin-observatory`, the dataset `searchconsole`, and the location EU. The first export arrives within 48 hours.
-
-## Datasets deleted by hand
-
-`logs_daily` and `reporting_marts` hold tables and have no reader, and Terraform does not manage them (the `removed` blocks in `logs.tf` and `analytics.tf`). Terraform deletes a dataset that holds tables only when its resource sets `delete_contents_on_destroy`, so a project owner deletes the two by hand once the apply that removes them from state has run:
-
-```sh
-bq rm -r -f --dataset prod-fin-observatory:logs_daily
-bq rm -r -f --dataset prod-fin-observatory:reporting_marts
-```
-
-`logs_daily_archive` ("Logs") holds a copy of every `logs_daily` table. `reporting_marts` holds 13 tables the analytics build wrote before it wrote `dfo_reporting` directly.
