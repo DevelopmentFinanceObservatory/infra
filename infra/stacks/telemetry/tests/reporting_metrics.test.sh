@@ -193,11 +193,11 @@ SOURCES="WITH
     (CURRENT_DATE(), 'v8', 11, 21, 301, 5, 9, 101, 6, 12, 200)])
   ),
   topic_demand_weekly AS (
-    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, axis STRING, topic_id STRING, suppressed BOOL, turns FLOAT64, unmet_turns FLOAT64, unmet_rate FLOAT64, no_data_turns FLOAT64, missing_feature_turns FLOAT64, staff_share FLOAT64, unknown_caller_share FLOAT64>>[
-    ('2026-10-12', 'subject', 'health', false, 12.0, 3.0, 0.25, 2.0, 1.0, 0.1, 0.2),
-    ('2026-10-12', 'subject', 'other', true, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-    ('2026-10-19', 'subject', 'health', false, 8.0, 2.0, 0.25, 1.0, 1.0, 0.0, 0.0),
-    ($CUR, 'subject', 'health', false, 9.0, 1.0, 0.11, 1.0, 0.0, 0.3, 0.4)])
+    SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, axis STRING, topic_id STRING, turns FLOAT64, unmet_turns FLOAT64, unmet_rate FLOAT64, no_data_turns FLOAT64, missing_feature_turns FLOAT64, staff_share FLOAT64, unknown_caller_share FLOAT64>>[
+    ('2026-10-12', 'subject', 'health', 12.0, 3.0, 0.25, 2.0, 1.0, 0.1, 0.2),
+    ('2026-10-12', 'subject', 'other', 2.0, 1.0, 0.5, 1.0, 0.0, 0.0, 0.5),
+    ('2026-10-19', 'subject', 'health', 8.0, 2.0, 0.25, 1.0, 1.0, 0.0, 0.0),
+    ($CUR, 'subject', 'health', 9.0, 1.0, 0.11, 1.0, 0.0, 0.3, 0.4)])
   ),
   website_log_users_weekly AS (
     SELECT * FROM UNNEST(ARRAY<STRUCT<iso_week DATE, users INT64, searchers INT64, sharers INT64, staff_users INT64, observed BOOL, accounts_linked BOOL>>[
@@ -372,8 +372,8 @@ check metrics_catalogue_daily \
     "$(metrics_rows metrics_catalogue_daily 't.day')"
 
 check metrics_topic_demand_weekly \
-    '{"iso_week":"2026-10-12","axis":"subject","topic_id":"health","topic_name":"Health","suppressed":false,"turns":12,"unmet_turns":3,"unmet_rate":0.25,"no_data_turns":2,"missing_feature_turns":1,"staff_share":0.1,"unknown_caller_share":0.2}
-{"iso_week":"2026-10-12","axis":"subject","topic_id":"other","topic_name":"other","suppressed":true,"turns":null,"unmet_turns":null,"unmet_rate":null,"no_data_turns":null,"missing_feature_turns":null,"staff_share":null,"unknown_caller_share":null}' \
+    '{"iso_week":"2026-10-12","axis":"subject","topic_id":"health","topic_name":"Health","turns":12,"unmet_turns":3,"unmet_rate":0.25,"no_data_turns":2,"missing_feature_turns":1,"staff_share":0.1,"unknown_caller_share":0.2}
+{"iso_week":"2026-10-12","axis":"subject","topic_id":"other","topic_name":"other","turns":2,"unmet_turns":1,"unmet_rate":0.5,"no_data_turns":1,"missing_feature_turns":0,"staff_share":0,"unknown_caller_share":0.5}' \
     "$(metrics_rows metrics_topic_demand_weekly 't.iso_week, t.topic_id')"
 
 check metrics_variable_topics \
