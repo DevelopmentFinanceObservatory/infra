@@ -265,6 +265,8 @@ It prints the execution's result, the number of requests and the `MERGE` job's i
 
 ## Reporting views
 
+The analytics repository's scheduled dbt build writes `dfo_reporting`, as `dfo-prod-analytics-runner`, the dataset's one writer. Each view below becomes a table of the same name, columns and types, through the steps in "Moving a view to dbt". Terraform does not manage the views or their authorised-view entries (the `removed` blocks in `reporting_views.tf`), and leaves both in place, so each view reads its sources until its table replaces it. A change to a template under `sql/reporting` changes no view; change the analytics model of that name.
+
 `dfo_reporting` holds one view per dashboard source, each a template under `infra/stacks/telemetry/sql/reporting` that `reporting_views.tf` renders. The views hold counts, sums, durations and route or page paths, and no user id, IP, raw conversation id or free text. Each view is an authorised view on every dataset it reads, through a `google_bigquery_dataset_access` with a `view` block, so readers of `dfo_reporting` query the views without access to the sources.
 
 | View                       | Grain                                                    | Columns                                                                                                                                                                                                                             |
@@ -354,6 +356,19 @@ Every view cuts the ISO week holding today, so it returns complete weeks (Monday
 
 `tests/reporting_*.test.sh` in `infra/stacks/telemetry` run each view over literal source rows and fail on any row that differs from the ones they pin. Run them by hand after changing a view.
 
+### Moving a view to dbt
+
+BigQuery cannot replace a view with a table in one statement, and dbt-bigquery's table materialisation drops a view in one API call and creates the table in another, so a failed create would leave the name missing. The analytics models under `dbt/models/marts/reporting/` therefore run the pre-hook `refuse_to_replace_a_view`, which fails a model while its `dfo_reporting` name is still a view and leaves the view serving. `infra/scripts/cutover-reporting-tables.sh` swaps a validated table in first, and the build then replaces that table in place with `CREATE OR REPLACE TABLE`, which leaves the old table intact when it fails.
+
+For a set of views whose tables the analytics build already writes in a staging dataset (`reporting_marts` for the thirteen export-fed views):
+
+1. Run `infra/scripts/compare-reporting-marts.sh <staging dataset>` after an hourly build. Every view must report `same`.
+2. As a project owner, run `infra/scripts/cutover-reporting-tables.sh swap <staging dataset> <name>...`. For each name that is a view, it saves the view's query, description and every authorised-view entry naming it to `./reporting-cutover-backup/<name>.json`, copies the staging table to `<name>__swap`, stops unless the copy's columns, order and types match the view's, then drops the view and renames the copy to the name. The drop and the rename are metadata changes, so the name is missing for about a second. A rerun finishes a rename a failed run left as `<name>__swap`, and leaves a name that is already a table alone. Keep the backup directory until the move is complete.
+3. Merge the analytics change that points the models at `dfo_reporting`. Until its first build, each swapped table holds the staging table's rows as of the swap.
+4. After that build, check the tables' row counts beside the staging tables', then delete the staging copies.
+
+To go back, run `infra/scripts/cutover-reporting-tables.sh restore <name>...` with the same backup directory. It renames each table to `<name>__rolled_back`, recreates the view from its saved query and description, and adds back each saved authorised-view entry its source dataset no longer holds, so readers query the view without access to the sources. Revert the analytics change too, or its next build fails on the restored views. A rehearsal in scratch datasets covered each path: the pre-hook failing a build on a view and leaving it in place, the swap, a rerun after a drop with no rename, a build replacing the swapped table, and a restore that re-added a removed entry.
+
 ### Switching a source on
 
 A view cannot name a table that does not exist, so `reporting_sources` in `reporting.auto.tfvars` lists the source groups whose tables exist, and only their views and authorised-view entries are created. Add a group once the tables below exist, and apply.
@@ -395,7 +410,7 @@ Each dbt target writes one EU dataset:
 | `analytics_dev`   | analytics developers' own credentials, the `dev` target                                 | 7 days           |
 | `reporting_marts` | `dfo-prod-analytics-runner`, the `prod` target's models with `+schema: reporting_marts` | none             |
 
-`dfo-prod-analytics-ci` runs the repository's `dbt-build` CI job. `dfo-prod-analytics-runner` runs the scheduled dbt build, the `dfo-prod-analytics-dbt` Job. Each account holds `roles/bigquery.jobUser` on the project, `WRITER` on its own dataset, and `READER` on the sixteen sources. The runner also writes `reporting_marts`, which holds the tables behind the `dfo_reporting` views that read the raw exports. Those tables carry spend, account and per-turn rows, so they sit apart from `analytics`, which the topics specs pass's account reads. A model the analytics repository places in any other dataset with `+schema` fails at build until `analytics.tf` grants the runner `WRITER` on that dataset.
+`dfo-prod-analytics-ci` runs the repository's `dbt-build` CI job. `dfo-prod-analytics-runner` runs the scheduled dbt build, the `dfo-prod-analytics-dbt` Job. Each account holds `roles/bigquery.jobUser` on the project, `WRITER` on its own dataset, and `READER` on the sixteen sources. The runner also writes `dfo_reporting` (see "Reporting views") and `reporting_marts`, which holds the tables behind the `dfo_reporting` views that read the raw exports. Those tables carry spend, account and per-turn rows, so they sit apart from `analytics`, which the topics specs pass's account reads. A model the analytics repository places in any other dataset with `+schema` fails at build until `analytics.tf` grants the runner `WRITER` on that dataset.
 
 The principals secret's `analytics_developers` object lists the people who build models against prod data. Each gets `roles/bigquery.jobUser` on the project, `READER` on the sixteen sources, and `WRITER` on `analytics_dev`. `dfo_logs` holds request IPs and user agents, so a developer reads those too. Someone who only reads the dashboard belongs in `readers` instead. Every developer builds into the one `analytics_dev` dataset, so the last build of a model replaces anyone else's. The analytics repository's `DBT_BIGQUERY_DEV_DATASET` variable points a developer's build at another dataset, which needs its own grant.
 
