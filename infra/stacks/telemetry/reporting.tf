@@ -1,12 +1,22 @@
-# The one dataset the team dashboard reads. It holds views and aggregates
-# only, with no user ids, IPs or free text, and its readers get no access to
-# the datasets those views read.
+# The one dataset the team dashboard reads. It holds aggregates only, with no
+# user ids, IPs or free text, and its readers get no access to the datasets
+# they are built from. The analytics repository's scheduled dbt build writes
+# its tables, and its tests hold every column to that rule.
 resource "google_bigquery_dataset" "reporting" {
   dataset_id  = "dfo_reporting"
   location    = local.bigquery_location
   description = "Reporting views over the DFO telemetry datasets, read by the team dashboard."
 
   depends_on = [google_project_service.apis]
+}
+
+# The scheduled dbt build is the one writer of dfo_reporting. The CI account
+# and the analytics developers build into their own datasets and get no
+# access here.
+resource "google_bigquery_dataset_access" "analytics_runner_reporting" {
+  dataset_id    = google_bigquery_dataset.reporting.dataset_id
+  role          = "WRITER"
+  user_by_email = google_service_account.analytics["runner"].email
 }
 
 # A dataset access entry names its principal by kind, so each member string
