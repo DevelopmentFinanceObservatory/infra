@@ -462,27 +462,6 @@ module "applier" {
   depends_on = [google_project_service.apis]
 }
 
-# Scheduled queries (the telemetry stack's logs_daily) are Data Transfer
-# Service configs. The only predefined role that creates them is
-# roles/bigquery.admin, which also carries every table's data, so the applier
-# gets the two transfer permissions alone.
-resource "google_project_iam_custom_role" "applier_transfer_configs" {
-  project     = var.project_id
-  role_id     = "dfoInfraApplierTransferConfigs"
-  title       = "dfo-infra applier: BigQuery transfer configs"
-  description = "bigquery.transfers.get and bigquery.transfers.update, to create, change and delete scheduled queries."
-  permissions = [
-    "bigquery.transfers.get",
-    "bigquery.transfers.update",
-  ]
-}
-
-resource "google_project_iam_member" "applier_transfer_configs" {
-  project = var.project_id
-  role    = google_project_iam_custom_role.applier_transfer_configs.id
-  member  = module.applier.member
-}
-
 # The applier holds the only Postgres login on the shared Cloud SQL instance,
 # and that instance is PSC-only with no route from a laptop, so reading
 # database state (a pg_database ACL, a role's grants, what a provision script
