@@ -285,3 +285,14 @@ variable "allow_unauthenticated" {
   description = "Grant roles/run.invoker on the apis service to allUsers. True lets any caller reach the run.app URL with no token. False admits the website and ai runtime service accounts (granted in their own stacks), the grants other files in this stack make on the service by resource reference (dev's eval_reader.tf and sdk_e2e.tf), the members in the principals secret's invokers object, and people who hold a project role with run.routes.invoke and reach the service through `gcloud run services proxy`."
   type        = bool
 }
+
+variable "search_jev_max_concurrency" {
+  description = "Size of the Jev call semaphore in each apis process (SEARCH_JEV_MAX_CONCURRENCY). dfo-apis uses the value as the exact size, so setting it replaces the code default, which differs between releases. The apis image starts one uvicorn worker per instance, so the service-wide ceiling is this value times max_instances. Must stay below the 100 connections of the Jev HTTP client pool, because a call that waits for a pooled connection times out and opens the Jev breaker. Null leaves the variable unset."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.search_jev_max_concurrency == null ? true : (var.search_jev_max_concurrency >= 1 && var.search_jev_max_concurrency < 100 && var.search_jev_max_concurrency == floor(var.search_jev_max_concurrency))
+    error_message = "search_jev_max_concurrency must be null or a whole number from 1 to 99, below the Jev client's 100-connection pool."
+  }
+}

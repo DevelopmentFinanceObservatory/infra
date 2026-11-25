@@ -94,6 +94,21 @@ data "google_service_account" "apis_deployer" {
   account_id = "dfo-apis-deployer@${var.project_id}.iam.gserviceaccount.com"
 }
 
+locals {
+  # The website origin and the dataset-link flag every process that renders
+  # a dataset bundle reads: the apis service, the datasets worker
+  # (datasets_worker.tf) and the maintenance Job's `render-ahead`
+  # (datasets_maintenance_job.tf). Both values are part of every bundle's
+  # rendition token, so a process that read others would render under keys
+  # the service never asks for. dfo-apis refuses to start a rendering
+  # process without DFO_PUBLIC_SITE_URL. Turning the flag on re-renders each
+  # bundle once, on its next request.
+  datasets_site_env = {
+    DFO_PUBLIC_SITE_URL    = var.dfo_public_site_url
+    DFO_SITE_DATASET_LINKS = "true"
+  }
+}
+
 module "apis_service" {
   source = "../../modules/cloud-run-service"
 
@@ -288,17 +303,6 @@ module "apis_service" {
     # search_catalogue.tf's bucket, which GET /api/search/catalogue serves.
     SEARCH_CATALOGUE_URI = "gs://${google_storage_bucket.search_catalogue.name}/"
 
-    # The website origin every download bundle link is built on. The apis
-    # service refuses to start without it, so a missing value fails the
-    # revision.
-    DFO_PUBLIC_SITE_URL = var.dfo_public_site_url
-
-    # Prints the website's /data?spec=&v= page in dataset bundles whose
-    # definition the site can replay. The flag is part of every bundle's
-    # rendition token, so turning it on re-renders each bundle once, on its
-    # next request.
-    DFO_SITE_DATASET_LINKS = "true"
-
     # datasets_worker.tf. The mint door reads these three to enqueue an
     # over-budget operation: where to dispatch the run request, which
     # identity to mint the OIDC token as, and which queue to enqueue onto.
@@ -324,6 +328,9 @@ module "apis_service" {
     # operation deadline above.
     DATASETS_OPERATION_BACKLOG_MAX = tostring(local.datasets_operation_backlog_max)
     },
+    # The website origin and the dataset-link flag, shared with the datasets
+    # worker and the maintenance Job (local.datasets_site_env above).
+    local.datasets_site_env,
     # graph_release.tf's bucket, once var.graph_release_serving is true. The
     # service loads the release the pointer names at startup and refuses to
     # start when none is published, so it stays unset until the builder has
@@ -334,7 +341,10 @@ module "apis_service" {
     var.graph_release_coverage ? { GRAPH_RELEASE_COVERAGE = "1" } : {},
     # Read the origin catalogue from that release too, once
     # var.graph_release_origin is true.
-    var.graph_release_origin ? { GRAPH_RELEASE_ORIGIN = "1" } : {}
+    var.graph_release_origin ? { GRAPH_RELEASE_ORIGIN = "1" } : {},
+    # Sets the size of the Jev call semaphore in each process, once
+    # var.search_jev_max_concurrency is set. Unset leaves the dfo-apis default.
+    var.search_jev_max_concurrency != null ? { SEARCH_JEV_MAX_CONCURRENCY = tostring(var.search_jev_max_concurrency) } : {}
   )
 
   deployer_members = ["serviceAccount:${data.google_service_account.apis_deployer.email}"]
@@ -397,6 +407,29 @@ resource "google_cloud_run_v2_service_iam_member" "apis_viewer" {
   name     = module.apis_service.service_name
   role     = "roles/run.viewer"
   member   = local.principals.invokers[each.key]
+}
+
+# dfo-apis's deploy workflow calls the service once the new revision serves,
+# to warm it: the Search, Skills and Graph surfaces build the skills index
+# and the Graph schema beside serving, and Cloud Run throttles the CPU of an
+# instance with no request in flight, so a revision nobody calls stalls those
+# builds until the first readers arrive and pay for them. The grant names
+# this one service. The workflow authenticates as the deployer through WIF
+# and mints the ID token through the IAM Credentials generateIdToken call as
+# the deployer itself, which needs iam.serviceAccounts.getOpenIdToken on the
+# account; an account lacks it on itself by default, as sdk_e2e.tf records.
+resource "google_cloud_run_v2_service_iam_member" "apis_deployer_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = module.apis_service.service_name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${data.google_service_account.apis_deployer.email}"
+}
+
+resource "google_service_account_iam_member" "apis_deployer_self_id_token" {
+  service_account_id = data.google_service_account.apis_deployer.name
+  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
+  member             = "serviceAccount:${data.google_service_account.apis_deployer.email}"
 }
 
 # The tag the apis service is running, read fresh on every plan and

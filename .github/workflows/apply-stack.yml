@@ -17,6 +17,20 @@
 # output when the list is missing. The applier reads the secrets through its
 # project-wide roles/secretmanager.admin. This file and the scripts run from
 # the pushed commit.
+#
+# Reviewed stacks
+# ---------------
+# Every stack but edge-logs runs in the one `apply` job: plan, destroy guard,
+# apply. Its plan was shown on the pull request by plan-prod.yml, so the
+# `production` approval comes after a plan the reviewers have read.
+# edge-logs gets no pull-request plan (plan-prod.yml, "Apply-only stacks"),
+# so it runs in two jobs, each approved on its own. `edge-logs-plan` plans
+# and runs the destroy guard; its log is the plan to read before approving
+# the next job. `edge-logs-apply` plans again and applies only when its plan's
+# changes hash to the same value as the reviewed one, so what the second
+# approval admits is the plan the first job printed. The plan file is never
+# uploaded, since this repository is public and a plan file holds every
+# attribute in plain text.
 name: Terraform apply (stack)
 
 on:
@@ -39,6 +53,7 @@ permissions:
 jobs:
   apply:
     name: apply
+    if: inputs.stack != 'edge-logs'
     runs-on: ubuntu-latest
     # dfo-dev applies run in the `dev` GitHub environment, limited to dev, and
     # dfo-prod applies in `production`, limited to main. Each holds its own
@@ -89,10 +104,12 @@ jobs:
         id: validate
         run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" validate terraform validate -no-color'
 
-      # The Cloudflare provider reads CLOUDFLARE_API_TOKEN itself. Only the
-      # edge stack uses it. Every other stack gets an empty value, so the
-      # token (an environment secret that `secrets: inherit` exposes to this
-      # whole job) does not reach their Terraform. Actions masks it in logs.
+      # The Cloudflare provider reads CLOUDFLARE_API_TOKEN itself. In this
+      # job only the edge stack uses it. Every other stack gets an empty
+      # value, so the token (an environment secret that `secrets: inherit`
+      # exposes to this whole job) does not reach their Terraform. Actions
+      # masks it in logs. In `production` it is the token with Logs Write,
+      # which the edge stack's cache rule precondition needs.
       - name: terraform plan
         id: plan
         env:
@@ -164,6 +181,176 @@ jobs:
           PRINCIPALS_FILE: ${{ runner.temp }}/principal-addresses
           INIT_OUTCOME: ${{ steps.init.outcome }}
           VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+          GUARD_OUTCOME: ${{ steps.guard.outcome }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+        with:
+          script: |
+            const comment = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/apply-comment.js`);
+            await comment({ github, context, core });
+
+  # edge-logs, first approval: plan and guard. See "Reviewed stacks" above.
+  edge-logs-plan:
+    name: plan for review
+    if: inputs.stack == 'edge-logs'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment == 'dfo-prod' && 'production' || inputs.environment == 'dfo-dev' && 'dev' || '' }}
+    concurrency:
+      group: terraform-${{ inputs.environment }}-${{ inputs.stack }}
+      cancel-in-progress: false
+    outputs:
+      changes_sha256: ${{ steps.digest.outputs.sha256 }}
+    defaults:
+      run:
+        working-directory: infra/${{ inputs.environment }}/${{ inputs.stack }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (WIF)
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_APPLY_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Mask principal addresses
+        env:
+          PROJECT: ${{ steps.auth.outputs.project_id }}
+        run: |
+          "$GITHUB_WORKSPACE/scripts/mask-principals.sh" "$PROJECT" "$RUNNER_TEMP/principal-addresses"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.7"
+
+      - name: terraform init
+        run: terraform init -input=false -no-color
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      # This log is the plan the second approval admits.
+      - name: terraform plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: terraform plan -input=false -lock-timeout=300s -no-color -out=tfplan
+
+      - name: Resolve allow-destroy label
+        id: prmeta
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+            });
+            const labels = (prs.data[0]?.labels || []).map((l) => l.name);
+            core.setOutput("allow_destroy", String(labels.includes("allow-destroy")));
+
+      - name: Guard against destroying protected data
+        env:
+          ALLOW_DESTROY: ${{ steps.prmeta.outputs.allow_destroy }}
+        run: |
+          set +e
+          "$GITHUB_WORKSPACE/scripts/check-destroys.sh" tfplan
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            exit 0
+          elif [ "$code" -eq 3 ] && [ "$ALLOW_DESTROY" = "true" ]; then
+            echo "::warning::Plan destroys protected resources, but the merged PR has the 'allow-destroy' label — allowing."
+            exit 0
+          fi
+          echo "::error::Plan would destroy or replace protected resources and the merged PR lacks the 'allow-destroy' label, or the destroy check failed (exit $code). Apply blocked."
+          exit 1
+
+      - name: Hash the planned changes
+        id: digest
+        run: echo "sha256=$("$GITHUB_WORKSPACE/scripts/plan-changes-sha256.sh" tfplan)" >> "$GITHUB_OUTPUT"
+
+  # edge-logs, second approval: apply only the reviewed changes.
+  edge-logs-apply:
+    name: apply
+    needs: edge-logs-plan
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment == 'dfo-prod' && 'production' || inputs.environment == 'dfo-dev' && 'dev' || '' }}
+    concurrency:
+      group: terraform-${{ inputs.environment }}-${{ inputs.stack }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: infra/${{ inputs.environment }}/${{ inputs.stack }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (WIF)
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_APPLY_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Mask principal addresses
+        env:
+          PROJECT: ${{ steps.auth.outputs.project_id }}
+        run: |
+          "$GITHUB_WORKSPACE/scripts/mask-principals.sh" "$PROJECT" "$RUNNER_TEMP/principal-addresses"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.7"
+          # Off, so scripts/tf-capture.sh sees the plain binary's streams.
+          terraform_wrapper: false
+
+      - name: terraform init
+        id: init
+        run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" init terraform init -input=false -no-color'
+
+      - name: terraform plan
+        id: plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" plan terraform plan -input=false -lock-timeout=300s -no-color -out=tfplan'
+
+      # A change since the reviewed plan, in the code, the state or the live
+      # resources, gives a different hash. The job then stops, and a rerun of
+      # the workflow plans again for review.
+      - name: Match the reviewed plan
+        id: guard
+        env:
+          REVIEWED: ${{ needs.edge-logs-plan.outputs.changes_sha256 }}
+        run: |
+          now="$("$GITHUB_WORKSPACE/scripts/plan-changes-sha256.sh" tfplan)"
+          if [ -z "$REVIEWED" ] || [ "$now" != "$REVIEWED" ]; then
+            echo "::error::This plan's changes differ from the plan approved in 'plan for review' (reviewed ${REVIEWED:-none}, now $now). Apply blocked; rerun the workflow to plan again."
+            exit 1
+          fi
+          echo "Plan matches the reviewed plan ($now)."
+
+      - name: terraform apply
+        id: apply
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: '"$GITHUB_WORKSPACE/scripts/tf-capture.sh" apply terraform apply -input=false -lock-timeout=300s -no-color tfplan'
+
+      - name: Comment apply result on PR
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          STACK: ${{ inputs.stack }}
+          PRINCIPALS_FILE: ${{ runner.temp }}/principal-addresses
+          INIT_OUTCOME: ${{ steps.init.outcome }}
           PLAN_OUTCOME: ${{ steps.plan.outcome }}
           GUARD_OUTCOME: ${{ steps.guard.outcome }}
           APPLY_OUTCOME: ${{ steps.apply.outcome }}

@@ -29,8 +29,7 @@
 #
 # A stack is any directory under `infra/<env>`. It changes when a file
 # changes under `infra/stacks/<stack>/`, `infra/<env>/<stack>/`, or a module
-# under `infra/modules/` that the stack calls. pipelines exists only in
-# `infra/dfo-dev`.
+# under `infra/modules/` that the stack calls.
 #
 # dcp
 # ---

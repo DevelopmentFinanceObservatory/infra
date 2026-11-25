@@ -91,3 +91,15 @@ variable "preview_access_emails" {
   type        = list(string)
   default     = []
 }
+
+variable "edge_cache_enabled" {
+  description = "Create the cache rule in cloudflare_rules.tf. True requires the edge-logs stack's Logpush job, so every read the edge answers from its cache is logged. Turn it on only once scripts/check-edge-logpush.sh finds lines in the bucket."
+  type        = bool
+  default     = false
+}
+
+variable "edge_cache_logpush_check" {
+  description = "Read the Logpush job for the cache rule's precondition while edge_cache_enabled is true. Every Logpush read needs Logs Write, so plan-prod.yml sets it false for pull-request plans, whose token is read-only and which apply nothing. Every apply keeps the default."
+  type        = bool
+  default     = true
+}

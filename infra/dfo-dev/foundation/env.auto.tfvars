@@ -15,6 +15,9 @@ github_repositories = {
   # The sdk repository has no deployer. Its entry admits its tokens to the pool,
   # and the apis stack binds the end-to-end workflow's identity to its default branch.
   sdk = { name = "sdk", id = "1428553790" }
+  # The evals repository has no deployer either. The apis stack binds its results
+  # page workflow's identity to its default branch.
+  evals = { name = "evals", id = "1469923689" }
   # The site QA repository stays private under its original owner, so its entry names that owner.
   site_qa = { name = "dfo-site-qa", id = "1406139622", owner = { name = "ONEcampaign", id = "6450343" } }
 }

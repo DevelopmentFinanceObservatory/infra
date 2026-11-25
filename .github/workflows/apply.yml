@@ -59,7 +59,8 @@
 # `Changed stacks planned`, `terraform fmt check`, and
 # `Prod pin placeholder unchanged`. `main` requires one approval, and the
 # `production` environment's `release` reviewers approve each prod apply job
-# before it starts.
+# before it starts. edge-logs takes two approvals, one for its plan and one
+# for its apply (apply-stack.yml, "Reviewed stacks").
 #
 # Tiered ordering
 # ---------------
@@ -119,7 +120,7 @@ on:
     inputs:
       # A free string, checked against the directories under this repo's
       # environment in `detect`, since the two environments hold different
-      # stacks (pipelines is dev-only).
+      # stacks.
       stack:
         description: "Stack to apply, from the head of the chosen branch (dev or main): a directory under infra/<env>"
         required: true
@@ -256,10 +257,10 @@ jobs:
     with:
       environment: ${{ needs.detect.outputs.env }}
       stack: ${{ matrix.stack }}
-    # The edge stack, a consumer in dfo-prod only, needs the `production`
-    # environment's CLOUDFLARE_API_TOKEN. This job declares no environment, so
-    # this caller cannot name that secret, so `inherit` lets apply-stack.yml's
-    # own `environment: production` job read it. apply-stack.yml hands it to
-    # terraform for the edge stack only. The foundation and producer calls
-    # above run without it.
+    # The edge and edge-logs stacks, consumers in dfo-prod only, need the
+    # `production` environment's CLOUDFLARE_API_TOKEN. This job declares no
+    # environment, so this caller cannot name that secret, so `inherit` lets
+    # apply-stack.yml's own `environment: production` job read it.
+    # apply-stack.yml hands it to terraform for those two stacks only. The
+    # foundation and producer calls above run without it.
     secrets: inherit

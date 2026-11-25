@@ -1,0 +1,1 @@
+../../stacks/telemetry/edge_logs.tf
