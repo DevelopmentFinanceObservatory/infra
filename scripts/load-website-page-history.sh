@@ -18,8 +18,8 @@
 # ends, so the end date may be as late as yesterday (UTC). Today is refused,
 # since a run replaces its whole range and today's figures are still partial.
 # Which of these days the dashboard reads, against the request log, is the
-# view's decision (sql/reporting/website_page_views_daily.sql), so this loader
-# does not check the range against the log.
+# decision of the analytics repository's website_page_views_daily model, so
+# this loader does not check the range against the log.
 # Runs as the telemetry stack's web_history_service_account
 # (infra/dfo-prod/telemetry/README.md, "Web history before the exports").
 set -euo pipefail

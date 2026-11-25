@@ -5,7 +5,7 @@
 resource "google_bigquery_dataset" "reporting" {
   dataset_id  = "dfo_reporting"
   location    = local.bigquery_location
-  description = "Reporting views over the DFO telemetry datasets, read by the team dashboard."
+  description = "Reporting tables built from the DFO telemetry datasets by the analytics repository's scheduled dbt build, read by the team dashboard."
 
   depends_on = [google_project_service.apis]
 }
