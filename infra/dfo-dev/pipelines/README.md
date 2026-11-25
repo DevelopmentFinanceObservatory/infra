@@ -2,15 +2,14 @@
 
 The GCP footprint the `dfo-pipelines` repo reads and writes.
 
-## Raw data bucket
+## Landing bucket
 
-`<project>-pipelines-raw` holds source files as published, prefixed by source and dataset.
+`<project>-pipelines-landing` is the pipelines' landing store: source files as downloaded, prefixed by source and dataset.
 
-## Processed data bucket
+## Exports bucket
 
-`<project>-pipelines-processed` holds pipeline output, prefixed by DCP import.
+`<project>-pipelines-exports` is the pipelines' export store: Data Commons import bundles, prefixed by DCP import.
 
 ## BigQuery datasets
 
-One dataset per upstream source in format `<source>_<dataset>` e.g. `oecd_dac_crs`.
-To add a source, append its dataset id to `local.bigquery_datasets` in `main.tf`.
+One dataset per upstream source in format `<source>_<dataset>` e.g. `oecd_dac_crs`. To add a source, append its dataset id to `local.bigquery_datasets` in `infra/stacks/pipelines/main.tf`.

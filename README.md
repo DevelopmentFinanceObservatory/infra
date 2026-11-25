@@ -20,7 +20,7 @@ infra/
 │   ├── pipelines/
 │   ├── platform/
 │   └── website/
-└── dfo-prod/       # prod environment: the same stacks except pipelines, plus the public edge, its logs, and telemetry
+└── dfo-prod/       # prod environment: the same stacks, plus the public edge, its logs, and telemetry
     ├── edge/
     ├── edge-logs/
     └── telemetry/

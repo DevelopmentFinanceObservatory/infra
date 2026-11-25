@@ -120,7 +120,7 @@ on:
     inputs:
       # A free string, checked against the directories under this repo's
       # environment in `detect`, since the two environments hold different
-      # stacks (pipelines is dev-only).
+      # stacks.
       stack:
         description: "Stack to apply, from the head of the chosen branch (dev or main): a directory under infra/<env>"
         required: true
