@@ -154,8 +154,14 @@ resource "google_cloud_run_v2_service" "this" {
     # every plan after a deploy proposes nulling them and every deploy sets
     # them again, so the stack never plans clean and the noise trains readers
     # to skim the one output that has to stay meaningful.
+    #
+    # Revision template labels are set only by `gcloud run services update
+    # --update-labels`, which the stack READMEs use to roll a service onto a
+    # new revision. This module sets none, so without this the next plan
+    # would propose removing them and its apply would roll another revision.
     ignore_changes = [
       template[0].containers[0].image,
+      template[0].labels,
       client,
       client_version,
     ]

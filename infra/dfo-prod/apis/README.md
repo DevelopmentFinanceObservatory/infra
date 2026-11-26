@@ -22,7 +22,7 @@ It also creates `dfo-prod-share-import-principal`, which the `website` stack's s
 
 ## Handoff
 
-`scripts/handoff.sh dfo-prod apis` sets every variable and secret dfo-apis's `production` GitHub Environment reads: the project, region and registry from `foundation`, the WIF secrets from `foundation`, and the service, worker and job names from this stack's outputs (`service_name`, `datasets_worker_service_name`, `datasets_migrate_job_name`, `datasets_maintenance_job_name`, `presentation_migrate_job_name`, `origin_catalogue_job_name`, `graph_release_job_name`, `search_catalogue_job_name`). `deploy_values` in `scripts/deploy-targets.sh` maps each name to its output.
+`scripts/handoff.sh dfo-prod apis` sets every variable and secret dfo-apis's `production` GitHub Environment reads: the project, region and registry from `foundation`, the WIF secrets from `foundation`, and the service, worker and job names from this stack's outputs (`service_name`, `datasets_worker_service_name`, `datasets_migrate_job_name`, `datasets_maintenance_job_name`, `presentation_migrate_job_name`, `origin_catalogue_job_name`, `origin_catalogue_candidate_job_name`, `graph_release_job_name`, `search_catalogue_job_name`). `deploy_values` in `scripts/deploy-targets.sh` maps each name to its output.
 
 ## Alerts
 

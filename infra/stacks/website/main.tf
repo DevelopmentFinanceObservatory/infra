@@ -1,5 +1,5 @@
 terraform {
-  # 1.11 for the write-only arguments in auth_secret.tf.
+  # 1.11 for the write-only arguments in auth_secret.tf and api_key_tag_secrets.tf.
   required_version = ">= 1.11"
 
   required_providers {
@@ -9,7 +9,7 @@ terraform {
       version = ">= 7.24.0"
     }
     random = {
-      # 3.7.0 for the ephemeral random_password in auth_secret.tf.
+      # 3.7.0 for the ephemeral random_password in auth_secret.tf and api_key_tag_secrets.tf.
       source  = "hashicorp/random"
       version = ">= 3.7.0"
     }
@@ -162,6 +162,16 @@ module "website_service" {
     DFO_CALLER_PRINCIPAL = { secret_id = var.caller_principal_secret_id }
     # Comma-separated emails or bare domains whose signed-in users' events carry internal_eng: true. Not version-pinned: the list is added out-of-band and the newest must win. See internal_eng_emails.tf and README.
     INTERNAL_ENG_EMAILS = { secret_id = google_secret_manager_secret.website_internal_eng_emails.secret_id }
+    # Comma-separated emails of the signed-in users who may open /admin/api-keys. Pinned to var.admin_emails_version, so a new list reaches instances only through the revision the apply of a reviewed pin creates. The reviewer reads the version the pin names, since the pin shows no address. See admin_emails.tf and README.
+    ADMIN_EMAILS = {
+      secret_id = google_secret_manager_secret.website_admin_emails.secret_id
+      version   = var.admin_emails_version
+    }
+    # Comma-separated secrets that sign and verify the tag on every API key. Pinned to var.api_key_tag_secrets_version, so a new version reaches instances only through the revision its apply creates, and a bad version never reaches an instance that starts on autoscale. See api_key_tag_secrets.tf and README.
+    API_KEY_TAG_SECRETS = {
+      secret_id = google_secret_manager_secret.website_api_key_tag_secrets.secret_id
+      version   = var.api_key_tag_secrets_version
+    }
     },
     # The export key (event_export.tf), where the export is enabled. The app HMACs the user id with it into the x-dfo-account header it sends the harness, so a Studio account digest equals the exported user hash. Pinned to the Job's version, so a rotation reaches the service and the Job in one apply. The module grants this runtime account accessor on the secret. See README.
     var.event_export_enabled ? {
@@ -198,10 +208,12 @@ module "website_service" {
     subnetwork = module.psc_network.subnetwork_id
   }
 
-  # The first revision that mounts TURNSTILE_SECRET_KEY or INTERNAL_ENG_EMAILS must wait for that secret's placeholder version (email_sign_in.tf, internal_eng_emails.tf), or it cannot resolve `latest`. See the module README's "Ordering a revision on out-of-module resources" section.
+  # The first revision that mounts TURNSTILE_SECRET_KEY, INTERNAL_ENG_EMAILS, ADMIN_EMAILS or API_KEY_TAG_SECRETS must wait for that secret's first version (email_sign_in.tf, internal_eng_emails.tf, admin_emails.tf, api_key_tag_secrets.tf), or the mount cannot resolve. See the module README's "Ordering a revision on out-of-module resources" section.
   readiness_dependencies = [
     google_secret_manager_secret_version.website_turnstile_secret_key_placeholder.id,
     google_secret_manager_secret_version.website_internal_eng_emails_placeholder.id,
+    google_secret_manager_secret_version.website_admin_emails_placeholder.id,
+    google_secret_manager_secret_version.website_api_key_tag_secrets.id,
   ]
 }
 

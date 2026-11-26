@@ -110,9 +110,61 @@ resource "google_service_account_iam_member" "origin_catalogue_job_deployer_act_
 # ─────────────────────────────────────────────────────────────────────────────
 
 variable "origin_catalogue_bootstrap_image" {
-  description = "Overrides the image the origin catalogue Job is created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, the tag the apis service is currently running."
+  description = "Overrides the image both the scheduled and the candidate origin catalogue Job are created with. The deploy pipeline replaces it per execution; null (the default) bootstraps from local.live_apis_image, the tag the apis service is currently running."
   type        = string
   default     = null
+}
+
+# The scheduled Job and the candidate Job below run one definition, held in
+# this local, so the candidate builds exactly what the scheduled Job would on
+# the image the deploy hands it. `lifecycle` and `depends_on` cannot come from
+# a local, so each Job repeats them.
+locals {
+  origin_catalogue_job = {
+    # No retry. The Scheduler polls every 15 minutes and the job's lease
+    # keeps overlapping executions from both building, so a retry only
+    # delays the poll that would have started the next attempt.
+    max_retries = 0
+
+    # Equal to _MAX_RUN_SECONDS in dfo-apis's origin_catalogue.job. A
+    # lease lapses after that long because Cloud Run has killed the run
+    # holding it by then, so the two values move together.
+    timeout = "7200s"
+
+    image   = coalesce(var.origin_catalogue_bootstrap_image, local.live_apis_image)
+    command = ["python"]
+    args    = ["-m", "origin_catalogue.job"]
+
+    # A full build against the dev graph peaks at about 560 MiB resident
+    # over 11 minutes, so 2Gi leaves more than three times that for the
+    # base variable table to grow. One CPU suffices because the run waits
+    # on mixer round trips.
+    limits = {
+      cpu    = "1"
+      memory = "2Gi"
+    }
+
+    service_account = google_service_account.origin_catalogue_job.email
+
+    # The same private path the service and the migrate Job use. The UN
+    # deployment and the mixer sit on public addresses, reached over the
+    # default route.
+    vpc_network    = module.psc_network.network_id
+    vpc_subnetwork = module.psc_network.subnetwork_id
+    vpc_egress     = "PRIVATE_RANGES_ONLY"
+
+    # The list order matches the scheduled Job's existing env order.
+    # Reordering it plans an in-place update.
+    env = [
+      { name = "ORIGIN_CATALOGUE_URI", value = "gs://${google_storage_bucket.origin_catalogue.name}/" },
+      { name = "ORIGIN_CATALOGUE_BQ_CONNECTION", value = "${var.project_id}.${var.region}.${var.dc_spanner_connection_id}" },
+      # Our mixer, which the job reads base provenances, variables and
+      # topics through. The dev graph serves reads anonymously, so
+      # DATASETS_GRAPH_TOKEN stays unset, as on the apis service.
+      { name = "DATASETS_GRAPH_BASE_URL", value = var.datasets_graph_base_url },
+      { name = "UN_GRAPH_BASE_URL", value = var.un_graph_base_url },
+    ]
+  }
 }
 
 resource "google_cloud_run_v2_job" "origin_catalogue" {
@@ -124,67 +176,34 @@ resource "google_cloud_run_v2_job" "origin_catalogue" {
 
   template {
     template {
-      service_account = google_service_account.origin_catalogue_job.email
-
-      # No retry. The Scheduler polls every 15 minutes and the job's lease
-      # keeps overlapping executions from both building, so a retry only
-      # delays the poll that would have started the next attempt.
-      max_retries = 0
-
-      # Equal to _MAX_RUN_SECONDS in dfo-apis's origin_catalogue.job. A
-      # lease lapses after that long because Cloud Run has killed the run
-      # holding it by then, so the two values move together.
-      timeout = "7200s"
+      service_account = local.origin_catalogue_job.service_account
+      max_retries     = local.origin_catalogue_job.max_retries
+      timeout         = local.origin_catalogue_job.timeout
 
       containers {
-        image   = coalesce(var.origin_catalogue_bootstrap_image, local.live_apis_image)
-        command = ["python"]
-        args    = ["-m", "origin_catalogue.job"]
+        image   = local.origin_catalogue_job.image
+        command = local.origin_catalogue_job.command
+        args    = local.origin_catalogue_job.args
 
-        # A full build against the dev graph peaks at about 560 MiB resident
-        # over 11 minutes, so 2Gi leaves more than three times that for the
-        # base variable table to grow. One CPU suffices because the run
-        # waits on mixer round trips.
         resources {
-          limits = {
-            cpu    = "1"
-            memory = "2Gi"
+          limits = local.origin_catalogue_job.limits
+        }
+
+        dynamic "env" {
+          for_each = local.origin_catalogue_job.env
+          content {
+            name  = env.value.name
+            value = env.value.value
           }
-        }
-
-        env {
-          name  = "ORIGIN_CATALOGUE_URI"
-          value = "gs://${google_storage_bucket.origin_catalogue.name}/"
-        }
-
-        env {
-          name  = "ORIGIN_CATALOGUE_BQ_CONNECTION"
-          value = "${var.project_id}.${var.region}.${var.dc_spanner_connection_id}"
-        }
-
-        # Our mixer, which the job reads base provenances, variables and
-        # topics through. The dev graph serves reads anonymously, so
-        # DATASETS_GRAPH_TOKEN stays unset, as on the apis service.
-        env {
-          name  = "DATASETS_GRAPH_BASE_URL"
-          value = var.datasets_graph_base_url
-        }
-
-        env {
-          name  = "UN_GRAPH_BASE_URL"
-          value = var.un_graph_base_url
         }
       }
 
-      # The same private path the service and the migrate Job use; the UN
-      # deployment and the mixer sit on public addresses, reached over the
-      # default route.
       vpc_access {
         network_interfaces {
-          network    = module.psc_network.network_id
-          subnetwork = module.psc_network.subnetwork_id
+          network    = local.origin_catalogue_job.vpc_network
+          subnetwork = local.origin_catalogue_job.vpc_subnetwork
         }
-        egress = "PRIVATE_RANGES_ONLY"
+        egress = local.origin_catalogue_job.vpc_egress
       }
     }
   }
@@ -212,8 +231,83 @@ resource "google_cloud_run_v2_job_iam_member" "origin_catalogue_deployer_run_dev
 }
 
 output "origin_catalogue_job_name" {
-  description = "Name of the origin catalogue Job. The deploy workflow runs `gcloud run jobs update --image`, then `gcloud run jobs execute --wait`, then a verify execution against it before it deploys the datasets worker and the apis service."
+  description = "Name of the scheduled origin catalogue Job. The deploy workflow moves it to the new image with `gcloud run jobs update --image` after traffic moves, so its scheduled runs refresh the format root the serving image reads."
   value       = google_cloud_run_v2_job.origin_catalogue.name
+}
+
+# The candidate Job has no Scheduler trigger and no alerting. dfo-apis's
+# deploy moves it to the new image and runs it (verify, build, verify) before
+# traffic moves, so a catalogue format change is built and checked on the
+# image that will serve it while the scheduled Job stays on the serving image.
+# The deploy moves the scheduled Job to the new image after the traffic move.
+# The alert filters below name the scheduled Job exactly, so a candidate
+# execution neither alerts nor counts as a heartbeat.
+resource "google_cloud_run_v2_job" "origin_catalogue_candidate" {
+  name     = "${var.namespace}-origin-catalogue-candidate"
+  location = var.region
+  project  = var.project_id
+
+  deletion_protection = var.stateless_deletion_protection
+
+  template {
+    template {
+      service_account = local.origin_catalogue_job.service_account
+      max_retries     = local.origin_catalogue_job.max_retries
+      timeout         = local.origin_catalogue_job.timeout
+
+      containers {
+        image   = local.origin_catalogue_job.image
+        command = local.origin_catalogue_job.command
+        args    = local.origin_catalogue_job.args
+
+        resources {
+          limits = local.origin_catalogue_job.limits
+        }
+
+        dynamic "env" {
+          for_each = local.origin_catalogue_job.env
+          content {
+            name  = env.value.name
+            value = env.value.value
+          }
+        }
+      }
+
+      vpc_access {
+        network_interfaces {
+          network    = local.origin_catalogue_job.vpc_network
+          subnetwork = local.origin_catalogue_job.vpc_subnetwork
+        }
+        egress = local.origin_catalogue_job.vpc_egress
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].template[0].containers[0].image,
+      client,
+      client_version,
+    ]
+  }
+
+  depends_on = [
+    google_bigquery_connection_iam_member.origin_catalogue_job_connection_user,
+    google_storage_bucket_iam_member.origin_catalogue_job_object_user,
+  ]
+}
+
+resource "google_cloud_run_v2_job_iam_member" "origin_catalogue_candidate_deployer_run_developer" {
+  project  = google_cloud_run_v2_job.origin_catalogue_candidate.project
+  location = google_cloud_run_v2_job.origin_catalogue_candidate.location
+  name     = google_cloud_run_v2_job.origin_catalogue_candidate.name
+  role     = "roles/run.developer"
+  member   = "serviceAccount:${data.google_service_account.apis_deployer.email}"
+}
+
+output "origin_catalogue_candidate_job_name" {
+  description = "Name of the unscheduled origin catalogue candidate Job. The deploy workflow points it at the new image and runs a verify, a build and a verify execution against it before the datasets worker moves and before traffic moves."
+  value       = google_cloud_run_v2_job.origin_catalogue_candidate.name
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -54,7 +54,7 @@ Three env vars carry this to the service: `SESSION_STORE_INSTANCE_CONNECTION_NAM
 
 ## Instance cap
 
-`module.ai_service` sets `service_max_instances = 2`, a combined ceiling across every revision receiving traffic (see the module README's "Service-level instance cap" section for the mechanism). An old revision still draining SSE streams keeps its pool through a rollout, so up to four instances can hold connections at once. Four instances holding the harness's `session_store_pool_size=2, session_store_max_overflow=0` connection pool each use at most 8 of the 10 connections the `platform` stack's `max_connections` comment reserves for `ai`.
+`module.ai_service` sets `service_max_instances = 2`, a combined ceiling across every revision receiving traffic (see the module README's "Service-level instance cap" section for the mechanism). An old revision still draining SSE streams keeps its pool through a rollout, so up to four instances can hold connections at once. Each instance holds the harness's session-store pool (`session_store_pool_size=2, session_store_max_overflow=0`) and its card-lineage pool (`pool_size=3, max_overflow=0`, `_LINEAGE_POOL` in `harness/db/engine.py`), 5 connections in all, so four instances use at most 20, the 20 the `platform` stack's `max_connections` comment reserves for `ai`.
 
 ## Studio API token
 

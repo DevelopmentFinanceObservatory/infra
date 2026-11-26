@@ -172,3 +172,23 @@ variable "turnstile_site_key" {
   type        = string
   default     = null
 }
+
+variable "api_key_tag_secrets_version" {
+  description = "Version of the API key tag secret that the service mounts as API_KEY_TAG_SECRETS. Pinned, so a new version reaches instances only through the revision an apply of this value creates. 1 is the version api_key_tag_secrets.tf generates. A rotation adds versions by hand and sets this to each in turn. See README, \"API key tag secrets\"."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*$", var.api_key_tag_secrets_version))
+    error_message = "api_key_tag_secrets_version must be a version number such as \"1\"; \"latest\" would let a new version reach instances before any revision."
+  }
+}
+
+variable "admin_emails_version" {
+  description = "Version of the admin emails secret that the service mounts as ADMIN_EMAILS. Pinned, so a new list reaches instances only through the revision an apply of this value creates, after its pull request is reviewed. 1 is the `none` placeholder admin_emails.tf creates, which admits nobody. See README, \"Admin emails\"."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*$", var.admin_emails_version))
+    error_message = "admin_emails_version must be a version number such as \"1\"; \"latest\" would let anyone who can add a version grant admin without review."
+  }
+}

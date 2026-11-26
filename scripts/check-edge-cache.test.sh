@@ -74,7 +74,7 @@ variants() {
 }
 happy() {
     variants MISS HIT MISS HIT MISS HIT
-    HAPPY=("${VARIANTS[@]}" "${VARIANTS[@]}" MISS HIT BYPASS DYNAMIC DYNAMIC)
+    HAPPY=("${VARIANTS[@]}" "${VARIANTS[@]}" MISS HIT BYPASS BYPASS DYNAMIC DYNAMIC)
 }
 
 failures=0
@@ -97,15 +97,19 @@ says() { [[ "$out" == *"$1"* ]] && echo true || echo false; }
 # 1. The edge answers as the ruleset intends: every check passes. The
 # manifest path is the file path without /files/<digest>, the v1 manifest is
 # the same path under /api/v1/datasets, the file and manifest are each read
-# twice per Origin value, and only one request sends Authorization.
+# twice per Origin value, and only one request sends Authorization. The
+# script sends 18 requests, and HAPPY holds one response for each: indices
+# 0-11 are the file and manifest variants, 12-13 the v1 manifest, 14 the
+# Authorization read, 15 the X-API-Key read, 16 the HEAD and 17 the selector.
 happy
 run "${HAPPY[@]}"
 check "expected statuses exit 0" "$(is "$status" 0)"
-check "all checks counted" "$(says "31 checks, 0 failed.")"
+check "all checks counted" "$(says "33 checks, 0 failed.")"
 check "manifest path derived" "$(says "first GET /api/datasets/spec_a/cv_0123, no Origin: MISS")"
 check "v1 manifest path derived" "$(says "first GET /api/v1/datasets/spec_a/cv_0123, no Origin: MISS")"
 check "each approved origin is sent on four reads" "$(is "$(grep -c -- "-H Origin: $APEX " <<<"$calls") $(grep -c -- "-H Origin: $PREVIEW " <<<"$calls")" "4 4")"
 check "only one read sends Authorization" "$(is "$(grep -c -- '-H Authorization:' <<<"$calls")" 1)"
+check "only one read sends X-API-Key" "$(is "$(grep -c -- '-H X-API-Key:' <<<"$calls")" 1)"
 check "only one read is a HEAD" "$(is "$(grep -c -- ' -I' <<<"$calls")" 1)"
 
 # 2. A file the edge already holds answers HIT first, which fails.
@@ -147,9 +151,29 @@ run "${HAPPY[@]}"
 check "an authenticated HIT exits 1" "$(is "$status" 1)"
 check "an authenticated HIT is named" "$(says "with Authorization: got HIT, want BYPASS DYNAMIC")"
 
-# 6. A HEAD served from cache fails.
+# 5b. A keyed read (X-API-Key) served from cache fails, with the cache status
+# named. A refused key (401) that bypasses the cache passes, and one answered
+# with another status fails.
 happy
 HAPPY[15]=HIT
+run "${HAPPY[@]}"
+check "an X-API-Key HIT exits 1" "$(is "$status" 1)"
+check "an X-API-Key HIT is named" "$(says "with X-API-Key cache status: got HIT, want BYPASS DYNAMIC")"
+happy
+HAPPY[15]=401:BYPASS
+run "${HAPPY[@]}"
+check "an X-API-Key 401 exits 0" "$(is "$status" 0)"
+check "an X-API-Key 401 prints both statuses" "$(says "with X-API-Key cache status: BYPASS")"
+check "an X-API-Key 401 prints its HTTP status" "$(says "with X-API-Key HTTP status: 401")"
+happy
+HAPPY[15]=500:BYPASS
+run "${HAPPY[@]}"
+check "an X-API-Key 500 exits 1" "$(is "$status" 1)"
+check "an X-API-Key 500 is named" "$(says "with X-API-Key HTTP status: got 500, want 200 401")"
+
+# 6. A HEAD served from cache fails.
+happy
+HAPPY[16]=HIT
 run "${HAPPY[@]}"
 check "a cached HEAD exits 1" "$(is "$status" 1)"
 check "a cached HEAD is named" "$(says "HEAD /api/v1/datasets/spec_a/cv_0123: got HIT, want DYNAMIC")"
@@ -158,7 +182,7 @@ check "a cached HEAD is named" "$(says "HEAD /api/v1/datasets/spec_a/cv_0123: go
 # edge's cache status whatever the origin answered. A GET that answers 405
 # still fails.
 happy
-HAPPY[15]=405:DYNAMIC
+HAPPY[16]=405:DYNAMIC
 run "${HAPPY[@]}"
 check "a refused uncached HEAD exits 0" "$(is "$status" 0)"
 check "a refused uncached HEAD passes" "$(says "ok: HEAD /api/v1/datasets/spec_a/cv_0123: DYNAMIC")"
@@ -176,13 +200,13 @@ check "a visible Cache-Tag exits 1" "$(is "$status" 1)"
 check "a visible Cache-Tag is named" "$(says "shows a Cache-Tag header")"
 
 # 8. A failed request fails its check and the later checks still run: the
-# failure is the first manifest read, and all seventeen requests are sent.
+# failure is the first manifest read, and all eighteen requests are sent.
 happy
 HAPPY[6]=FAIL
 run "${HAPPY[@]}"
 check "a failed request exits 1" "$(is "$status" 1)"
 check "a failed request is named" "$(says "got error, want MISS")"
-check "later checks still run" "$(is "$(grep -c '^curl' <<<"$calls")" 17)"
+check "later checks still run" "$(is "$(grep -c '^curl' <<<"$calls")" 18)"
 
 # 9. After a purge, every variant answers MISS: seven reads, three sending
 # each approved Origin value for the file and manifest only.
