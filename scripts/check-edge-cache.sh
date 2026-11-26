@@ -13,7 +13,10 @@
 #      answers MISS and then HIT.
 #   3. The v1 manifest read with an Authorization header, and read with an
 #      X-API-Key header, answers BYPASS or DYNAMIC, so a keyed response is
-#      never stored.
+#      never stored. The X-API-Key read also answers HTTP 200 or 401: 200
+#      when the website ignores a value that does not start with dfo_, 401
+#      when it refuses a key. Both the cache status and the HTTP status are
+#      printed.
 #   4. A HEAD of the v1 manifest, cached by the GETs in check 2, answers
 #      DYNAMIC, so the edge serves and stores GET only.
 #   5. The /file selector answers DYNAMIC.
@@ -78,7 +81,8 @@ checks=0
 
 # status [--any-status] <path> [curl args...]: GETs base+path, discards the
 # body, and prints cf-cache-status on one line, or "none" when the response has
-# none, then the Access-Control-Allow-Origin value on a second line, or "none".
+# none, then the Access-Control-Allow-Origin value on a second line, or "none",
+# then the HTTP status code on a third.
 # A response other than 2xx or 3xx counts as a failure unless --any-status is
 # given. A response with a Cache-Tag header counts as a failure.
 status() {
@@ -101,7 +105,8 @@ status() {
         { line = $0; gsub(/\r/, "", line); name = tolower(line); sub(/:.*/, "", name); sub(/^[^:]*: */, "", line) }
         name == "cf-cache-status" { cache = toupper(line) }
         name == "access-control-allow-origin" { acao = line }
-        END { print (cache == "" ? "none" : cache); print (acao == "" ? "none" : acao) }' <<<"$headers"
+        NR == 1 { code = $2; gsub(/\r/, "", code) }
+        END { print (cache == "" ? "none" : cache); print (acao == "" ? "none" : acao); print (code == "" ? "none" : code) }' <<<"$headers"
 }
 
 # expect <label> <got> <allowed...>: passes when got is one of allowed.
@@ -191,8 +196,15 @@ else
     # The credential is a placeholder; the edge decides on the header alone.
     auth="$(status "$manifest_v1_path" -H "Authorization: Bearer edge-cache-check" | head -n 1)" || auth="error"
     expect "GET $manifest_v1_path with Authorization" "$auth" BYPASS DYNAMIC
-    keyed="$(status "$manifest_v1_path" -H "X-API-Key: edge-cache-check" | head -n 1)" || keyed="error"
-    expect "GET $manifest_v1_path with X-API-Key" "$keyed" BYPASS DYNAMIC
+    # The website reads an X-API-Key value as a key only when it starts with
+    # dfo_, so this placeholder does not, and cannot be mistaken for a real
+    # key. The website answers it 200 as an anonymous read; a dfo_-shaped value
+    # would draw 401. Either answer proves the edge matched on the header, so
+    # the check asserts the cache status and an explicit set of HTTP statuses.
+    keyed_out="$(status --any-status "$manifest_v1_path" -H "X-API-Key: edge-cache-check")" || keyed_out=$'error\nerror\nerror'
+    { read -r keyed; read -r _; read -r keyed_code; } <<<"$keyed_out"
+    expect "GET $manifest_v1_path with X-API-Key cache status" "$keyed" BYPASS DYNAMIC
+    expect "GET $manifest_v1_path with X-API-Key HTTP status" "$keyed_code" 200 401
 
     # dfo-apis answers HEAD on these routes with 405; the check is on the edge,
     # which must pass HEAD to the origin, whatever the origin answers.
