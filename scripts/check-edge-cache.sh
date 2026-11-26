@@ -13,10 +13,9 @@
 #      answers MISS and then HIT.
 #   3. The v1 manifest read with an Authorization header, and read with an
 #      X-API-Key header, answers BYPASS or DYNAMIC, so a keyed response is
-#      never stored. The X-API-Key read also answers HTTP 200 or 401: 200
-#      when the website ignores a value that does not start with dfo_, 401
-#      when it refuses a key. Both the cache status and the HTTP status are
-#      printed.
+#      never stored. The X-API-Key read also answers HTTP 200 when the
+#      website ignores a value that does not start with dfo_, or 401 when it
+#      refuses a key. Both the cache status and the HTTP status are printed.
 #   4. A HEAD of the v1 manifest, cached by the GETs in check 2, answers
 #      DYNAMIC, so the edge serves and stores GET only.
 #   5. The /file selector answers DYNAMIC.
@@ -198,8 +197,8 @@ else
     expect "GET $manifest_v1_path with Authorization" "$auth" BYPASS DYNAMIC
     # The website reads an X-API-Key value as a key only when it starts with
     # dfo_, so this placeholder does not, and cannot be mistaken for a real
-    # key. The website answers it 200 as an anonymous read; a dfo_-shaped value
-    # would draw 401. Either answer proves the edge matched on the header, so
+    # key. The website answers it 200 as an anonymous read, and a dfo_-shaped
+    # value would draw 401. Either answer proves the edge matched on the header, so
     # the check asserts the cache status and an explicit set of HTTP statuses.
     keyed_out="$(status --any-status "$manifest_v1_path" -H "X-API-Key: edge-cache-check")" || keyed_out=$'error\nerror\nerror'
     { read -r keyed; read -r _; read -r keyed_code; } <<<"$keyed_out"

@@ -152,7 +152,7 @@ check "an authenticated HIT exits 1" "$(is "$status" 1)"
 check "an authenticated HIT is named" "$(says "with Authorization: got HIT, want BYPASS DYNAMIC")"
 
 # 5b. A keyed read (X-API-Key) served from cache fails, with the cache status
-# named; a refused key (401) that bypasses the cache passes, and one answered
+# named. A refused key (401) that bypasses the cache passes, and one answered
 # with another status fails.
 happy
 HAPPY[15]=HIT
