@@ -154,6 +154,17 @@ jobs:
             exit "$code"
           fi
 
+      # A pinned secret version disabled or destroyed after the pull request
+      # planned would stop the revision this apply creates. See plan.yml's
+      # "Pinned secret versions". The applier's roles/secretmanager.admin
+      # holds secretmanager.versions.get.
+      - name: Check pinned secret versions
+        id: pins
+        if: steps.plan.outcome == 'success' && inputs.stack == 'website'
+        env:
+          PROJECT: ${{ steps.auth.outputs.project_id }}
+        run: '"$GITHUB_WORKSPACE/scripts/check-secret-pins.sh" tfplan "$PROJECT" API_KEY_TAG_SECRETS ADMIN_EMAILS'
+
       # Apply the exact plan the guard inspected (not a fresh re-plan), so what
       # ran through the destroy check is what gets applied.
       - name: terraform apply
@@ -172,6 +183,7 @@ jobs:
           VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
           PLAN_OUTCOME: ${{ steps.plan.outcome }}
           GUARD_OUTCOME: ${{ steps.guard.outcome }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
         with:
           script: |

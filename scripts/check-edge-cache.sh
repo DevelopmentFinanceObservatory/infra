@@ -11,8 +11,9 @@
 #      when the request has none.
 #   2. The manifest, read with no Origin twice under /api/v1/datasets/,
 #      answers MISS and then HIT.
-#   3. The v1 manifest read with an Authorization header answers BYPASS or
-#      DYNAMIC, so an authenticated response is never stored.
+#   3. The v1 manifest read with an Authorization header, and read with an
+#      X-API-Key header, answers BYPASS or DYNAMIC, so a keyed response is
+#      never stored.
 #   4. A HEAD of the v1 manifest, cached by the GETs in check 2, answers
 #      DYNAMIC, so the edge serves and stores GET only.
 #   5. The /file selector answers DYNAMIC.
@@ -190,6 +191,8 @@ else
     # The credential is a placeholder; the edge decides on the header alone.
     auth="$(status "$manifest_v1_path" -H "Authorization: Bearer edge-cache-check" | head -n 1)" || auth="error"
     expect "GET $manifest_v1_path with Authorization" "$auth" BYPASS DYNAMIC
+    keyed="$(status "$manifest_v1_path" -H "X-API-Key: edge-cache-check" | head -n 1)" || keyed="error"
+    expect "GET $manifest_v1_path with X-API-Key" "$keyed" BYPASS DYNAMIC
 
     # dfo-apis answers HEAD on these routes with 405; the check is on the edge,
     # which must pass HEAD to the origin, whatever the origin answers.

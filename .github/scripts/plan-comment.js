@@ -29,6 +29,8 @@ module.exports = async ({ github, context, core }) => {
   const validateOutcome = process.env.VALIDATE_OUTCOME || "skipped";
   const planOutcome = process.env.PLAN_OUTCOME || "skipped";
   const guardOutcome = process.env.GUARD_OUTCOME || "skipped";
+  // Only the website stack runs the secret pin check; elsewhere it is unset.
+  const pinsOutcome = process.env.PINS_OUTCOME || "skipped";
   // Redacted here, at the read, so neither the summary nor the comment can
   // see an address.
   const redact = redactor(process.env.PRINCIPALS_FILE);
@@ -67,9 +69,19 @@ module.exports = async ({ github, context, core }) => {
   // Headline verdict line: always visible, never inside the
   // collapsed plan section below.
   const guardBlocked = guardOutcome !== "success" && guardOutcome !== "skipped";
-  let verdict;
+  const pinsBlocked = pinsOutcome !== "success" && pinsOutcome !== "skipped";
+  // Both checks run on a successful plan, so a plan can fail both, and the
+  // verdict names each.
+  const blocks = [];
   if (guardBlocked) {
-    verdict = "**Blocked by the destroy guard.** This plan would destroy or replace protected resources. Add the `allow-destroy` label to override, or change the plan so it doesn't.";
+    blocks.push("**Blocked by the destroy guard.** This plan would destroy or replace protected resources. Add the `allow-destroy` label to override, or change the plan so it doesn't.");
+  }
+  if (pinsBlocked) {
+    blocks.push("**Blocked by the secret pin check.** A pinned secret version is missing, disabled or destroyed, a required env var has no numeric pin, or the check could not run. The run's `Check pinned secret versions` step names the cause.");
+  }
+  let verdict;
+  if (blocks.length > 0) {
+    verdict = blocks.join("\n\n");
   } else if (planOutcome === "success") {
     if (/^No changes\./m.test(planText)) {
       verdict = "**No changes.** Infrastructure matches configuration.";
@@ -97,7 +109,7 @@ module.exports = async ({ github, context, core }) => {
   // Prefer plan's own output; fall back to validate's, then
   // init's, when a later step never ran.
   const detailText = planText || validateText || initText;
-  const sectionKind = !detailText ? "none" : (planOutcome === "success" && !guardBlocked) ? "collapsed" : "expanded";
+  const sectionKind = !detailText ? "none" : (planOutcome === "success" && !guardBlocked && !pinsBlocked) ? "collapsed" : "expanded";
 
   // Compute the fence once, from the full (pre-truncation) detail
   // text, and reuse it everywhere: truncation only removes

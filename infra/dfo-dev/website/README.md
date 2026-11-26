@@ -18,13 +18,24 @@ The service's env vars carry the host, database name, runtime user and instance 
 
 The service has no domain mapping, so it is reachable only at its generated `run.app` URL. `allow_unauthenticated` is true because the service is the public website. `google_cloud_run_v2_service_iam_member.website_apis_invoker` in `main.tf` grants its runtime account `roles/run.invoker` on the apis service, named by `var.apis_service_name`, a plain value copied from the `apis` stack's `service_name` output. The app sends an ID token as that account on its calls to the apis service; see "Caller authentication" in the `apis` stack's README.
 
+## Rolling onto a new revision
+
+A secret mounted at `latest` resolves when an instance starts. Running instances keep the value they started with, and instances that start later, on autoscale or restart, read the newest version. To bring every instance onto a new version, roll the service onto a new revision by changing a label:
+
+```
+gcloud run services update dfo-dev-website-staging --project dev-fin-observatory \
+  --region northamerica-northeast1 --update-labels=rolled-at=$(date +%Y%m%d%H%M%S)
+```
+
+The value carries the second, so two rolls in a row always differ. The `cloud-run-service` module ignores revision template labels, so the next `terraform apply` leaves the label alone. Use the label roll after a secret change: a manual run of dfo-website's `deploy.yml` applies the same path filter as a push, and skips the deploy when the last commit on `dev` touched only docs or prototypes.
+
 ## Studio proxy and auth env
 
 The service (`module.website_service`, named `dfo-dev-website-staging` from `var.namespace` and `var.tier`) carries the env vars and secrets its `/api/studio/*` proxy and better-auth session handling need, per the `dfo-website` deploy README's runtime env contract.
 
 `STUDIO_API_BASE` is the `dfo-dev-ai` Cloud Run URL the proxy forwards to, set from `var.studio_api_base`. That value is copied from the `ai` stack's `service_url` output rather than read through remote state, the same rationale `var.dfo_apis_url` records in the `ai` stack.
 
-`STUDIO_TOKEN` is the bearer token the proxy sends to the harness. The secret belongs to the `ai` stack, created in `infra/dfo-dev/ai/studio_token.tf`. This stack reads it through a plain `data "google_secret_manager_secret"` source, the same cross-stack pattern `ai/main.tf` and `apis/main.tf` use for `dfo-dev-gemini-api-key`. It isn't version-pinned, since the `ai` stack owns rotation and this stack holds no version resource of its own to pin against. Rotating it in the `ai` stack deletes the old version, and running website instances keep the value they started with, so after the `ai` apply roll the staging service onto a new revision by re-running dfo-website's `deploy.yml` for the `staging` branch. Pinning a version here would not close that gap: the pinned version is the one the rotation deletes.
+`STUDIO_TOKEN` is the bearer token the proxy sends to the harness. The secret belongs to the `ai` stack, created in `infra/dfo-dev/ai/studio_token.tf`. This stack reads it through a plain `data "google_secret_manager_secret"` source, the same cross-stack pattern `ai/main.tf` and `apis/main.tf` use for `dfo-dev-gemini-api-key`. It isn't version-pinned, since the `ai` stack owns rotation and this stack holds no version resource of its own to pin against. Rotating it in the `ai` stack deletes the old version, and running website instances keep the value they started with, so after the `ai` apply roll the staging service onto a new revision (see "Rolling onto a new revision"). Pinning a version here would not close that gap: the pinned version is the one the rotation deletes.
 
 `BETTER_AUTH_SECRET` is generated here, in `auth_secret.tf`, with the same ephemeral-`random_password`-plus-write-only-version-plus-counter shape as `studio_token.tf` in the `ai` stack. It's stored as `dfo-dev-website-staging-better-auth-secret` and mounted pinned to its version, so warm and new instances can never disagree on the signing key during a rotation. Rotation means bumping `website_better_auth_secret_version` in `auth_secret.tf`. The app reads a single key, so a rotation signs everyone out and restarts any sign-in in progress. Better Auth's `BETTER_AUTH_SECRETS` supports an overlap period, which would need an app change first.
 
@@ -63,7 +74,7 @@ Each provider's callback URL is `https://dfo-dev-website-staging-zms5lj4zhq-nn.a
 - GitHub: the OAuth App "Development Finance Observatory (staging)", owned by the ONEcampaign organisation. The app requests `read:user` and `user:email`.
 - Microsoft: the Entra app registration "Development Finance Observatory" (client ID `07e24f61-0ba9-44ca-9317-939ff95e73e7`) in ONE's tenant, which ONE's IT team administers. It accepts work, school and personal accounts, matching the app's `tenantId: 'common'`, and registers both the staging and `developmentfinance.org` callbacks. The mounted secret is the credential labelled "Staging", which expires on 27 September 2028; rotating it before then needs IT or an app owner.
 
-Rotating a client is a new version on each secret. The mounts track `latest`, but running instances keep the value they started with, so roll the service onto a new revision afterwards (see `STUDIO_TOKEN` above).
+Rotating a client is a new version on each secret. The mounts track `latest`, but running instances keep the value they started with, so roll the service onto a new revision afterwards (see "Rolling onto a new revision").
 
 ## PostHog telemetry
 
@@ -95,7 +106,7 @@ The mount reads `latest`, so the value reaches a running instance only on a new 
 
 `FEEDBACK_SLACK_WEBHOOK_URL` is the Slack incoming webhook the app's `/api/feedback` endpoint posts each submission to. Slack issues the URL, so unlike `BETTER_AUTH_SECRET` it can't be generated here: `feedback_webhook.tf` owns the secret container (`dfo-dev-website-staging-feedback-slack-webhook`) and the mount, and the URL itself is added out-of-band as a version. The mount tracks `latest` (a pinned version would point at whatever Terraform knew about, which is never the real URL), and a placeholder first version with the literal `disabled` guarantees the mount always resolves, since Cloud Run refuses to start a revision whose secret env var can't be read. The app treats any value that isn't a Slack webhook URL as "notifications off", so the placeholder is inert.
 
-Adding or rotating the URL (webhook leaked, channel changed, Slack app reinstalled) is one command for anyone with `secretmanager.versions.add` on the project, plus a redeploy so instances pick it up:
+Adding or rotating the URL (webhook leaked, channel changed, Slack app reinstalled) is one command for anyone with `secretmanager.versions.add` on the project, plus a roll onto a new revision so running instances pick it up:
 
 ```
 printf '%s' 'https://hooks.slack.com/services/…' | gcloud secrets versions add \
@@ -103,7 +114,7 @@ printf '%s' 'https://hooks.slack.com/services/…' | gcloud secrets versions add
   --project dev-fin-observatory --data-file=-
 ```
 
-`printf` rather than `echo` keeps a trailing newline out of the stored value, and passing the URL via stdin keeps it out of shell history less than an argument would, but not out of this machine's history entirely; run it from a shell with history off if that matters. Running website instances keep the value they started with, so after adding a version roll the service onto a new revision by re-running dfo-website's `deploy.yml` for the `staging` branch, the same gap and fix the `STUDIO_TOKEN` paragraph above describes.
+`printf` rather than `echo` keeps a trailing newline out of the stored value, and passing the URL via stdin keeps it out of shell history less than an argument would, but not out of this machine's history entirely; run it from a shell with history off if that matters. Running website instances keep the value they started with, so after adding a version roll the service onto a new revision (see "Rolling onto a new revision").
 
 ## Email sign-in
 
@@ -121,11 +132,102 @@ Mail goes out through the Amazon SES API in ONE's AWS account (`961128127831`, `
 gcloud iam service-accounts describe dfo-dev-website-staging-run@dev-fin-observatory.iam.gserviceaccount.com --project dev-fin-observatory --format='value(uniqueId)'
 ```
 
-Running instances keep the values they started with. A change to `turnstile_site_key` or `ses` reaches the service through `terraform apply`, which creates a new revision. A new secret version needs a manual roll onto a new revision:
+Running instances keep the values they started with. A change to `turnstile_site_key` or `ses` reaches the service through `terraform apply`, which creates a new revision. A new secret version needs a roll onto a new revision (see "Rolling onto a new revision").
+
+## Admin emails
+
+`ADMIN_EMAILS` is the comma-separated, case-insensitive list of verified emails that may open the website's admin page, `/admin/api-keys`. Unset, empty or naming nobody, the app has no admins and that page answers 404. The list is private and this repository is public, so it lives in Secret Manager: `admin_emails.tf` owns the secret container (`dfo-dev-website-staging-admin-emails`) and the mount, and the list itself is added out-of-band as a version. The `cloud-run-service` module grants the website's runtime service account `roles/secretmanager.secretAccessor` on it, as it does for every secret in `secret_env_vars`, so nothing else needs granting.
+
+The mount is pinned to `admin_emails_version` in `env.auto.tfvars`, as the tag secret is, so a new list reaches instances only through the revision that the apply of a new value creates, and each change made through Terraform goes through a reviewed pull request. The diff of that pull request is a version number, which reveals no address, so before approving it the reviewer reads the version it names:
 
 ```
-gh workflow run deploy.yml -R DevelopmentFinanceObservatory/website --ref dev
+gcloud secrets versions access N --secret dfo-dev-website-staging-admin-emails --project dev-fin-observatory
 ```
+
+Review covers the Terraform path only. Anyone with `run.services.update` on the service, the website's CI deployer (`roles/run.developer`) and project owners among them, can point the mount at any version with `gcloud run services update`, since the runtime service account can read every version of the secret. That change stays live until the next apply of this stack reverts it.
+
+The first version, which the stack creates and the pin starts at, holds the literal `none` and keeps the mount resolvable, since Cloud Run refuses to start a revision whose secret env var can't be read. `none` is not an email address, so it admits nobody.
+
+To change the list, add a version holding every admin, since each version replaces the whole list. The prompt keeps the list off the screen and out of shell history, and the command prints the new version's name, which ends in its number:
+
+```
+read -rs ADMINS; printf '%s' "$ADMINS" | gcloud secrets versions add dfo-dev-website-staging-admin-emails \
+  --project dev-fin-observatory --data-file=- --format='value(name)'
+```
+
+`printf` rather than `echo` keeps a trailing newline out of the stored value. Then set `admin_emails_version` to that number in a pull request. Merging it applies the change and rolls a new revision, which every instance then runs, so no label roll is needed. A removal also takes effect only at that apply, so merge the pull request promptly when an admin must lose the page.
+
+Never destroy or disable the first version, even after the pin has moved on. `prevent_destroy` in `admin_emails.tf` stops only a Terraform plan from replacing it, not a `gcloud secrets versions destroy` or a console click. The provider drops a destroyed version from state, so the next apply writes a fresh `none` version, and while the pin is still `1` it names a version no revision can read, so every new revision, image deploys included, fails to start. For the same reason, never destroy or disable the version the pin names; move the pin first.
+
+## API key tag secrets
+
+`API_KEY_TAG_SECRETS` is the comma-separated list of secrets that sign the 8-character tag at the end of every API key. The first entry signs new keys and every entry verifies, so the website's proxy can refuse a made-up key before it reads the key store. A production revision refuses to start without a valid list (each entry at least 32 characters). `api_key_tag_secrets.tf` owns the secret (`dfo-dev-website-staging-api-key-tag-secrets`) and generates its first version with the same ephemeral-`random_password`-plus-write-only-version shape as `auth_secret.tf`, so the value never lands in Terraform state and keys work from the first apply. The secret is separate from `BETTER_AUTH_SECRET`, so rotating that one leaves keys alone.
+
+Apply this stack to `dfo-dev` before the dfo-website change that issues keys (website#143) reaches staging. That deploy runs its migration first and then updates the image, and the new revision refuses to start without `API_KEY_TAG_SECRETS`, leaving staging on the old revision with the new schema.
+
+The mount is pinned to `api_key_tag_secrets_version` in `env.auto.tfvars`, so a new version reaches instances only through the revision that the apply of a new value creates. Rotate by adding versions by hand and moving that value to each in turn. A bump of the counter in `api_key_tag_secrets.tf` would replace the generated version, whose secret signed every key issued so far, and `prevent_destroy` refuses that plan. Keys don't expire, and a secret dropped from the list voids every key it signed, so the old secret keeps verifying until its keys are replaced. Plan checks the pin only for format, so the plan and apply workflows also run `scripts/check-secret-pins.sh`, which fails unless every version the service mounts by number is `ENABLED`. It reads version metadata only.
+
+Each step below runs in a subshell under `set -euo pipefail`, so a failed read stops it without closing your terminal. Each reads its input back from Secret Manager, so a step can run from a fresh terminal.
+
+**Step 1: the new secret verifies and the old one still signs.** `CURRENT` is the value of `api_key_tag_secrets_version` today:
+
+```
+(
+  set -euo pipefail
+  SECRET=dfo-dev-website-staging-api-key-tag-secrets PROJECT=dev-fin-observatory CURRENT=1
+  OLD=$(gcloud secrets versions access "$CURRENT" --secret "$SECRET" --project "$PROJECT")
+  test -n "$OLD"
+  case "$OLD" in *,*) echo "version $CURRENT holds more than one secret: finish the last rotation first" >&2; exit 1 ;; esac
+  NEW=$(openssl rand -hex 32)
+  printf '%s' "$OLD,$NEW" | gcloud secrets versions add "$SECRET" --project "$PROJECT" --data-file=- --format='value(name)'
+)
+```
+
+The command prints the new version's name, which ends in its number. Set `api_key_tag_secrets_version` to that number in a pull request, and merging it applies the change and rolls a new revision.
+
+**Check before step 2.** Every instance must run the step-1 revision, or a key signed by the new secret reaches an instance that doesn't know it. A step-1 revision that failed to start leaves the last ready revision serving all traffic, so the check also requires the newest revision created to be the ready one, and the serving revision to mount the version step 1 added. Set `STEP1` to that version number. The check needs `jq`, prints the serving revision and its pin, and stops on any mismatch:
+
+```
+(
+  set -euo pipefail
+  SERVICE=dfo-dev-website-staging PROJECT=dev-fin-observatory REGION=northamerica-northeast1 STEP1=VERSION_FROM_STEP_1
+  SVC=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format=json)
+  CREATED=$(jq -r '.status.latestCreatedRevisionName' <<<"$SVC")
+  READY=$(jq -r '.status.latestReadyRevisionName' <<<"$SVC")
+  [ "$CREATED" = "$READY" ] || { echo "the newest revision $CREATED is not ready; $READY is" >&2; exit 1; }
+  jq -e --arg r "$READY" '[.status.traffic[] | select((.percent // 0) > 0)] | length == 1 and .[0].revisionName == $r and .[0].percent == 100' <<<"$SVC" >/dev/null \
+    || { echo "$READY does not serve all traffic" >&2; exit 1; }
+  PIN=$(gcloud run revisions describe "$READY" --project "$PROJECT" --region "$REGION" --format=json \
+    | jq -r '.spec.containers[0].env[] | select(.name == "API_KEY_TAG_SECRETS") | .valueFrom.secretKeyRef.key')
+  echo "$READY serves all traffic with API_KEY_TAG_SECRETS version $PIN"
+  [ "$PIN" = "$STEP1" ] || { echo "the serving pin is $PIN, not $STEP1" >&2; exit 1; }
+)
+```
+
+**Step 2: the new secret signs.** Set `CURRENT` to the same number as in step 1, the pin before this rotation, and `STEP1` to the version number step 1 printed. Left as they are, the reads fail and the step stops. The step refuses a `STEP1` that does not start with the secret `CURRENT` holds, so a two-secret version from an earlier rotation can't bring back a retired secret:
+
+```
+(
+  set -euo pipefail
+  SECRET=dfo-dev-website-staging-api-key-tag-secrets PROJECT=dev-fin-observatory CURRENT=VERSION_BEFORE_STEP_1 STEP1=VERSION_FROM_STEP_1
+  OLD=$(gcloud secrets versions access "$CURRENT" --secret "$SECRET" --project "$PROJECT")
+  test -n "$OLD"
+  case "$OLD" in *,*) echo "version $CURRENT holds more than one secret: give the pin from before step 1" >&2; exit 1 ;; esac
+  PAIR=$(gcloud secrets versions access "$STEP1" --secret "$SECRET" --project "$PROJECT")
+  case "$PAIR" in "$OLD",?*) ;; *) echo "version $STEP1 is not version $CURRENT's secret followed by a new one: give the version step 1 added" >&2; exit 1 ;; esac
+  NEW=${PAIR#"$OLD",}
+  case "$NEW" in *,*) echo "version $STEP1 holds more than two secrets" >&2; exit 1 ;; esac
+  printf '%s' "$NEW,$OLD" | gcloud secrets versions add "$SECRET" --project "$PROJECT" --data-file=- --format='value(name)'
+)
+```
+
+Set `api_key_tag_secrets_version` to the new number in a pull request, as in step 1.
+
+**Step 3: drop the old secret.** Only after every key signed by the old secret is replaced, add a version holding the new secret alone and move `api_key_tag_secrets_version` to it.
+
+Steps 1 and 2 keep both secrets verifying on every instance, so no instance meets a key signed by a secret it doesn't know.
+
+Rolling traffic back to a revision older than step 1, in the console or with `gcloud run services update-traffic`, puts instances back on the old secret alone. Every key signed since step 2 then fails on them until traffic returns to a revision that holds the new secret. Once step 2 is live, roll back only to a revision from step 1 or later.
 
 ## Tenant databases
 
@@ -166,12 +268,7 @@ printf '%s' 'eng@example.org,example.net' | gcloud secrets versions add dfo-dev-
   --project dev-fin-observatory --data-file=-
 ```
 
-`printf` rather than `echo` keeps a trailing newline out of the stored value. A secret env var resolves when an instance starts, so running instances keep the list they started with until the service rolls onto a new revision. Force one without a new image by changing a label:
-
-```
-gcloud run services update dfo-dev-website-staging --project dev-fin-observatory \
-  --region northamerica-northeast1 --update-labels=internal-eng-emails-rotated=$(date +%Y%m%d%H%M)
-```
+`printf` rather than `echo` keeps a trailing newline out of the stored value. A secret env var resolves when an instance starts, so running instances keep the list they started with until the service rolls onto a new revision. Force one without a new image with the label roll in "Rolling onto a new revision".
 
 The app sets the flag when it records an event, so a list change reaches new events only, and events recorded earlier keep their flag. The anonymous events (`share.open`, `embed.view`, `feedback.submit`) carry only the email's domain, so on them only a domain entry sets the flag.
 
