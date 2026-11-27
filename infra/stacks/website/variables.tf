@@ -198,3 +198,9 @@ variable "admin_emails_version" {
     error_message = "admin_emails_version must be a version number such as \"1\"; \"latest\" would let anyone who can add a version grant admin without review."
   }
 }
+
+variable "alert_notification_channel" {
+  description = "Display name of an existing Cloud Monitoring notification channel in this project that every alert policy in the stack notifies. Plan fails unless exactly one channel has that name. Null leaves the policies with no channel."
+  type        = string
+  default     = null
+}

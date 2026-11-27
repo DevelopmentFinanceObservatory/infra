@@ -55,6 +55,8 @@ The service (`module.website_service`, named `dfo-dev-website-staging` from `var
 
 `LIBRARY_ENABLED` is `var.library_enabled` as `true` or `false`. While false, the Library at `/library` answers 404 to everyone except Library admins (`ADMIN_EMAILS`), who can publish to it from the Studio and open its pages to build its content. The footer and the sitemap leave it out. Setting it to true makes the Library public on the next apply, with no website rebuild.
 
+`TYPESAFE_API_KEY` is the key for TypeSafe's Jev model, which holds each Library publish and text edit to the evergreen rule. The secret is `dfo-dev-typesafe-api-key`, made by hand and shared with the `apis` stack, whose search binder reads it too. This stack reads it through a `data "google_secret_manager_secret"` source, so plan fails while it is missing, and the `cloud-run-service` module grants the runtime account `secretAccessor` on it. The mount reads `latest`, as the `apis` service's does. After adding a version, roll the service onto a new revision ("Rolling onto a new revision").
+
 ## Sign-in providers
 
 Sign-in is social-only, so `/login` offers exactly the providers named in `local.sign_in_providers` (`sign_in_providers.tf`): Google, GitHub and Microsoft. Each provider mounts `<PROVIDER>_CLIENT_ID` and `<PROVIDER>_CLIENT_SECRET` from the hand-created secrets `dfo-dev-website-staging-<provider>-client-id` and `dfo-dev-website-staging-<provider>-client-secret`. The app offers a provider only when both are set, so each provider mounts as a pair. The stack reads the secrets through `data` sources, so a listed provider whose secrets are missing fails `plan`, and a PR cannot merge into a state where the service can't start new revisions.
@@ -288,3 +290,18 @@ gcloud run jobs execute dfo-dev-website-staging-share-migrate \
 ```
 
 On exit 1, read the `share <id>:` lines in the execution's logs, fix the cause, and run it again. Then run `normalise-recipes` on `dfo-dev-datasets-maintenance` (see the `apis` stack's README). The Job, the import route and its principal are removed once prod's shares are migrated.
+
+## Library share check
+
+`library_share_check.tf` builds the Job `dfo-dev-website-staging-library-share-check`, which runs dfo-website's `node dist/check-library-shares.cjs` every day at 06:00 UTC from the Cloud Scheduler job `dfo-dev-website-staging-library-share-check-tick`. It lists the published rows of `library_artifact` and reads each one's share, slot cards and slot rows from dfo-apis as the Library page does. Each failed read logs one JSON line with `event` `library_share_check_failed`, and the run exits 1 when any artifact fails or the run cannot run. dfo-website's `docs/development.md` ("Library share check") lists the failure classes.
+
+The Job runs as the service's runtime account with the service's `WEBSITE_DB_*` settings and `SEARCH_API_BASE`, and calls dfo-apis with an ID token minted as that account, which `website_apis_invoker` already allows. It uses the service's PSC network, a 600-second timeout and no retry, since the check rereads a transient failure itself. The deployer holds `roles/run.developer` on it, and the Scheduler calls the Cloud Run Admin API as `dfo-dev-website-stg-libchk-sch`, which holds `roles/run.invoker` on this Job alone. The Job exists in both environments, since Library admins publish while `library_enabled` is false.
+
+The log-based metric `dfo-dev-website-staging-library-share-check-failed` counts the failure lines. The alert policy "Library share check failed on dfo-dev-website-staging" opens on any failure line, and on any failed execution, which catches a run that dies before it logs. It notifies the channel named by `alert_notification_channel`. That is null here, so in dfo-dev the incident shows in Cloud Monitoring and notifies no one.
+
+The Job bootstraps from `gcr.io/cloudrun/hello`, which has no `node`, so an execution before dfo-website's deploy moves the image fails and opens the alert. The deploy finds the Job through `LIBRARY_SHARE_CHECK_JOB_WEBSITE`, which `scripts/handoff.sh dfo-dev website` writes from the `library_share_check_job_name` output. To run the check by hand:
+
+```bash
+gcloud run jobs execute dfo-dev-website-staging-library-share-check \
+  --region=northamerica-northeast1 --project=dev-fin-observatory --wait
+```

@@ -57,6 +57,9 @@ ses = {
 # account, for developmentfinance.org. Public: the login page renders it.
 turnstile_site_key = "0x4AAAAAAFiLPXQeqPLKYQs9"
 
+# The notification channel the Library share check alert (library_share_check.tf) notifies, the apis stack's channel.
+alert_notification_channel = "Telemetry pipeline alerts: team"
+
 # The event export dataset, ID hashing key, Job and hourly trigger (event_export.tf).
 event_export_enabled = true
 
