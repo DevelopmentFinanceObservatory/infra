@@ -14,8 +14,9 @@ terraform {
       version = ">= 3.7.0"
     }
     time = {
-      # time_sleep in library_share_check.tf, which waits out a new log-based
-      # metric's propagation to Cloud Monitoring. No specific version feature.
+      # time_sleep in library_share_check.tf and library_evergreen_alert.tf,
+      # which waits out a new log-based metric's propagation to Cloud
+      # Monitoring. No specific version feature.
       source  = "hashicorp/time"
       version = ">= 0.9.0"
     }
@@ -89,7 +90,8 @@ data "google_secret_manager_secret" "mcp_api_token" {
 # TypeSafe's API key, created by hand and shared with the apis stack's Jev
 # binder (apis/main.tf). Read by secret_id like the studio token above. The
 # website's Library checks each published or edited text against the
-# evergreen rule with it, and a production server refuses to start without it.
+# evergreen rule with it. Without a working key the service runs, and only a
+# Library publish or text edit answers 503 (library_evergreen_alert.tf).
 data "google_secret_manager_secret" "typesafe" {
   secret_id = "${var.namespace}-typesafe-api-key"
 }
@@ -247,4 +249,18 @@ resource "google_cloud_run_v2_service_iam_member" "website_apis_invoker" {
   name     = var.apis_service_name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${module.website_service.runtime_service_account_email}"
+}
+
+# Every alert policy in the stack notifies this channel
+# (library_share_check.tf, library_evergreen_alert.tf). Its absence leaves the
+# policies in Cloud Monitoring with no one notified, as in dfo-dev.
+data "google_monitoring_notification_channel" "alerts" {
+  count = var.alert_notification_channel == null ? 0 : 1
+
+  project      = var.project_id
+  display_name = var.alert_notification_channel
+}
+
+locals {
+  alert_notification_channels = data.google_monitoring_notification_channel.alerts[*].name
 }

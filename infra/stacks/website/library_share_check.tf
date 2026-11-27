@@ -178,19 +178,6 @@ resource "google_cloud_scheduler_job" "website_library_share_check" {
 # Alerting: a failed read, a failed execution, or no completed run
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Every alert policy in the stack notifies this channel. Its absence leaves the
-# policies in Cloud Monitoring with no one notified, as in dfo-dev.
-data "google_monitoring_notification_channel" "alerts" {
-  count = var.alert_notification_channel == null ? 0 : 1
-
-  project      = var.project_id
-  display_name = var.alert_notification_channel
-}
-
-locals {
-  alert_notification_channels = data.google_monitoring_notification_channel.alerts[*].name
-}
-
 # One count per failed read: the share, a slot's card or a slot's rows, after
 # the run's second read of a transient failure. A run that cannot reach the
 # database or lacks a setting logs one line with class `check_failed`. The
