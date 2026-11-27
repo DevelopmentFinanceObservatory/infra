@@ -18,6 +18,7 @@
       "studio_token_readers": {"form": "person", "min": 0}
     },
     "apis": {
+      "eval_runs_viewers": {"form": "person", "min": 0, "optional": true},
       "invokers": {"form": "person", "min": 0}
     },
     "foundation": {
