@@ -222,7 +222,8 @@ refuses "ai non-ASCII address" "$A" '{"studio_token_readers": {"x": "group:é@ex
 accepts "apis" "$V" "{\"eval_runs_viewers\": {\"team\": $G2}, \"invokers\": {\"dev-1\": \"user:dev1@example.org\", \"devs\": $G}}"
 accepts "apis with empty objects" "$V" '{"eval_runs_viewers": {}, "invokers": {}}'
 refuses "apis missing invokers" "$V" '{"eval_runs_viewers": {}}' "missing top-level key invokers"
-refuses "apis missing eval_runs_viewers" "$V" '{"invokers": {}}' "missing top-level key eval_runs_viewers"
+accepts "apis without optional eval runs viewers" "$V" '{"invokers": {}}'
+refuses "apis null eval runs viewers" "$V" '{"eval_runs_viewers": null, "invokers": {}}' "eval_runs_viewers must be an object"
 refuses "apis ai file" "$V" '{"studio_token_readers": {}, "mcp_token_readers": {}}' "missing top-level key invokers"
 refuses "apis bare address" "$V" '{"eval_runs_viewers": {}, "invokers": {"x": "a@example.org"}}' "each invokers value must be"
 refuses "apis bare eval runs viewer" "$V" '{"eval_runs_viewers": {"x": "a@example.org"}, "invokers": {}}' "each eval_runs_viewers value must be"

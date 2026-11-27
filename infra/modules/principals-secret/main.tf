@@ -19,9 +19,10 @@ terraform {
 # both sides apply the same patterns. The patterns use only ASCII classes and
 # \A and \z, which RE2 (regex here) and Oniguruma (jq's test) read the same way.
 locals {
-  schemas = jsondecode(file("${path.module}/schemas.json"))
-  secret  = "projects/${var.project_id}/secrets/${var.namespace}-${var.stack}-principals"
-  schema  = local.schemas.stacks[var.stack]
+  schemas       = jsondecode(file("${path.module}/schemas.json"))
+  secret        = "projects/${var.project_id}/secrets/${var.namespace}-${var.stack}-principals"
+  schema        = local.schemas.stacks[var.stack]
+  required_keys = [for key, rule in local.schema : key if !try(rule.optional, false)]
 }
 
 data "google_secret_manager_secret_version" "this" {
@@ -34,15 +35,16 @@ data "google_secret_manager_secret_version" "this" {
     }
     postcondition {
       condition = try(
-        toset(keys(jsondecode(self.secret_data))) == toset(keys(local.schema))
-        && alltrue([for key in keys(local.schema) : can(keys(jsondecode(self.secret_data)[key]))]),
+        length(setsubtract(local.required_keys, keys(jsondecode(self.secret_data)))) == 0
+        && length(setsubtract(keys(jsondecode(self.secret_data)), keys(local.schema))) == 0
+        && alltrue([for value in values(jsondecode(self.secret_data)) : can(keys(value))]),
         false,
       )
-      error_message = "${local.secret} must hold one JSON object with exactly the keys ${join(", ", sort(keys(local.schema)))}, each an object."
+      error_message = "${local.secret} must hold one JSON object with all required keys (${join(", ", sort(local.required_keys))}) and only schema keys (${join(", ", sort(keys(local.schema)))}), each an object."
     }
     postcondition {
       condition = try(alltrue(flatten([
-        for key in keys(local.schema) : [
+        for key in keys(jsondecode(self.secret_data)) : [
           for label in keys(jsondecode(self.secret_data)[key]) : can(regex(local.schemas.label, label))
         ]
       ])), false)
@@ -50,11 +52,11 @@ data "google_secret_manager_secret_version" "this" {
     }
     postcondition {
       condition = try(alltrue(flatten([
-        for key, rule in local.schema : [
+        for key, members in jsondecode(self.secret_data) : [
           # jsonencode tests the JSON type itself: only a string encodes with
           # a leading quote, where regex would convert a number or bool.
-          for value in values(jsondecode(self.secret_data)[key]) :
-          startswith(jsonencode(value), "\"") && can(regex(local.schemas.forms[rule.form].pattern, value))
+          for value in values(members) :
+          startswith(jsonencode(value), "\"") && can(regex(local.schemas.forms[local.schema[key].form].pattern, value))
         ]
       ])), false)
       error_message = "Every value in ${local.secret} must be a string that matches its object's form. ${join(" ", [for form in sort(distinct([for rule in values(local.schema) : rule.form])) : "Each value in ${join(", ", sort([for key, rule in local.schema : key if rule.form == form]))} must be ${local.schemas.forms[form].says}."])}"
@@ -63,8 +65,8 @@ data "google_secret_manager_secret_version" "this" {
       # The same minimum scripts/mask-principals.sh needs to mask a value and
       # its address, the value with its member prefix removed.
       condition = try(alltrue(flatten([
-        for key in keys(local.schema) : [
-          for value in values(jsondecode(self.secret_data)[key]) :
+        for members in values(jsondecode(self.secret_data)) : [
+          for value in values(members) :
           length(value) >= local.schemas.min_length && length(replace(value, "/${local.schemas.prefix}/", "")) >= local.schemas.min_length
         ]
       ])), false)
@@ -72,14 +74,14 @@ data "google_secret_manager_secret_version" "this" {
     }
     postcondition {
       condition = try(alltrue([
-        for key, rule in local.schema : length(jsondecode(self.secret_data)[key]) >= rule.min
+        for key, members in jsondecode(self.secret_data) : length(members) >= local.schema[key].min
       ]), false)
       error_message = "${local.secret} has an object below its minimum: ${join(", ", [for key in sort(keys(local.schema)) : "${key} ${local.schema[key].min}"])}."
     }
     postcondition {
       condition = try(alltrue([
-        for key in keys(local.schema) :
-        length(distinct(values(jsondecode(self.secret_data)[key]))) == length(jsondecode(self.secret_data)[key])
+        for members in values(jsondecode(self.secret_data)) :
+        length(distinct(values(members))) == length(members)
       ]), false)
       error_message = "An object in ${local.secret} holds the same value under two labels, so removing either label would revoke or unsubscribe both."
     }

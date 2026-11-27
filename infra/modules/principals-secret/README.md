@@ -6,7 +6,7 @@ Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`
 
 ## Rules
 
-- The secret is one JSON object whose keys are exactly the stack's schema keys, each holding an object.
+- The secret is one JSON object. Include every required schema key. The schema marks keys that may be omitted as `optional`. Every key that appears must be listed in the schema and hold an object.
 - The secret holds the compact, key-sorted JSON the script writes. For the characters the rules allow, that matches `jsonencode` byte for byte, so a version written any other way fails plan. The rule catches a repeated key, which `jsondecode` settles silently.
 - Each inner object maps labels to values. A label holds only lower-case letters, digits, hyphens and underscores. Labels key the stack's resources, since Terraform rejects sensitive `for_each` keys, so they appear in resource addresses, plan output and public plan comments, and an address cannot be one. Name a label by role, such as `dev-1` or `devs`.
 - A value is a string. A `person` value is `group:` or `user:` followed by an address, so it names a person or a group of people. Every object that grants IAM takes `person` values: `applier_impersonators`, `ingestion_operators`, `mcp_token_readers`, `studio_token_readers`, `readers`, `analytics_developers`, `invokers` and `eval_runs_viewers`. A service account, a workload identity principal (`principal://` or `principalSet://`) or a domain gets a named Terraform resource in the stack that owns it, such as `infra/dfo-dev/apis/eval_reader.tf`. A person who also holds the same role through a hand-made binding loses it when the entry is removed, so grant people through the secret only. An `email` value is a bare address with no prefix. The address is lower-case ASCII. Lower case makes the duplicate check exact, since IAM compares addresses without regard to case, and keeps CI's masking of each value exact.
@@ -18,7 +18,7 @@ Reads a stack's hand-made Secret Manager secret `<namespace>-<stack>-principals`
 
 Each write adds a version that replaces the whole secret, and the next apply of the stack revokes the grant of any entry the new version omits. `scripts/bootstrap-principals.sh` therefore starts every change from the latest version. The script's copy lives in a private temporary directory that it removes on exit. An editor's own swap, backup or undo files follow that editor's configuration.
 
-Create a secret from a file that holds every key of the stack's schema, each an object (empty where the stack has no entries). Keep the file outside the repository and remove it afterwards:
+Create a secret from a file that holds every required key of the stack's schema, each an object (empty where the stack has no entries). Keep the file outside the repository and remove it afterwards:
 
 ```sh
 scripts/bootstrap-principals.sh <project> <namespace>-<stack>-principals <file>
@@ -54,7 +54,9 @@ The apply moves the stack's grants to the new members. A relabel is the exceptio
 
 ## Adding a key
 
-The secret's keys must equal the stack's schema keys, so a PR that adds a key to `schemas.json` fails plan until the secret has it, and once the secret has it every plan of a branch without the key fails. Land it in this order:
+Land an optional key in `schemas.json` before adding it to the secret. For example, dfo-dev reads `eval_runs_viewers` as an empty object until the secret contains the key.
+
+A PR that adds a required key to `schemas.json` fails plan until the secret has it. A branch whose schema lacks the key also fails plan once the secret has it. Land a required key in this order:
 
 1. Open the PR with the new key in `schemas.json` and the resources that read it.
 2. From the PR's branch, so that the script validates against the new schema, run `scripts/bootstrap-principals.sh edit <project> <namespace>-<stack>-principals` and add the key with an empty object, such as `"analytics_developers": {}`.
@@ -63,7 +65,7 @@ The secret's keys must equal the stack's schema keys, so a PR that adds a key to
 
 Every plan and apply of the stack on the environment's branch fails between the second step and the merge, so run the steps back to back. Add members with a later `edit` and apply, once the key is on that branch. Removing a key runs the same order with the key deleted.
 
-One schema serves both environments, and each environment's secret must follow its own branch. dfo-dev plans and applies from `dev` and dfo-prod from `main`, so a PR into `dev` touches only the dev secret. The prod secret gets the key in the release PR that carries the schema change into `main`: open the release PR, edit `<namespace>-<stack>-principals` in `prod-fin-observatory` from a checkout of the release branch, re-run the prod plan, and merge. An edit to the prod secret before then fails every prod plan and apply of the stack until the release merges. Any other edit to an environment's secret runs from that environment's branch, `main` for prod, so the script checks it against the schema that environment's plans read: from `dev`, the script demands a key `main` lacks, and adding it breaks prod.
+One schema serves both environments. dfo-dev plans from `dev` and dfo-prod plans from `main`. Apply the sequence above to the dev secret for a PR into `dev`. Apply it to the prod secret when the release PR brings a required key into `main`. For routine edits, check out the environment's branch so the script validates against the schema used by that environment's plans.
 
 ## Relabelling
 

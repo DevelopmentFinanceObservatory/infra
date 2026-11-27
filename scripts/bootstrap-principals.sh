@@ -167,7 +167,8 @@ validate() {
         | if ($extra | length) == 0 then empty
           else "\($extra | length) unexpected top-level \(if ($extra | length) == 1 then "key at position" else "keys at positions" end) \($extra | join(", "))" end),
       ($schema | to_entries[] | .key as $k | .value as $rule | $patterns.forms[$rule.form] as $form
-        | if ($doc | has($k) | not) then "missing top-level key \($k)"
+        | if ($doc | has($k) | not) then
+            if $rule.optional then empty else "missing top-level key \($k)" end
           elif ($doc[$k] | type) != "object" then "\($k) must be an object"
           else $doc[$k] as $obj
             | (if ($obj | length) < $rule.min then "\($k) must hold at least \($rule.min) entry" else empty end),

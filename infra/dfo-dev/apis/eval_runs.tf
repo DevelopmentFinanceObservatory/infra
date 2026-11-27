@@ -135,12 +135,14 @@ output "apis_eval_writer_service_account_email" {
 }
 
 # The people who read run records and results pages come from the
-# eval_runs_viewers object of the apis principals secret, keyed by label, so no
-# address sits in this repository. The stacks share one schema, so dfo-prod's
-# apis secret holds the key too, and no prod resource reads it.
+# optional eval_runs_viewers object of the dev apis principals secret.
+locals {
+  eval_runs_viewers = try(local.principals.eval_runs_viewers, {})
+}
+
 resource "google_storage_bucket_iam_member" "eval_runs_viewers" {
-  for_each = toset(nonsensitive(keys(local.principals.eval_runs_viewers)))
+  for_each = toset(nonsensitive(keys(local.eval_runs_viewers)))
   bucket   = google_storage_bucket.eval_runs.name
   role     = "roles/storage.objectViewer"
-  member   = local.principals.eval_runs_viewers[each.key]
+  member   = local.eval_runs_viewers[each.key]
 }
