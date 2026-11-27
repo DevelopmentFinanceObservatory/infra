@@ -219,12 +219,14 @@ refuses "ai case-only duplicate" "$A" '{"studio_token_readers": {"x": "group:a@e
 refuses "ai no-break space in an address" "$A" '{"studio_token_readers": {"x": "group:a b@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 refuses "ai non-ASCII address" "$A" '{"studio_token_readers": {"x": "group:é@example.org"}, "mcp_token_readers": {}}' "each studio_token_readers value must be"
 
-accepts "apis" "$V" "{\"invokers\": {\"dev-1\": \"user:dev1@example.org\", \"devs\": $G}}"
-accepts "apis with an empty object" "$V" '{"invokers": {}}'
-refuses "apis missing key" "$V" '{}' "missing top-level key invokers"
+accepts "apis" "$V" "{\"eval_runs_viewers\": {\"team\": $G2}, \"invokers\": {\"dev-1\": \"user:dev1@example.org\", \"devs\": $G}}"
+accepts "apis with empty objects" "$V" '{"eval_runs_viewers": {}, "invokers": {}}'
+refuses "apis missing invokers" "$V" '{"eval_runs_viewers": {}}' "missing top-level key invokers"
+refuses "apis missing eval_runs_viewers" "$V" '{"invokers": {}}' "missing top-level key eval_runs_viewers"
 refuses "apis ai file" "$V" '{"studio_token_readers": {}, "mcp_token_readers": {}}' "missing top-level key invokers"
-refuses "apis bare address" "$V" '{"invokers": {"x": "a@example.org"}}' "each invokers value must be"
-refuses "apis duplicate member" "$V" "{\"invokers\": {\"x\": $G, \"y\": $G}}" "invokers holds the same value"
+refuses "apis bare address" "$V" '{"eval_runs_viewers": {}, "invokers": {"x": "a@example.org"}}' "each invokers value must be"
+refuses "apis bare eval runs viewer" "$V" '{"eval_runs_viewers": {"x": "a@example.org"}, "invokers": {}}' "each eval_runs_viewers value must be"
+refuses "apis duplicate member" "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G, \"y\": $G}}" "invokers holds the same value"
 accepts "telemetry" "$T" "{\"analytics_developers\": {}, \"readers\": {\"x\": $G, \"y\": $G2}, \"alerts\": {\"x\": \"a@example.org\"}}"
 refuses "telemetry missing readers" "$T" '{"alerts": {"x": "a@example.org"}, "analytics_developers": {}}' "missing top-level key readers"
 refuses "telemetry missing analytics_developers" "$T" '{"readers": {}, "alerts": {"x": "a@example.org"}}' "missing top-level key analytics_developers"
@@ -256,7 +258,8 @@ refuses_machine_members "$F" applier_impersonators "{\"ingestion_operators\": {}
 refuses_machine_members "$F" ingestion_operators '{"applier_impersonators": {}, "budget_alerts": {}}'
 refuses_machine_members "$A" studio_token_readers '{"mcp_token_readers": {}}'
 refuses_machine_members "$A" mcp_token_readers '{"studio_token_readers": {}}'
-refuses_machine_members "$V" invokers '{}'
+refuses_machine_members "$V" invokers '{"eval_runs_viewers": {}}'
+refuses_machine_members "$V" eval_runs_viewers '{"invokers": {}}'
 refuses_machine_members "$T" readers '{"alerts": {"x": "a@example.org"}, "analytics_developers": {}}'
 refuses_machine_members "$T" analytics_developers '{"alerts": {"x": "a@example.org"}, "readers": {}}'
 
@@ -290,15 +293,15 @@ done
 # Creating a secret: it is created, gets its first version, and then the
 # planner is granted access, in that order. The grant comes last because the
 # planner account may not exist yet, and a rerun completes whichever step failed.
-accepts "apis secret created" "$V" "{\"invokers\": {\"x\": $G}}"
+accepts "apis secret created" "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 has "apis secret created is created" "secrets create $V --project=test-project"
 check "apis secret created is created before it gets a version" "$([ "$(line_of 'secrets create')" -lt "$(line_of 'versions add')" ] && echo true || echo false)"
 check "apis secret created gets a version before it is granted" "$([ "$(line_of 'versions add')" -lt "$(line_of 'add-iam-policy-binding')" ] && echo true || echo false)"
 
 # A stored version that differs from the file is refused before any write.
 export STUB_EXISTS=1 STUB_LATEST=3
-printf '%s' '{"invokers":{"y":"group:y@example.org"}}' >"$STUB_CONTENT"
-run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+printf '%s' '{"eval_runs_viewers":{},"invokers":{"y":"group:y@example.org"}}' >"$STUB_CONTENT"
+run test-project "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 check "file form on a secret with different content is refused" "$(is "$status" 1)"
 check "file form on a secret with different content names the version" "$(says "already has version 3")"
 check "file form on a secret with different content points to edit" "$(says "edit test-project $V")"
@@ -307,26 +310,26 @@ unset STUB_EXISTS STUB_LATEST
 
 # The grant fails after the version is written. The same command, rerun, adds
 # only the grant.
-STUB_GRANT_FAIL=denied run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+STUB_GRANT_FAIL=denied run test-project "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 check "a failed grant exits non-zero" "$(is "$status" 1)"
 check "a failed grant shows gcloud's error" "$(says "PERMISSION_DENIED")"
 has "a failed grant follows the version" "versions add $V"
 cp "$STUB_WRITTEN" "$STUB_CONTENT"
-STUB_EXISTS=1 STUB_LATEST=1 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+STUB_EXISTS=1 STUB_LATEST=1 run test-project "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 check "a rerun after a failed grant completes" "$(is "$status" 0)"
 has "a rerun after a failed grant grants" "add-iam-policy-binding $V"
 lacks "a rerun after a failed grant adds no version" "versions add"
 lacks "a rerun after a failed grant creates nothing" "secrets create"
 
 # A repeated-key check that cannot run refuses the file instead of passing it.
-PATH="$WORK/jqfail:$PATH" run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+PATH="$WORK/jqfail:$PATH" run test-project "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 check "a failed repeated-key check is refused" "$(is "$status" 1)"
 check "a failed repeated-key check says it could not check" "$(says "could not check")"
 check "a failed repeated-key check shows jq's error" "$(says "jq: stub failure at line 1, column 2")"
 check "a failed repeated-key check makes no gcloud call" "$(is "$calls" "")"
 
 # The planner account does not exist until foundation applies.
-STUB_GRANT_FAIL=missing run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+STUB_GRANT_FAIL=missing run test-project "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 check "a missing planner exits non-zero" "$(is "$status" 1)"
 check "a missing planner shows gcloud's error" "$(says "INVALID_ARGUMENT")"
 check "a missing planner names the account" "$(says "dfo-infra-planner@test-project.iam.gserviceaccount.com")"
@@ -337,7 +340,7 @@ has "a missing planner leaves the version written" "versions add $V"
 
 # Any other grant failure shows gcloud's error and names the IAM right the
 # operator needs, without blaming the missing planner account.
-STUB_GRANT_FAIL=denied run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+STUB_GRANT_FAIL=denied run test-project "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 check "a denied grant shows gcloud's error" "$(says "PERMISSION_DENIED")"
 check "a denied grant names the IAM right" "$(says "secretmanager.secrets.setIamPolicy")"
 check "a denied grant names the read right the binding needs" "$(says "secretmanager.secrets.getIamPolicy")"
@@ -378,24 +381,24 @@ check "grant with a missing secret name prints usage" "$(is "$status" 2)"
 
 # A create whose grant failed leaves the version, and `grant` then completes it
 # without a second version.
-STUB_GRANT_FAIL=missing run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+STUB_GRANT_FAIL=missing run test-project "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 has "a create with a failed grant wrote the version" "versions add $V"
 run_grant test-project "$V"
 check "grant after a failed create completes" "$(is "$status" 0)"
 lacks "grant after a failed create adds no version" "versions add"
 
 export STUB_EXISTS=1 STUB_LATEST=""
-accepts "apis secret left without a version" "$V" "{\"invokers\": {\"x\": $G}}"
+accepts "apis secret left without a version" "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 lacks "apis secret left without a version is not created again" "secrets create"
 has "apis secret left without a version is granted" "add-iam-policy-binding $V"
 unset STUB_EXISTS STUB_LATEST
 
-STUB_EXISTS=1 STUB_LATEST="" STUB_RECHECK=2 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+STUB_EXISTS=1 STUB_LATEST="" STUB_RECHECK=2 run test-project "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 check "a version added during a first write is refused" "$(is "$status" 1)"
 check "a version added during a first write names it" "$(says "now has version 2")"
 lacks "a version added during a first write adds none" "versions add"
 
-STUB_EXISTS=1 STUB_LIST_FAIL=1 run test-project "$V" "{\"invokers\": {\"x\": $G}}"
+STUB_EXISTS=1 STUB_LIST_FAIL=1 run test-project "$V" "{\"eval_runs_viewers\": {}, \"invokers\": {\"x\": $G}}"
 check "a failed list on the file form exits non-zero" "$(is "$status" 1)"
 check "a failed list on the file form shows gcloud's error" "$(says "PERMISSION_DENIED")"
 writes_nothing "a failed list on the file form"
@@ -424,7 +427,7 @@ exit "${EDIT_EXIT:-0}"
 EDITOR
 chmod +x "$WORK/editor"
 export EDITOR="'$WORK/editor'"
-printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+printf '%s' '{"eval_runs_viewers":{},"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
 export STUB_EXISTS=1 STUB_LATEST=3
 
 # editor_dir_gone <label>: the directory holding the editor's file, and the
@@ -438,7 +441,7 @@ check "edit is accepted" "$(is "$status" 0)"
 check "edit gives the editor the stored version" "$(is "$(jq -cS . "$EDITOR_SAW")" "$(jq -cS . "$STUB_CONTENT")")"
 check "edit pretty-prints a stored version whose bytes are canonical" "$(is "$(cat "$EDITOR_SAW")" "$(jq -S . "$STUB_CONTENT")")"
 has "edit reads the version it listed" "secrets versions access 3 --secret=$V --project=test-project"
-check "edit writes the edited canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"dev-1":"user:dev1@example.org","devs":"group:devs@example.org"}}')"
+check "edit writes the edited canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"eval_runs_viewers":{},"invokers":{"dev-1":"user:dev1@example.org","devs":"group:devs@example.org"}}')"
 check "edit lists the versions before and just before the write" "$(is "$(grep -c 'secrets versions list' "$STUB_LOG")" 2)"
 check "edit checks the version immediately before the write" "$(is "$(tail -n 2 "$STUB_LOG" | cut -d' ' -f2-4 | paste -sd, -)" 'secrets versions list,secrets versions add')"
 lacks "edit creates nothing" "secrets create"
@@ -454,24 +457,24 @@ editor_dir_gone "edit with no change"
 
 # A result whose canonical form is the stored version writes nothing, whatever
 # its whitespace.
-EDIT_RAW=$'{ "invokers" :\n  {"dev-1": "user:dev1@example.org"} }\n' run_edit test-project "$V"
+EDIT_RAW=$'{ "eval_runs_viewers": {}, "invokers" :\n  {"dev-1": "user:dev1@example.org"} }\n' run_edit test-project "$V"
 check "edit to whitespace only is accepted" "$(is "$status" 0)"
 check "edit to whitespace only says nothing was written" "$(says "nothing written")"
 writes_nothing "edit to whitespace only"
 
 # A stored version that is not byte-canonical but repeats no key opens
 # pretty-printed, and a save that changes nothing writes its canonical form.
-printf '%s' '{"invokers":{"zz":"user:z@example.org","aa":"user:a@example.org"}}' >"$STUB_CONTENT"
+printf '%s' '{"eval_runs_viewers":{},"invokers":{"zz":"user:z@example.org","aa":"user:a@example.org"}}' >"$STUB_CONTENT"
 run_edit test-project "$V"
 check "edit saving a non-canonical stored version unchanged is accepted" "$(is "$status" 0)"
 check "edit gives the editor a non-canonical stored version pretty-printed" "$(is "$(cat "$EDITOR_SAW")" "$(jq -S . "$STUB_CONTENT")")"
-check "edit saving a non-canonical stored version unchanged writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"aa":"user:a@example.org","zz":"user:z@example.org"}}')"
+check "edit saving a non-canonical stored version unchanged writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"eval_runs_viewers":{},"invokers":{"aa":"user:a@example.org","zz":"user:z@example.org"}}')"
 check "edit saving a non-canonical stored version unchanged opens the editor once" "$(is "$(cat "$EDITOR_COUNT")" 1)"
 
 # A stored version with a repeated key is refused when saved unchanged, since
 # validation sees the repeat, and the editor opens again on the same copy. An
 # edit that drops the repeat is written.
-printf '%s' '{"invokers":{"x":"user:x@example.org","x":"user:y@example.org"}}' >"$STUB_CONTENT"
+printf '%s' '{"eval_runs_viewers":{},"invokers":{"x":"user:x@example.org","x":"user:y@example.org"}}' >"$STUB_CONTENT"
 run_edit test-project "$V"
 check "edit saving a repeated-key stored version unchanged is refused" "$(is "$status" 1)"
 check "edit saving a repeated-key stored version unchanged names the repeat" "$(says "repeats a key")"
@@ -480,12 +483,12 @@ check "edit gives the editor a repeated-key stored version as its raw bytes" "$(
 writes_nothing "edit saving a repeated-key stored version unchanged"
 EDIT_JQ_2='.' run_edit test-project "$V"
 check "edit dropping a repeated key is accepted" "$(is "$status" 0)"
-check "edit dropping a repeated key writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"x":"user:y@example.org"}}')"
-printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+check "edit dropping a repeated key writes the canonical form" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"eval_runs_viewers":{},"invokers":{"x":"user:y@example.org"}}')"
+printf '%s' '{"eval_runs_viewers":{},"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
 
 # A stored version whose repeated-key check cannot run opens as its raw bytes,
 # and is refused when saved unchanged.
-printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+printf '%s' '{"eval_runs_viewers":{},"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
 PATH="$WORK/jqfail:$PATH" run_edit test-project "$V"
 check "edit with a failed repeated-key check is refused" "$(is "$status" 1)"
 check "edit with a failed repeated-key check says it could not check" "$(says "could not check")"
@@ -494,13 +497,13 @@ writes_nothing "edit with a failed repeated-key check"
 
 # A stored version of two JSON documents is never taken for canonical: it
 # opens pretty-printed, and saved unchanged it is refused until it holds one.
-printf '%s' '{"invokers":{"a":"user:a@example.org"}}{"invokers":{"a":"user:a@example.org"}}' >"$STUB_CONTENT"
+printf '%s' '{"eval_runs_viewers":{},"invokers":{"a":"user:a@example.org"}}{"eval_runs_viewers":{},"invokers":{"a":"user:a@example.org"}}' >"$STUB_CONTENT"
 run_edit test-project "$V"
 check "edit saving a two-document stored version unchanged is refused" "$(is "$status" 1)"
 check "edit saving a two-document stored version unchanged names the problem" "$(says "exactly one JSON object")"
 check "edit gives the editor a two-document stored version pretty-printed" "$(is "$(cat "$EDITOR_SAW")" "$(jq -S . "$STUB_CONTENT")")"
 writes_nothing "edit saving a two-document stored version unchanged"
-printf '%s' '{"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
+printf '%s' '{"eval_runs_viewers":{},"invokers":{"dev-1":"user:dev1@example.org"}}' >"$STUB_CONTENT"
 
 # A refused copy is offered again, and a second edit that passes is written.
 EDIT_JQ='.invokers.x = "serviceAccount:x@p.iam.gserviceaccount.com"' EDIT_JQ_2='.invokers = {"dev-1": "user:dev1@example.org", "x": "group:x@example.org"}' run_edit test-project "$V"
@@ -508,7 +511,7 @@ check "edit refused, then corrected, is accepted" "$(is "$status" 0)"
 check "edit refused, then corrected, names the first problem" "$(says "each invokers value must be group: or user:")"
 check "edit refused, then corrected, opens the editor twice" "$(is "$(cat "$EDITOR_COUNT")" 2)"
 check "edit refused, then corrected, reopens the refused copy" "$(grep -q 'serviceAccount:x@p' "$EDITOR_SAW.2" && echo true || echo false)"
-check "edit refused, then corrected, writes the second edit" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"invokers":{"dev-1":"user:dev1@example.org","x":"group:x@example.org"}}')"
+check "edit refused, then corrected, writes the second edit" "$(is "$(cat "$STUB_WRITTEN" 2>/dev/null)" '{"eval_runs_viewers":{},"invokers":{"dev-1":"user:dev1@example.org","x":"group:x@example.org"}}')"
 editor_dir_gone "edit refused, then corrected"
 
 # Leaving a refused copy unchanged stops with nothing written.

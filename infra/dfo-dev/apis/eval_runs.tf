@@ -16,12 +16,6 @@ variable "dfo_evals_repository_id" {
   default     = "1469923689"
 }
 
-variable "eval_runs_viewers" {
-  description = "IAM members, such as group:team@example.org, who read run records and results pages in the eval runs bucket."
-  type        = list(string)
-  default     = []
-}
-
 resource "google_storage_bucket" "eval_runs" {
   name                        = "${var.namespace}-eval-runs-${var.project_id}"
   project                     = var.project_id
@@ -140,9 +134,13 @@ output "apis_eval_writer_service_account_email" {
   value       = google_service_account.apis_eval_writer.email
 }
 
+# The people who read run records and results pages come from the
+# eval_runs_viewers object of the apis principals secret, keyed by label, so no
+# address sits in this repository. dfo-prod's apis secret holds the same key,
+# empty, since the stacks share one schema and prod has no eval runs bucket.
 resource "google_storage_bucket_iam_member" "eval_runs_viewers" {
-  for_each = toset(var.eval_runs_viewers)
+  for_each = toset(nonsensitive(keys(local.principals.eval_runs_viewers)))
   bucket   = google_storage_bucket.eval_runs.name
   role     = "roles/storage.objectViewer"
-  member   = each.value
+  member   = local.principals.eval_runs_viewers[each.key]
 }
