@@ -3,13 +3,13 @@
 # Create or change a stack's hand-made principals secret.
 #
 # A stack that grants or notifies people (foundation's applier impersonators,
-# ingestion operators and budget alert recipients, the apis stack's invokers,
-# the ai stack's token readers, the telemetry stack's reporting readers,
-# analytics developers and alert recipients) reads their addresses from a
-# Secret Manager secret, so no address sits in this public repository or in a
-# plan log. The secret is an object of objects of strings, each inner object
-# keyed by labels that name resources in Terraform state and plan output, for
-# example
+# ingestion operators and budget alert recipients, the apis stack's invokers
+# and eval runs viewers, the ai stack's token readers, the telemetry stack's
+# reporting readers, analytics developers and alert recipients) reads their
+# addresses from a Secret Manager secret, so no address sits in this public
+# repository or in a plan log. The secret is an object of objects of strings,
+# each inner object keyed by labels that name resources in Terraform state and
+# plan output, for example
 #   {"readers": {"team": "group:readers@example.org"},
 #    "alerts": {"team": "alerts@example.org"}}
 #
@@ -167,7 +167,8 @@ validate() {
         | if ($extra | length) == 0 then empty
           else "\($extra | length) unexpected top-level \(if ($extra | length) == 1 then "key at position" else "keys at positions" end) \($extra | join(", "))" end),
       ($schema | to_entries[] | .key as $k | .value as $rule | $patterns.forms[$rule.form] as $form
-        | if ($doc | has($k) | not) then "missing top-level key \($k)"
+        | if ($doc | has($k) | not) then
+            if $rule.optional then empty else "missing top-level key \($k)" end
           elif ($doc[$k] | type) != "object" then "\($k) must be an object"
           else $doc[$k] as $obj
             | (if ($obj | length) < $rule.min then "\($k) must hold at least \($rule.min) entry" else empty end),

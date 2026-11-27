@@ -132,6 +132,7 @@ A developer without a project role that carries `run.routes.invoke` needs an ent
 
 ```json
 {
+  "eval_runs_viewers": {},
   "invokers": {
     "dev-1": "user:dev1@example.org",
     "devs": "group:devs@example.org"
@@ -253,7 +254,9 @@ Three alert policies watch the job. The job logs `search_catalogue_job_failed` o
 
 `eval_runs.tf` declares the bucket that holds the DFO evals' run records and results page (`dfo-dev-eval-runs-<project>`), with public access prevention enforced and no lifecycle rule, since the records are kept beyond Langfuse's retention. Each run writes `<suite>/<run_id>/manifest.json` and `results.jsonl` in the format the evals repository's `dfo-evals` library defines, and the evals repository publishes the results page at `site/index.html`.
 
-The apis repository's nightly eval writes its runs as `dfo-dev-apis-eval-writer`, which holds `roles/storage.objectCreator` on the bucket, conditioned on objects under `apis-search/`, since a run directory is never overwritten. The `attribute.repo_workflow_ref` binding requires the apis repository's ID and `.github/workflows/eval-nightly.yml` on `refs/heads/dev`. Pull request eval jobs use `dfo-dev-apis-eval-reader` and have no bucket access. The evals repository's workflows run as `dfo-dev-evals-runner`, which holds `roles/storage.objectViewer` on the bucket and `roles/storage.objectUser` conditioned on `site/index.html`, so it can read every run and overwrite the page and cannot alter a run record. Only a run on that repository's default branch, `refs/heads/dev`, can mint it. The evals repository has an entry in the `foundation` stack's `github_repositories` so the shared pool admits its tokens, and `dfo_evals_repository_id` here copies that entry's id. `eval_runs_viewers` lists the members who read the bucket, and is empty by default.
+The apis repository's nightly eval writes its runs as `dfo-dev-apis-eval-writer`, which holds `roles/storage.objectCreator` on the bucket, conditioned on objects under `apis-search/`, since a run directory is never overwritten. The `attribute.repo_workflow_ref` binding requires the apis repository's ID and `.github/workflows/eval-nightly.yml` on `refs/heads/dev`. Pull request eval jobs use `dfo-dev-apis-eval-reader` and have no bucket access. The evals repository's workflows run as `dfo-dev-evals-runner`, which holds `roles/storage.objectViewer` on the bucket and `roles/storage.objectUser` conditioned on `site/index.html`, so it can read every run and overwrite the page and cannot alter a run record. Only a run on that repository's default branch, `refs/heads/dev`, can mint it. The evals repository has an entry in the `foundation` stack's `github_repositories` so the shared pool admits its tokens, and `dfo_evals_repository_id` here copies that entry's id.
+
+Add bucket readers to the optional `eval_runs_viewers` object in `dfo-dev-apis-principals` with `scripts/bootstrap-principals.sh edit dev-fin-observatory dfo-dev-apis-principals`. Use a `group:` or `user:` member under a stable label. Then run `gh workflow run apply.yml --ref dev -f stack=apis`. The binding gives each reader `roles/storage.objectViewer` on the bucket, including raw run records. An absent `eval_runs_viewers` key grants zero bindings. This access is configured in dev.
 
 ## Alert notifications
 
