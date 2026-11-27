@@ -101,6 +101,12 @@ variable "graph_explorer_email_domains" {
   }
 }
 
+variable "library_enabled" {
+  description = "Whether the website's Library (/library) is public, set as LIBRARY_ENABLED. While false, Library admins (ADMIN_EMAILS) can still publish to it and open its pages, and everyone else gets a 404 there, with no Library links and no Library URLs in the sitemap."
+  type        = bool
+  default     = false
+}
+
 variable "datasets_pin_principal_secret_id" {
   description = "Secret Manager id of the datasets pin principal secret. Copied from the `apis` stack's `google_secret_manager_secret.datasets_pin_principal.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not. See README."
   type        = string

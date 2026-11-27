@@ -119,6 +119,9 @@ module "website_service" {
 
     # The email domains the Graph Explorer admits. Empty admits nobody. See var.graph_explorer_email_domains.
     GRAPH_EXPLORER_EMAIL_DOMAINS = join(",", var.graph_explorer_email_domains)
+
+    # Whether the public sees the Library. See var.library_enabled.
+    LIBRARY_ENABLED = tostring(var.library_enabled)
     },
     # Set only behind a proxy chain. Omitted when null, so the app keeps its default of 0. See var.trusted_proxy_hops.
     var.trusted_proxy_hops == null ? {} : { TRUSTED_PROXY_HOPS = tostring(var.trusted_proxy_hops) },

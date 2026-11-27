@@ -63,6 +63,9 @@ event_export_enabled = true
 # Organisations whose verified accounts may open the Graph Explorer.
 graph_explorer_email_domains = ["one.org", "ods.coop", "ode.partners"]
 
+# Whether the public sees the Library. Admins can publish to it while it is off.
+library_enabled = false
+
 # Version of dfo-prod-website-api-key-tag-secrets that the service mounts. A rotation sets this to each new version in turn. See README, "API key tag secrets".
 api_key_tag_secrets_version = "1"
 
