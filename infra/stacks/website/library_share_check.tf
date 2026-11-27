@@ -18,9 +18,9 @@ locals {
 
 # Bootstrap only, for the reason website_migrate_bootstrap_image records.
 # gcr.io/cloudrun/hello has no node binary, so a Job the deploy pipeline has
-# not yet moved fails on the command instead of exiting 0.
+# not yet moved fails on the command and exits non-zero.
 variable "website_library_share_check_bootstrap_image" {
-  description = "Image the Library share check Job is created with. The deploy pipeline replaces it per release. This value only has to be an image that cannot run the command, so an unmoved Job fails loudly rather than exiting 0."
+  description = "Image the Library share check Job is created with. The deploy pipeline replaces it per release. This value only has to be an image that cannot run the command, so an unmoved Job fails on the command and exits non-zero."
   type        = string
   default     = "gcr.io/cloudrun/hello"
 }
@@ -42,15 +42,24 @@ resource "google_cloud_run_v2_job" "website_library_share_check" {
 
       # The check rereads a transiently failing artifact once, after 30
       # seconds, inside the run. A retry would repeat every read and log every
-      # lasting failure a second time. 600 seconds is ample for one read per
-      # published slot plus that pause.
+      # lasting failure a second time. Each dfo-apis read can take 35
+      # seconds, four run at a time, and a transient failure is read again,
+      # so 3600 seconds leaves room for a Library of a few hundred slots.
       max_retries = 0
-      timeout     = "600s"
+      timeout     = "3600s"
 
       containers {
         image   = var.website_library_share_check_bootstrap_image
         command = ["node"]
         args    = ["dist/check-library-shares.cjs"]
+
+        # The run holds every artifact's result until its summary line.
+        resources {
+          limits = {
+            cpu    = "1"
+            memory = "1Gi"
+          }
+        }
 
         # The service's connection settings (main.tf), as its runtime user.
         env {
@@ -166,7 +175,7 @@ resource "google_cloud_scheduler_job" "website_library_share_check" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Alerting: a failed read, or a failed execution
+# Alerting: a failed read, a failed execution, or no completed run
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Every alert policy in the stack notifies this channel. Its absence leaves the
@@ -205,18 +214,51 @@ resource "google_logging_metric" "library_share_check_failed" {
   }
 }
 
-# Waits out the log-based metric's propagation to Cloud Monitoring before the
-# alert policy names it. The apis stack's graph_release.tf explains the 404
+# Every run that reaches its end logs `library_share_check_summary` last,
+# whether or not an artifact failed. A Scheduler that stops starting the Job,
+# or a run killed every day, logs no failure line, and only the summary's
+# absence shows it. The name uses underscores so PromQL can name the metric
+# as logging_googleapis_com:user_<name> without quoting.
+resource "google_logging_metric" "library_share_check_summary" {
+  name    = replace("${local.website_name}-library-share-check-summary", "-", "_")
+  project = var.project_id
+  filter  = <<-EOT
+    resource.type="cloud_run_job"
+    resource.labels.job_name="${google_cloud_run_v2_job.website_library_share_check.name}"
+    resource.labels.location="${var.region}"
+    jsonPayload.event="library_share_check_summary"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+# Waits out the log-based metrics' propagation to Cloud Monitoring before the
+# alert policies name them. The apis stack's graph_release.tf explains the 404
 # a plain depends_on leaves open.
 resource "time_sleep" "library_share_check_metric_propagation" {
-  depends_on      = [google_logging_metric.library_share_check_failed]
+  depends_on = [
+    google_logging_metric.library_share_check_failed,
+    google_logging_metric.library_share_check_summary,
+  ]
+  # A new metric replaces the sleep, so the policies wait for it as they did
+  # for the first ones. depends_on alone leaves an existing sleep in place.
+  triggers = {
+    metrics = join(",", [
+      google_logging_metric.library_share_check_failed.name,
+      google_logging_metric.library_share_check_summary.name,
+    ])
+  }
   create_duration = "120s"
 }
 
 # Two conditions, since each catches what the other can miss. The failure
 # lines name the artifact, slot and class of every broken read. The failed
 # execution count catches a run that dies before it logs: an import error, an
-# OOM kill, the 600-second timeout, or the bootstrap image an unmoved Job
+# OOM kill, the 3600-second timeout, or the bootstrap image an unmoved Job
 # still runs. A run with failed reads exits 1, so both conditions open
 # together then.
 resource "google_monitoring_alert_policy" "library_share_check_failed" {
@@ -267,7 +309,7 @@ resource "google_monitoring_alert_policy" "library_share_check_failed" {
 
       `share_gone` means the share answers 404 and the page shows nothing. `frame_unavailable` means dfo-apis cannot draw a slot's frame. `no_rows` means a live slot answers with no rows. `refused` is any other refusal. `transient` failed twice, 30 seconds apart. `check_failed` means the run could not start its reads; its `code` names the missing setting or the database error.
 
-      No failure line with a failed execution means the run died before it logged: read the execution's last lines with `gcloud run jobs executions list --job=${google_cloud_run_v2_job.website_library_share_check.name} --region=${var.region} --project=${var.project_id}`. An execution of `gcr.io/cloudrun/hello` means the deploy has not yet moved the Job's image. Run the check again with `gcloud run jobs execute ${google_cloud_run_v2_job.website_library_share_check.name} --region=${var.region} --project=${var.project_id} --wait`.
+      No failure line with a failed execution means the run died before it logged. Read the Job's last lines with `gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name="${google_cloud_run_v2_job.website_library_share_check.name}"' --project=${var.project_id} --freshness=1d --limit=50`, and list its executions with `gcloud run jobs executions list --job=${google_cloud_run_v2_job.website_library_share_check.name} --region=${var.region} --project=${var.project_id}`. An execution of `gcr.io/cloudrun/hello` means the deploy has not yet moved the Job's image. Run the check again with `gcloud run jobs execute ${google_cloud_run_v2_job.website_library_share_check.name} --region=${var.region} --project=${var.project_id} --wait`.
     EOT
   }
 
@@ -275,6 +317,45 @@ resource "google_monitoring_alert_policy" "library_share_check_failed" {
 
   alert_strategy {
     auto_close = "3600s"
+  }
+}
+
+# Its own policy, so its incident closes on its own timer, as the apis stack's
+# graph_release_heartbeat does. 26 hours is the daily schedule plus two hours
+# of run time and slack, the window the telemetry stack gives its daily GA4
+# Job. The condition is PromQL, as there: it returns 1 when the window holds
+# no summary line, and when the series is absent, so it also opens for a Job
+# that has never completed, which a condition_absent misses. A policy created
+# before the first run opens within minutes and closes after the first run
+# that logs its summary.
+resource "google_monitoring_alert_policy" "library_share_check_not_running" {
+  project      = var.project_id
+  display_name = "Library share check not running on ${local.website_name}"
+  combiner     = "OR"
+
+  depends_on = [time_sleep.library_share_check_metric_propagation]
+
+  conditions {
+    display_name = "no library_share_check_summary in 26 hours"
+
+    condition_prometheus_query_language {
+      query               = "(sum(sum_over_time(logging_googleapis_com:user_${google_logging_metric.library_share_check_summary.name}{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.website_library_share_check.name}\"}[26h])) < 1) or absent_over_time(logging_googleapis_com:user_${google_logging_metric.library_share_check_summary.name}{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.website_library_share_check.name}\"}[26h])"
+      duration            = "0s"
+      evaluation_interval = "300s"
+    }
+  }
+
+  documentation {
+    mime_type = "text/markdown"
+    content   = <<-EOT
+      No run of ${google_cloud_run_v2_job.website_library_share_check.name} has logged its `library_share_check_summary` line in 26 hours. Check that the Scheduler job ${google_cloud_scheduler_job.website_library_share_check.name} is enabled and its last attempt succeeded (`gcloud scheduler jobs describe ${google_cloud_scheduler_job.website_library_share_check.name} --location=${var.region} --project=${var.project_id}`), then read the Job's last lines with `gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name="${google_cloud_run_v2_job.website_library_share_check.name}"' --project=${var.project_id} --freshness=2d --limit=50`.
+    EOT
+  }
+
+  notification_channels = local.alert_notification_channels
+
+  alert_strategy {
+    auto_close = "604800s"
   }
 }
 
