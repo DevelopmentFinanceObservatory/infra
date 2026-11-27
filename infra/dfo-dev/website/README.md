@@ -53,6 +53,8 @@ The service (`module.website_service`, named `dfo-dev-website-staging` from `var
 
 `GRAPH_EXPLORER_EMAIL_DOMAINS` is `var.graph_explorer_email_domains` joined with commas: the email domains whose verified accounts may open the Graph Explorer. An empty list admits nobody.
 
+`LIBRARY_ENABLED` is `var.library_enabled` as `true` or `false`. While false, the Library at `/library` answers 404 to everyone except Library admins (`ADMIN_EMAILS`), who can publish to it from the Studio and open its pages to build its content. The footer and the sitemap leave it out. Setting it to true makes the Library public on the next apply, with no website rebuild.
+
 ## Sign-in providers
 
 Sign-in is social-only, so `/login` offers exactly the providers named in `local.sign_in_providers` (`sign_in_providers.tf`): Google, GitHub and Microsoft. Each provider mounts `<PROVIDER>_CLIENT_ID` and `<PROVIDER>_CLIENT_SECRET` from the hand-created secrets `dfo-dev-website-staging-<provider>-client-id` and `dfo-dev-website-staging-<provider>-client-secret`. The app offers a provider only when both are set, so each provider mounts as a pair. The stack reads the secrets through `data` sources, so a listed provider whose secrets are missing fails `plan`, and a PR cannot merge into a state where the service can't start new revisions.
