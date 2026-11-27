@@ -137,7 +137,7 @@ output "apis_eval_writer_service_account_email" {
 # The people who read run records and results pages come from the
 # eval_runs_viewers object of the apis principals secret, keyed by label, so no
 # address sits in this repository. The stacks share one schema, so dfo-prod's
-# apis secret holds the same key, empty, since prod has no eval runs bucket.
+# apis secret holds the key too, and no prod resource reads it.
 resource "google_storage_bucket_iam_member" "eval_runs_viewers" {
   for_each = toset(nonsensitive(keys(local.principals.eval_runs_viewers)))
   bucket   = google_storage_bucket.eval_runs.name

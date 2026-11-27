@@ -63,7 +63,7 @@ The secret's keys must equal the stack's schema keys, so a PR that adds a key to
 
 Every plan and apply of the stack on the environment's branch fails between the second step and the merge, so run the steps back to back. Add members with a later `edit` and apply, once the key is on that branch. Removing a key runs the same order with the key deleted.
 
-One schema serves both environments, and each environment's secret must follow its own branch. dfo-dev plans and applies from `dev` and dfo-prod from `main`, so a PR into `dev` touches only the dev secret. The prod secret gets the key in the release PR that carries the schema change into `main`: open the release PR, edit `<namespace>-<stack>-principals` in `prod-fin-observatory` from a checkout of `dev`, re-run the prod plan, and merge. An edit to the prod secret before then fails every prod plan and apply of the stack until the release merges.
+One schema serves both environments, and each environment's secret must follow its own branch. dfo-dev plans and applies from `dev` and dfo-prod from `main`, so a PR into `dev` touches only the dev secret. The prod secret gets the key in the release PR that carries the schema change into `main`: open the release PR, edit `<namespace>-<stack>-principals` in `prod-fin-observatory` from a checkout of the release branch, re-run the prod plan, and merge. An edit to the prod secret before then fails every prod plan and apply of the stack until the release merges. Any other edit to an environment's secret runs from that environment's branch, `main` for prod, so the script checks it against the schema that environment's plans read: from `dev`, the script demands a key `main` lacks, and adding it breaks prod.
 
 ## Relabelling
 
