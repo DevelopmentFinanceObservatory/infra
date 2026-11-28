@@ -139,6 +139,9 @@ module "website_service" {
 
     # Whether the public sees the Library. See var.library_enabled.
     LIBRARY_ENABLED = tostring(var.library_enabled)
+
+    # Whether Get Data opts in to the search API's Studio router. See var.studio_routing_enabled.
+    STUDIO_ROUTING_ENABLED = tostring(var.studio_routing_enabled)
     },
     # Set only behind a proxy chain. Omitted when null, so the app keeps its default of 0. See var.trusted_proxy_hops.
     var.trusted_proxy_hops == null ? {} : { TRUSTED_PROXY_HOPS = tostring(var.trusted_proxy_hops) },
