@@ -13,6 +13,13 @@ terraform {
       source  = "hashicorp/random"
       version = ">= 3.7.0"
     }
+    time = {
+      # time_sleep in library_share_check.tf and library_evergreen_alert.tf,
+      # which waits out a new log-based metric's propagation to Cloud
+      # Monitoring. No specific version feature.
+      source  = "hashicorp/time"
+      version = ">= 0.9.0"
+    }
   }
 }
 
@@ -34,6 +41,7 @@ locals {
 
 resource "google_project_service" "apis" {
   for_each = toset([
+    "cloudscheduler.googleapis.com",
     "compute.googleapis.com",
     "dns.googleapis.com",
   ])
@@ -77,6 +85,15 @@ data "google_secret_manager_secret" "studio_api_token" {
 # The ai stack's MCP API token secret, read by secret_id like the studio token above. See README.
 data "google_secret_manager_secret" "mcp_api_token" {
   secret_id = "${var.namespace}-mcp-api-token"
+}
+
+# TypeSafe's API key, created by hand and shared with the apis stack's Jev
+# binder (apis/main.tf). Read by secret_id like the studio token above. The
+# website's Library checks each published or edited text against the
+# evergreen rule with it. Without a working key the service runs, and only a
+# Library publish or text edit answers 503 (library_evergreen_alert.tf).
+data "google_secret_manager_secret" "typesafe" {
+  secret_id = "${var.namespace}-typesafe-api-key"
 }
 
 # dfo-website deploys its `staging` branch to this service in dfo-dev and
@@ -144,6 +161,8 @@ module "website_service" {
     STUDIO_TOKEN = { secret_id = data.google_secret_manager_secret.studio_api_token.secret_id }
     # Bearer token the /mcp proxy sends to the harness's MCP mounts, which refuse a request without it. Not version-pinned. See README.
     MCP_API_TOKEN = { secret_id = data.google_secret_manager_secret.mcp_api_token.secret_id }
+    # Key for TypeSafe's Jev model, which holds a Library publish or text edit to the evergreen rule. Not version-pinned: the secret is managed by hand and shared with the apis service, which also reads latest. See README.
+    TYPESAFE_API_KEY = { secret_id = data.google_secret_manager_secret.typesafe.secret_id }
     # Slack incoming webhook for feedback submissions. Not version-pinned:
     # values are added out-of-band and the newest must win. See README and
     # feedback_webhook.tf.
@@ -230,4 +249,18 @@ resource "google_cloud_run_v2_service_iam_member" "website_apis_invoker" {
   name     = var.apis_service_name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${module.website_service.runtime_service_account_email}"
+}
+
+# Every alert policy in the stack notifies this channel
+# (library_share_check.tf, library_evergreen_alert.tf). Its absence leaves the
+# policies in Cloud Monitoring with no one notified, as in dfo-dev.
+data "google_monitoring_notification_channel" "alerts" {
+  count = var.alert_notification_channel == null ? 0 : 1
+
+  project      = var.project_id
+  display_name = var.alert_notification_channel
+}
+
+locals {
+  alert_notification_channels = data.google_monitoring_notification_channel.alerts[*].name
 }
