@@ -201,43 +201,15 @@ resource "google_logging_metric" "library_share_check_failed" {
   }
 }
 
-# Every run that reaches its end logs `library_share_check_summary` last,
-# whether or not an artifact failed. A Scheduler that stops starting the Job,
-# or a run killed every day, logs no failure line, and only the summary's
-# absence shows it. The name uses underscores so PromQL can name the metric
-# as logging_googleapis_com:user_<name> without quoting.
-resource "google_logging_metric" "library_share_check_summary" {
-  name    = replace("${local.website_name}-library-share-check-summary", "-", "_")
-  project = var.project_id
-  filter  = <<-EOT
-    resource.type="cloud_run_job"
-    resource.labels.job_name="${google_cloud_run_v2_job.website_library_share_check.name}"
-    resource.labels.location="${var.region}"
-    jsonPayload.event="library_share_check_summary"
-  EOT
-
-  metric_descriptor {
-    metric_kind = "DELTA"
-    value_type  = "INT64"
-    unit        = "1"
-  }
-}
-
-# Waits out the log-based metrics' propagation to Cloud Monitoring before the
-# alert policies name them. The apis stack's graph_release.tf explains the 404
+# Waits out the log-based metric's propagation to Cloud Monitoring before the
+# failure policy names it. The apis stack's graph_release.tf explains the 404
 # a plain depends_on leaves open.
 resource "time_sleep" "library_share_check_metric_propagation" {
-  depends_on = [
-    google_logging_metric.library_share_check_failed,
-    google_logging_metric.library_share_check_summary,
-  ]
+  depends_on = [google_logging_metric.library_share_check_failed]
   # A new metric replaces the sleep, so the policies wait for it as they did
   # for the first ones. depends_on alone leaves an existing sleep in place.
   triggers = {
-    metrics = join(",", [
-      google_logging_metric.library_share_check_failed.name,
-      google_logging_metric.library_share_check_summary.name,
-    ])
+    metrics = google_logging_metric.library_share_check_failed.name
   }
   create_duration = "120s"
 }
@@ -308,25 +280,27 @@ resource "google_monitoring_alert_policy" "library_share_check_failed" {
 }
 
 # Its own policy, so its incident closes on its own timer, as the apis stack's
-# graph_release_heartbeat does. 26 hours is the daily schedule plus two hours
-# of run time and slack, the window the telemetry stack gives its daily GA4
-# Job. The condition is PromQL, as there: it returns 1 when the window holds
-# no summary line, and when the series is absent, so it also opens for a Job
-# that has never completed, which a condition_absent misses. A policy created
-# before the first run opens within minutes and closes after the first run
-# that logs its summary.
+# graph_release_heartbeat does. It counts completed executions of any result,
+# since the failure policy covers a run that fails. This one opens when the Job
+# has not run at all, such as when the Scheduler is paused. 26 hours is the
+# daily schedule plus two hours of run time and slack, the window the
+# telemetry stack gives its daily GA4 Job, and the query is the same PromQL.
+# It reads the Cloud Run system metric because Cloud Monitoring refuses a
+# PromQL lookback past 1d1h on a log-based metric. It returns 1 when the
+# window holds no completion, and when the series is absent, so it also opens
+# for a Job that has never completed, which a condition_absent misses. A
+# policy created before the first run opens within minutes and closes after
+# the first completed run.
 resource "google_monitoring_alert_policy" "library_share_check_not_running" {
   project      = var.project_id
   display_name = "Library share check not running on ${local.website_name}"
   combiner     = "OR"
 
-  depends_on = [time_sleep.library_share_check_metric_propagation]
-
   conditions {
-    display_name = "no library_share_check_summary in 26 hours"
+    display_name = "no completed Library share check execution in 26 hours"
 
     condition_prometheus_query_language {
-      query               = "(sum(sum_over_time(logging_googleapis_com:user_${google_logging_metric.library_share_check_summary.name}{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.website_library_share_check.name}\"}[26h])) < 1) or absent_over_time(logging_googleapis_com:user_${google_logging_metric.library_share_check_summary.name}{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.website_library_share_check.name}\"}[26h])"
+      query               = "(sum(sum_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.website_library_share_check.name}\",location=\"${var.region}\"}[26h])) < 1) or absent_over_time(run_googleapis_com:job_completed_execution_count{monitored_resource=\"cloud_run_job\",job_name=\"${google_cloud_run_v2_job.website_library_share_check.name}\",location=\"${var.region}\"}[26h])"
       duration            = "0s"
       evaluation_interval = "300s"
     }
@@ -335,7 +309,7 @@ resource "google_monitoring_alert_policy" "library_share_check_not_running" {
   documentation {
     mime_type = "text/markdown"
     content   = <<-EOT
-      No run of ${google_cloud_run_v2_job.website_library_share_check.name} has logged its `library_share_check_summary` line in 26 hours. Check that the Scheduler job ${google_cloud_scheduler_job.website_library_share_check.name} is enabled and its last attempt succeeded (`gcloud scheduler jobs describe ${google_cloud_scheduler_job.website_library_share_check.name} --location=${var.region} --project=${var.project_id}`), then read the Job's last lines with `gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name="${google_cloud_run_v2_job.website_library_share_check.name}"' --project=${var.project_id} --freshness=2d --limit=50`.
+      No execution of ${google_cloud_run_v2_job.website_library_share_check.name} has completed in 26 hours. Check that the Scheduler job ${google_cloud_scheduler_job.website_library_share_check.name} is enabled and its last attempt succeeded (`gcloud scheduler jobs describe ${google_cloud_scheduler_job.website_library_share_check.name} --location=${var.region} --project=${var.project_id}`), then list the Job's executions with `gcloud run jobs executions list --job=${google_cloud_run_v2_job.website_library_share_check.name} --region=${var.region} --project=${var.project_id}`.
     EOT
   }
 
