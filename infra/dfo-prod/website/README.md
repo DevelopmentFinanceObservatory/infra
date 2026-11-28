@@ -1,6 +1,6 @@
 # website (prod)
 
-Prod's copy of the website stack: the `dfo-prod-website` Cloud Run service, its database on the shared Cloud SQL instance, its IAM migrator, the `dfo-prod-website-migrate` Job, the `dfo-prod-website-export` event export Job with its `website_export` dataset, and the `dfo-prod-website-share-migrate` share migration Job. The `.tf` files are symlinks to `infra/stacks/website`; `infra/dfo-dev/website/README.md` describes what they build. This directory holds prod's backend, tfvars, and lock file.
+Prod's copy of the website stack: the `dfo-prod-website` Cloud Run service, its database on the shared Cloud SQL instance, its IAM migrator, the `dfo-prod-website-migrate` Job, the `dfo-prod-website-export` event export Job with its `website_export` dataset, the `dfo-prod-website-share-migrate` share migration Job, and the `dfo-prod-website-library-share-check` Library share check Job with its daily trigger and alert. The `.tf` files are symlinks to `infra/stacks/website`; `infra/dfo-dev/website/README.md` describes what they build. This directory holds prod's backend, tfvars, and lock file.
 
 ## Apply order
 
@@ -97,3 +97,9 @@ gcloud run jobs execute dfo-prod-website-share-migrate \
 ```
 
 On exit 1, read the `share <id>:` lines in the execution's logs, fix the cause, and run it again. Then run `normalise-recipes` on `dfo-prod-datasets-maintenance` (see the `apis` stack's README). The Job, the import route and its principal are removed once prod's shares are migrated.
+
+## Library share check
+
+The Job `dfo-prod-website-library-share-check` reads every published Library artifact's share from dfo-apis daily at 06:00 UTC ("Library share check" in `infra/dfo-dev/website/README.md`). Its alert policies, "Library share check failed on dfo-prod-website" and "Library share check not running on dfo-prod-website", notify `Telemetry pipeline alerts: team`, the channel the `apis` stack's alerts use, set as `alert_notification_channel` in `env.auto.tfvars`. After the apply, run `scripts/handoff.sh dfo-prod website`, which writes `LIBRARY_SHARE_CHECK_JOB_WEBSITE`, so the next deploy moves the Job to the website image. Until then each daily run fails on the bootstrap image and opens the failure alert, and the not-running alert stays open until the first run that logs its summary.
+
+The service mounts `dfo-prod-typesafe-api-key`, the hand-made secret the `apis` stack's search binder reads, as `TYPESAFE_API_KEY`, and plan fails while the secret is missing. The service starts without a working key, so this stack need not apply before a website release, but the Library cannot publish until the key works. While it does not, the policy "Library publishing closed on dfo-prod-website" (`library_evergreen_alert.tf`) opens on each `library_evergreen_unavailable` line and notifies the same channel as the share check.
