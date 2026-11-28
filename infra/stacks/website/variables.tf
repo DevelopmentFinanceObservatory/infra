@@ -107,6 +107,12 @@ variable "library_enabled" {
   default     = false
 }
 
+variable "studio_routing_enabled" {
+  description = "Whether Get Data asks the search API's Studio router to move questions that need analysis into Studio, set as STUDIO_ROUTING_ENABLED. The search API refuses the opt-in field until it serves it, so set this true only where that API is live, and false before rolling the API back past it."
+  type        = bool
+  default     = false
+}
+
 variable "datasets_pin_principal_secret_id" {
   description = "Secret Manager id of the datasets pin principal secret. Copied from the `apis` stack's `google_secret_manager_secret.datasets_pin_principal.secret_id`. A plain value keeps this stack's plan independent of whether the `apis` stack has created the secret yet, which a `data \"google_secret_manager_secret\"` lookup would not. See README."
   type        = string

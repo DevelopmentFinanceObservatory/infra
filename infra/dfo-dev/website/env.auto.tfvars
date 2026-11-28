@@ -43,6 +43,9 @@ graph_explorer_email_domains = ["one.org", "ods.coop", "ode.partners"]
 # Whether the public sees the Library. Admins can publish to it while it is off.
 library_enabled = false
 
+# Whether Get Data moves questions that need analysis into Studio. True only while this environment's search API serves studio_routing.
+studio_routing_enabled = true
+
 # Version of dfo-dev-website-staging-api-key-tag-secrets that the service mounts. A rotation sets this to each new version in turn. See README, "API key tag secrets".
 api_key_tag_secrets_version = "1"
 
